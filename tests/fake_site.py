@@ -285,7 +285,10 @@ class FakeWikiMasters:
                 if self.path == "/api/packs/open" and self._authed() and site.packs > 0:
                     site.packs -= 1
                     site.packs_opened += 1
-                    return self._send(200, {"remaining": site.packs})
+                    pulled = [{"id": f"u{site.packs_opened}{i}", "card": {"wikipedia_title": f"Tirage {site.packs_opened}-{i}",
+                                                                           "rarity": r}, "is_shiny": i == 4}
+                              for i, r in enumerate(["C", "C", "PC", "UR", "L"])]
+                    return self._send(200, {"remaining": site.packs, "cards": pulled})
                 if self.path.startswith("/api/marketplace/") and self.path.endswith("/bid") and self._authed():
                     auction = site.auctions[self.path.split("/")[3]]
                     minimum = auction["base_amount"] if auction["current_bid"] is None else auction["current_bid"] + BID_STEP

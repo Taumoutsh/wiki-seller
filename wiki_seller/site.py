@@ -124,6 +124,46 @@ def parse_cookies(text: str) -> list[tuple[str, str]]:
     return pairs
 
 
+NOTABLE_RARITIES = ("L", "UR")
+RARITY_ORDER = ("L", "UR", "SR", "R", "PC", "C")
+
+
+def pack_cards(data: object) -> list[dict]:
+    """Cartes tirées, trouvées dans la réponse de /api/packs/open quelle que soit sa
+    forme : tout objet qui porte un titre Wikipédia et une rareté."""
+    cards: list[dict] = []
+    seen: set[int] = set()
+
+    def walk(node: object, shiny: bool) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item, shiny)
+        elif isinstance(node, dict):
+            shiny = shiny or bool(node.get("is_shiny"))  # souvent porté par l'exemplaire, pas la carte
+            title = node.get("wikipedia_title") or node.get("title")
+            rarity = node.get("rarity") or node.get("snapshot_rarity")
+            if isinstance(title, str) and isinstance(rarity, str) and id(node) not in seen:
+                seen.add(id(node))
+                cards.append({"title": title, "rarity": rarity.upper(), "shiny": shiny})
+                return
+            for value in node.values():
+                walk(value, shiny)
+
+    walk(data, False)
+    return cards
+
+
+def pack_summary(cards: list[dict]) -> str:
+    if not cards:
+        return "contenu non lu"
+    counts = {r: sum(1 for c in cards if c["rarity"] == r) for r in RARITY_ORDER}
+    parts = [f"{n} {r}" for r, n in counts.items() if n]
+    others = len(cards) - sum(counts.values())
+    if others:
+        parts.append(f"{others} autre(s)")
+    return f"{len(cards)} cartes : {', '.join(parts)}"
+
+
 def search_queries(name: str) -> list[str]:
     """Requêtes à essayer pour la recherche du Marché, de la plus précise à la plus large."""
     queries = [name.strip()]
@@ -632,10 +672,18 @@ class WikiMasters:
             if dry_run:
                 log.info("Simulation : %d paquet(s) seraient ouverts.", available)
                 return 0
-            button.click()
+            try:
+                with page.expect_response(lambda r: "/api/packs/open" in r.url, timeout=30000) as response:
+                    button.click()
+                cards = pack_cards(response.value.json())
+            except Exception:  # le contenu n'est qu'informatif : on ouvre quand même
+                cards = []
             self._reveal_pack()
             opened += 1
-            log.info("Paquet ouvert (%d restant(s) avant ouverture).", available - 1)
+            log.info("Paquet ouvert (%d restant(s) avant ouverture) : %s.", available - 1, pack_summary(cards))
+            for card in cards:
+                if card["rarity"] in NOTABLE_RARITIES:
+                    log.info("  ★ %s — %s%s", card["rarity"], card["title"], " (brillante)" if card["shiny"] else "")
         return opened
 
     def _reveal_pack(self) -> None:

@@ -130,11 +130,16 @@ def test_session_cookies_skip_the_login_page(tmp_path):
     assert result.listed == 5 and site.logins == 0 and site.signups == 0
 
 
-def test_packs_are_opened_during_the_night_window(tmp_path):
+def test_packs_are_opened_during_the_night_window(tmp_path, caplog):
     with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3) as site:
         config = make_config(tmp_path, site.url, [], packs_hours=(0, 24))
-        run_once(config, dry_run=False)
+        with caplog.at_level("INFO"):
+            run_once(config, dry_run=False)
     assert site.packs_opened == 3 and site.packs == 0
+    # Contenu du paquet : résumé, et détail des UR et L seulement.
+    assert "5 cartes : 1 L, 1 UR, 1 PC, 2 C" in caplog.text
+    assert "★ UR — Tirage 1-3" in caplog.text and "★ L — Tirage 1-4 (brillante)" in caplog.text
+    assert "Tirage 1-2" not in caplog.text
 
 
 def test_packs_are_not_opened_in_dry_run_or_outside_the_window(tmp_path):
