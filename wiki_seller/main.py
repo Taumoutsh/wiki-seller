@@ -26,7 +26,6 @@ from .site import ListingStatus, PriceApiUnavailable, SessionExpired, WikiMaster
 
 log = logging.getLogger("wiki_seller")
 
-AUCTION_DURATION = timedelta(hours=1)
 RESTART_MARGIN = timedelta(minutes=1)
 RETRY_AFTER_ERROR = timedelta(minutes=10)
 PRICE_CACHE_TTL = timedelta(hours=3)
@@ -198,18 +197,20 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
 
 
 def next_run_at(result: RunResult, config: Config, now: datetime) -> datetime:
-    """1h après la dernière mise en vente ; si les places sont déjà prises, dès la fin
-    de la première enchère ; sinon dans 1h."""
+    """RUN_INTERVAL (par défaut la durée des enchères) après la dernière mise en vente ;
+    si les places sont déjà prises, dès la fin de la première enchère ; sinon dans
+    RUN_INTERVAL."""
+    interval = config.pass_interval
     if result.last_listing_at:
-        target = result.last_listing_at + AUCTION_DURATION + RESTART_MARGIN
+        target = result.last_listing_at + interval + RESTART_MARGIN
     elif result.slots_full and result.earliest_auction_end:
         target = result.earliest_auction_end + RESTART_MARGIN
     elif result.slots_full:
         stored = read_json(config.run_state_file, {}).get("last_listing_at")
-        target = (datetime.fromisoformat(stored) + AUCTION_DURATION + RESTART_MARGIN
-                  if stored else now + AUCTION_DURATION)
+        target = (datetime.fromisoformat(stored) + interval + RESTART_MARGIN
+                  if stored else now + interval)
     else:
-        target = now + AUCTION_DURATION
+        target = now + interval
     return max(target, now + timedelta(minutes=1))
 
 
@@ -246,7 +247,7 @@ def setup_logging(config: Config) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wiki_seller", description="Mise aux enchères automatique sur WikiMasters.")
     parser.add_argument("--dry-run", action="store_true", help="tout faire sauf cliquer sur « Lancer l'enchère »")
-    parser.add_argument("--loop", action="store_true", help="tourner en continu (relance 1h après la dernière vente)")
+    parser.add_argument("--loop", action="store_true", help="tourner en continu (relance RUN_INTERVAL après la dernière vente)")
     parser.add_argument("--headed", action="store_true", help="afficher le navigateur")
     parser.add_argument("--debug", action="store_true", help="captures d'écran à chaque étape dans state/debug/")
     args = parser.parse_args(argv)

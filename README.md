@@ -20,9 +20,9 @@ Met automatiquement aux enchères les cartes de votre collection
    choisit **1 h** et clique sur **« Lancer l'enchère »**. Une carte sans prix moyen
    (vide ou 0) est ignorée.
 
-En mode `--loop`, la passe suivante démarre **1 h après la dernière mise en vente**.
-Si toutes les places étaient déjà prises, elle démarre dès la fin de la première
-enchère en cours.
+En mode `--loop`, la passe suivante démarre **`RUN_INTERVAL` après la dernière mise en
+vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient déjà
+prises, elle démarre dès la fin de la première enchère en cours.
 
 ## Installation locale
 
@@ -109,7 +109,8 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `SAFE_CARDS_FILE` | `safed_cards.json` | Liste des cartes protégées |
 | `STATE_DIR` | `state` | Session, journal, captures |
 | `PRICE_RATIO` | `0.70` | Part du prix moyen utilisée pour la mise |
-| `AUCTION_DURATION_LABEL` | `1 h` | Libellé du bouton de durée |
+| `AUCTION_DURATION_LABEL` | `1 h` | Durée des enchères : libellé exact d'un bouton du site (`10 min`, `30 min`, `1 h`, `3 h`, `6 h`, `12 h`) |
+| `RUN_INTERVAL` | *(durée des enchères)* | Délai avant la passe suivante (`10 min`, `1 h`, `1h30`… ; 5 min minimum) |
 | `HEADLESS` | `true` | `false` pour voir le navigateur |
 | `CHROMIUM_EXECUTABLE` | *(vide)* | Chromium déjà installé à utiliser |
 | `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir plus haut) |
@@ -129,6 +130,11 @@ dossier à sa place.
 
 Le conteneur tourne en mode `--loop` et redémarre tout seul. `safed_cards.json` est
 monté depuis le serveur : il suffit de le modifier, sans reconstruire l'image.
+
+Le `.env`, lui, n'est lu qu'à la création du conteneur. Après l'avoir modifié, lancez
+`docker compose up -d` (et non `docker compose restart`, qui garde les anciennes
+valeurs). La session, le cache des prix et l'heure de la dernière vente sont conservés
+dans `state/`.
 
 ## Fonctionnement technique
 
