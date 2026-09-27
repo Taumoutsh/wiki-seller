@@ -1,0 +1,11 @@
+services:
+  wiki-seller:
+    build: .
+    restart: unless-stopped
+    # MAIL et PASSWORD (et les réglages optionnels) sont lus depuis .env.
+    env_file: .env
+    volumes:
+      # Liste des cartes protégées, modifiable sans reconstruire l'image
+      # (relue à chaque passe).
+      - ./safed_cards.json:/app/safed_cards.json:ro
+      - ./state:/app/state

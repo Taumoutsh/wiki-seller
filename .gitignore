@@ -1,0 +1,12 @@
+# Secrets et données personnelles
+.env
+safed_cards.json
+
+# État d'exécution (session navigateur, journal, captures de débogage)
+state/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
