@@ -18,7 +18,7 @@ from playwright.sync_api import Locator, Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from .config import Config
-from .selection import sale_price
+from .selection import normalize_name, sale_price
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +122,18 @@ def parse_cookies(text: str) -> list[tuple[str, str]]:
         if sep and name:
             pairs.append((name.strip(), value.strip()))
     return pairs
+
+
+def search_queries(name: str) -> list[str]:
+    """Requêtes à essayer pour la recherche du Marché, de la plus précise à la plus large."""
+    queries = [name.strip()]
+    without_parens = re.sub(r"\s*\([^)]*\)", " ", name).strip()
+    plain = re.sub(r"[^\w\s'-]", " ", name)
+    for query in (without_parens, plain):
+        query = re.sub(r"\s+", " ", query).strip()
+        if query and query not in queries:
+            queries.append(query)
+    return queries
 
 
 def duration_pattern(label: str) -> re.Pattern:
@@ -644,11 +656,22 @@ class WikiMasters:
     # ─────────────────────────── Achats ───────────────────────────
 
     def search_auctions(self, name: str) -> list[dict]:
+        """Enchères trouvées par la recherche du Marché. Elle ne trouve rien dès que la
+        requête contient des parenthèses (« Dewey Martin (acteur) ») : on réessaie alors
+        sans elles, puis sans ponctuation. Le titre exact est vérifié par l'appelant."""
         from urllib.parse import quote_plus
 
-        data = self.api_get_ok(f"/api/marketplace?page=1&limit=50&sort=recent&q={quote_plus(name)}")
-        auctions = data.get("auctions") if isinstance(data, dict) else None
-        return [a for a in auctions or [] if isinstance(a, dict)]
+        found: dict[str, dict] = {}
+        for query in search_queries(name):
+            data = self.api_get_ok(f"/api/marketplace?page=1&limit=50&sort=recent&q={quote_plus(query)}")
+            auctions = data.get("auctions") if isinstance(data, dict) else None
+            for auction in auctions or []:
+                if isinstance(auction, dict) and auction.get("id"):
+                    found.setdefault(auction["id"], auction)
+            titles = {normalize_name(((a.get("card") or {}).get("wikipedia_title")) or "") for a in found.values()}
+            if normalize_name(name) in titles:
+                break
+        return list(found.values())
 
     def fetch_auction(self, auction_id: str) -> dict | None:
         data = self.api_get_ok(f"/api/marketplace/{auction_id}")

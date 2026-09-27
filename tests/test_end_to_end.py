@@ -202,3 +202,11 @@ def test_snipe_bids_just_before_the_end(tmp_path):
         # La surenchère n'est partie qu'une fois arrivé à 25 s de la fin.
         assert site.bids[-1] == ("s1", 80)
         assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=26)
+
+
+def test_card_with_parentheses_is_found_without_them(tmp_path):
+    auctions = [market_auction("d1", "Dewey Martin (acteur)", 1), market_auction("d2", "Dewey Martin (homonymie)", 1)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=auctions) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Dewey Martin (acteur)", "max_price": 5}])
+        run_once(config)
+    assert site.bids == [("d1", 1)]

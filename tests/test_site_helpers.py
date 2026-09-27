@@ -117,3 +117,12 @@ def test_wanted_cards_file(tmp_path):
         path.write_text(bad)
         with pytest.raises(WantedCardsError):
             load_wanted_cards(path)
+
+
+def test_search_queries_drop_parentheses_then_punctuation():
+    from wiki_seller.site import search_queries
+
+    assert search_queries("Dewey Martin (acteur)") == ["Dewey Martin (acteur)", "Dewey Martin", "Dewey Martin acteur"]
+    assert search_queries("Nick Jonas") == ["Nick Jonas"]
+    assert search_queries("Zelda II: The Adventure of Link") == ["Zelda II: The Adventure of Link",
+                                                                 "Zelda II The Adventure of Link"]

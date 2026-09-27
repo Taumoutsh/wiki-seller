@@ -264,7 +264,9 @@ class FakeWikiMasters:
                                             "maxConcurrentAuctions": site.max_auctions})
                 if url.path == "/api/marketplace" and "q" in qs:
                     q = qs["q"][0].lower()
-                    found = [a for a in site.auctions.values() if q in a["card"]["wikipedia_title"].lower()]
+                    # Comme le vrai site : une requête avec parenthèses ne trouve rien.
+                    found = [] if "(" in q else [
+                        a for a in site.auctions.values() if q in a["card"]["wikipedia_title"].lower()]
                     return self._send(200, {"auctions": found, "page": 1, "limit": 50, "hasMore": False})
                 if url.path.startswith("/api/marketplace/") and url.path.split("/")[3] in site.auctions:
                     return self._send(200, {"auction": site.auctions[url.path.split("/")[3]], "bids": []})
