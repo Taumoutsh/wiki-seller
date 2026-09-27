@@ -32,10 +32,10 @@ SELL_BUTTON = re.compile(r"Mettre aux ench[èe]res", re.I)
 LAUNCH_BUTTON = re.compile(r"Lancer l.ench[èe]re", re.I)
 CANCEL_BUTTON = re.compile(r"^\s*Annuler\s*$", re.I)
 SEARCH_PLACEHOLDER = re.compile(r"Rechercher", re.I)
-AVERAGE_LABEL = re.compile(r"Prix moyen", re.I)
+AVERAGE_LABEL = re.compile(r"Prix moyen|Moyenne", re.I)
 SLOTS_TEXT = re.compile(r"Ench[èe]res actives\s*:?\s*(\d+)\s*/\s*(\d+)", re.I)
-AVERAGE_AFTER = re.compile(r"Prix moyen\s*(?:de vente)?\s*(?:\([^)]*\))?\s*:?\s*(\d[\d \u00a0\u202f.,]*)", re.I)
-AVERAGE_UNAVAILABLE = re.compile(r"Prix moyen\s*:?\s*(indisponible|aucun|n/?a|[-—–]|0\b)", re.I)
+AVERAGE_AFTER = re.compile(r"(?:Prix moyen|Moyenne)\s*(?:de vente)?\s*(?:\([^)]*\))?\s*:?\s*(\d[\d \u00a0\u202f.,]*)", re.I)
+AVERAGE_UNAVAILABLE = re.compile(r"(?:Prix moyen|Moyenne)\s*:?\s*(indisponible|aucun|n/?a|[-—–]|0\b)", re.I)
 LOGIN_SUBMIT = re.compile(r"^\s*(connexion|se connecter)\s*$", re.I)
 ANTIBOT_TEXT = re.compile(r"robot|humain|anti-?bot|v[ée]rification|captcha", re.I)
 ANTIBOT_CONFIRM = re.compile(r"continuer|valider|confirmer|v[ée]rifier|envoyer|^\s*ok\s*$", re.I)
@@ -96,6 +96,21 @@ def parse_int(text: str) -> int | None:
     et séparateurs de milliers ignorés)."""
     digits = re.sub(r"\D", "", text)
     return int(digits) if digits else None
+
+
+def entry_rarity(entry: dict) -> str:
+    card = entry.get("card") if isinstance(entry.get("card"), dict) else entry
+    return str(card.get("rarity") or entry.get("rarity") or "").upper()
+
+
+def parse_cookies(text: str) -> list[tuple[str, str]]:
+    """« nom=valeur; nom2=valeur2 » (ou une paire par ligne) → [(nom, valeur), ...]."""
+    pairs = []
+    for part in re.split(r"[;\n]", text):
+        name, sep, value = part.strip().partition("=")
+        if sep and name:
+            pairs.append((name.strip(), value.strip()))
+    return pairs
 
 
 def duration_pattern(label: str) -> re.Pattern:
@@ -218,7 +233,28 @@ class WikiMasters:
         if self.is_logged_in():
             log.info("Session existante réutilisée.")
             return
+        if self.config.session_cookies and self.import_session_cookies():
+            return
         self.login()
+
+    def import_session_cookies(self) -> bool:
+        """Session copiée depuis un navigateur connecté (SESSION_COOKIES) : évite la
+        vérification Cloudflare de la page /login. Le site la renouvelle ensuite tout
+        seul et la version à jour est enregistrée dans state/."""
+        cookies = parse_cookies(self.config.session_cookies)
+        if not cookies:
+            log.warning("SESSION_COOKIES ne contient aucun cookie « nom=valeur ».")
+            return False
+        self.page.context.add_cookies(
+            [{"name": name, "value": value, "url": self.config.base_url} for name, value in cookies])
+        self.page.goto(self.url("/collection"), wait_until="domcontentloaded")
+        if self.is_logged_in():
+            log.info("Connecté avec la session de SESSION_COOKIES (%d cookie(s)).", len(cookies))
+            return True
+        log.warning("La session de SESSION_COOKIES est expirée ou invalide : "
+                    "copiez-en une nouvelle depuis un navigateur connecté.")
+        self.page.context.clear_cookies()
+        return False
 
     def _wait_logged_in(self, seconds: float) -> bool:
         deadline = time.monotonic() + seconds
@@ -271,29 +307,34 @@ class WikiMasters:
 
     # ─────────────────────────── Lectures ───────────────────────────
 
-    def fetch_collection(self) -> tuple[list[dict], set[str]]:
-        """Toutes les entrées de la collection + les exemplaires engagés dans un échange."""
+    def fetch_collection(self, rarities: tuple[str, ...] = ()) -> tuple[list[dict], set[str]]:
+        """Entrées de la collection (limitées aux raretés demandées, filtrées par le site
+        lui-même) + les exemplaires engagés dans un échange."""
         entries: list[dict] = []
         seen: set[str] = set()
         in_trade: set[str] = set()
-        for page_index in range(COLLECTION_PAGE_GUARD):
-            data = self.api_get_ok(f"/api/my-collection?sort=rarity&page={page_index}&stats=0")
-            items = data.get("collection") if isinstance(data, dict) else None
-            if not isinstance(items, list):
-                raise SiteError("Réponse inattendue de /api/my-collection")
-            in_trade.update(str(i) for i in (data.get("pendingTradeCardIds") or []))
-            new = 0
-            for item in items:
-                key = str(item.get("id") or id(item))
-                if key in seen:
-                    continue
-                seen.add(key)
-                entries.append(item)
-                new += 1
-            if not new:
-                break
-            time.sleep(0.2)
-        log.info("Collection chargée : %d entrée(s).", len(entries))
+        for rarity in rarities or (None,):
+            query = f"&rarity={rarity}" if rarity else ""
+            for page_index in range(COLLECTION_PAGE_GUARD):
+                data = self.api_get_ok(f"/api/my-collection?sort=rarity&page={page_index}&stats=0{query}")
+                items = data.get("collection") if isinstance(data, dict) else None
+                if not isinstance(items, list):
+                    raise SiteError("Réponse inattendue de /api/my-collection")
+                in_trade.update(str(i) for i in (data.get("pendingTradeCardIds") or []))
+                new = 0
+                for item in items:
+                    key = str(item.get("id") or id(item))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    new += 1
+                    if not rarities or entry_rarity(item) in rarities:
+                        entries.append(item)
+                if not new:
+                    break
+                time.sleep(0.2)
+        log.info("Collection chargée : %d entrée(s)%s.", len(entries),
+                 f" de rareté {', '.join(rarities)}" if rarities else "")
         return entries, in_trade
 
     def fetch_market_state(self) -> MarketState:
@@ -313,33 +354,6 @@ class WikiMasters:
         except (SessionExpired, SiteError) as exc:
             raise PriceApiUnavailable(str(exc)) from exc
         return self._average_from(data, rarity)
-
-    def fetch_averages(self, cards: list[tuple[str, str | None]]) -> dict[str, float | None]:
-        """Prix moyens de plusieurs cartes, PRICE_BATCH requêtes à la fois (une collection
-        compte vite des milliers de cartes). Les réponses en erreur temporaire sont
-        redemandées une par une."""
-        paths = [f"/api/marketplace/cards/{card_id}/sales?scope=summary" for card_id, _ in cards]
-        results = self.page.evaluate(
-            """async (paths) => Promise.all(paths.map(async (path) => {
-                const res = await fetch(path, {credentials: 'include', headers: {accept: 'application/json'}});
-                let data = null;
-                try { data = await res.json(); } catch (e) {}
-                return {status: res.status, data};
-            }))""",
-            paths,
-        )
-        averages: dict[str, float | None] = {}
-        for (card_id, rarity), result in zip(cards, results):
-            status = result["status"]
-            if 200 <= status < 300:
-                averages[card_id] = self._average_from(result["data"], rarity)
-            elif status == 404:
-                averages[card_id] = None
-            elif status == 429 or status >= 500:
-                averages[card_id] = self.fetch_average(card_id, rarity)
-            else:
-                raise PriceApiUnavailable(f"{paths[0]}… → HTTP {status}")
-        return averages
 
     @staticmethod
     def _average_from(data: object, rarity: str | None) -> float | None:

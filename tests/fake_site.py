@@ -80,7 +80,7 @@ async function openAuction(c) {
   const mine = await (await fetch('/api/marketplace?page=1&limit=50&sort=recent&mine=1')).json();
   show(`<div role="dialog"><div class="card-frame">
     <p>Enchères actives : ${mine.selling.length}/${mine.maxConcurrentAuctions}</p>
-    <div><span>Prix moyen</span> <strong id="avg">...</strong></div>
+    <div><span>Moyenne</span><span id="avg">...</span></div>
     <label>MISE DE DÉPART <input aria-label="Mise de départ" inputmode="numeric" id="price" value="1"></label>
     <div><button class="dur">10 min</button><button class="dur">1 h</button><button class="dur">24 h</button></div>
     <button id="cancel">Annuler</button><button id="launch">Lancer l'enchère</button>
@@ -119,6 +119,7 @@ class FakeWikiMasters:
         self.challenge = challenge
         self.logins = 0
         self.signups = 0
+        self.collection_requests = []
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -174,7 +175,10 @@ class FakeWikiMasters:
                     return self._send(200, {"balance": 100})
                 if url.path == "/api/my-collection":
                     page = int(qs.get("page", ["0"])[0])
-                    return self._send(200, {"collection": site.collection if page == 0 else []})
+                    rarity = qs.get("rarity", [None])[0]
+                    items = [c for c in site.collection if not rarity or c["card"]["rarity"] == rarity]
+                    site.collection_requests.append(url.query)
+                    return self._send(200, {"collection": items if page == 0 else []})
                 if url.path == "/api/marketplace" and qs.get("mine") == ["1"]:
                     return self._send(200, {"selling": site.selling, "bidding": [],
                                             "maxConcurrentAuctions": site.max_auctions})

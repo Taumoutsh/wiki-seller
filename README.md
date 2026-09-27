@@ -5,16 +5,17 @@ Met automatiquement aux enchères les cartes de votre collection
 
 À chaque passe, le script :
 
-1. se connecte avec `MAIL` / `PASSWORD` sur la page `/login` (voir « Première
-   connexion » ci-dessous), puis réutilise la session enregistrée dans `state/`.
+1. réutilise la session enregistrée dans `state/`, sinon celle de `SESSION_COOKIES`,
+   sinon se connecte avec `MAIL` / `PASSWORD` sur `/login` (voir « Première connexion »).
 2. compte les enchères en cours. Le site en autorise 5 à la fois : s'il n'y a plus
    de place, le script s'arrête là.
-3. lit la collection et retire les cartes protégées. Pour une carte protégée,
+3. lit la collection, **limitée aux raretés de `SELL_RARITIES`** (par défaut
+   légendaires `L` et super rares `SR`), et retire les cartes protégées. Pour une carte protégée,
    **un exemplaire est conservé** et les doublons sont vendus.
 4. classe les cartes restantes **de la plus chère à la moins chère**, selon le prix
    moyen du marché.
 5. pour chaque carte, tant qu'il reste de la place : ouvre la carte dans
-   « Collection », clique sur **« Mettre aux enchères »**, attend le **« Prix moyen »**,
+   « Collection », clique sur **« Mettre aux enchères »**, attend la **« Moyenne »**,
    saisit une mise de départ de **70 % du prix moyen arrondi à l'entier inférieur**,
    choisit **1 h** et clique sur **« Lancer l'enchère »**. Une carte sans prix moyen
    (vide ou 0) est ignorée.
@@ -62,10 +63,29 @@ cette case à votre place. Il remplit le formulaire, puis attend :
 - avec `--headed`, 5 min, le temps que vous cochiez la case dans la fenêtre ouverte.
 
 Une fois connecté, la session est enregistrée dans `state/storage_state.json` et
-réutilisée aux passes suivantes. Sur un serveur sans écran, faites cette première
-connexion sur votre ordinateur (`python -m wiki_seller --dry-run --headed`), puis copiez
-`state/storage_state.json` dans le dossier `state/` du serveur. Recommencez si la
-session expire.
+réutilisée aux passes suivantes. Le site la renouvelle tout seul tant que le script
+tourne régulièrement.
+
+### Sur un serveur sans écran : copier la session d'un navigateur
+
+1. Sur votre téléphone ou votre ordinateur, connectez-vous à wiki-masters.com (en
+   cochant la case vous-même).
+2. Ajoutez un favori dont l'adresse est :
+
+   ```
+   javascript:(()=>{const c=document.cookie.split('; ').filter(x=>x.startsWith('sb-')).join('; ');navigator.clipboard.writeText(c).then(()=>alert('Copié : '+c.split('; ').length+' cookie(s)'),()=>prompt('Tout sélectionner et copier :',c))})()
+   ```
+
+   puis ouvrez ce favori sur wiki-masters.com : les cookies de session (au moins deux,
+   `…-auth-token.0` et `…-auth-token.1`) sont copiés, sur une seule ligne.
+3. Collez-les dans le `.env` du serveur, entre guillemets :
+   `SESSION_COOKIES="sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…"`
+4. **Ne vous déconnectez pas** ensuite sur ce navigateur : « Se déconnecter » ferme
+   aussi la session copiée. Fermez simplement l'onglet.
+
+Le script n'utilise `SESSION_COOKIES` que s'il n'a pas de session valide dans `state/`.
+Si le journal indique « La session de SESSION_COOKIES est expirée », recommencez ces
+étapes avec une nouvelle copie.
 
 ## Utilisation
 
@@ -92,6 +112,8 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `AUCTION_DURATION_LABEL` | `1 h` | Libellé du bouton de durée |
 | `HEADLESS` | `true` | `false` pour voir le navigateur |
 | `CHROMIUM_EXECUTABLE` | *(vide)* | Chromium déjà installé à utiliser |
+| `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir plus haut) |
+| `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
 
 ## Docker (serveur)
 
@@ -115,11 +137,11 @@ monté depuis le serveur : il suffit de le modifier, sans reconstruire l'image.
   `/api/marketplace?mine=1`, `/api/marketplace/cards/<id>/sales?scope=summary`),
   depuis la page connectée.
 - **Mise en vente** : le script passe uniquement par l'interface, comme à la main.
-  Le prix de la mise est calculé à partir du « Prix moyen » affiché dans la fenêtre
+  Le prix de la mise est calculé à partir de la « Moyenne » affichée dans la fenêtre
   d'enchère. Le prix moyen de l'API ne sert qu'au classement, et de secours si le
   libellé est absent.
 - Les libellés utilisés sont regroupés en haut de `wiki_seller/site.py`, pour les
-  ajuster si le site change : « Mettre aux enchères », « Prix moyen »,
+  ajuster si le site change : « Mettre aux enchères », « Moyenne »,
   « Mise de départ », « 1 h », « Lancer l'enchère », « Enchères actives : X/5 ».
 
 ## Tests

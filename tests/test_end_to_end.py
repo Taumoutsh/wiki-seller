@@ -31,13 +31,13 @@ UI_AVERAGES = {"Pomme": 21, "Château de Versailles": 1234, "Tour Eiffel": 5000,
                "Loire": 150, "Rhône": 100}
 
 
-def make_config(tmp_path, url, safe):
+def make_config(tmp_path, url, safe, **extra):
     safe_file = tmp_path / "safed_cards.json"
     safe_file.write_text(json.dumps(safe), encoding="utf-8")
     return Config(
         mail="me@example.com", password="secret", base_url=url, safe_cards_file=safe_file,
         state_dir=tmp_path / "state", price_ratio=0.7, auction_duration_label="1 h",
-        headless=True, chromium_executable=os.getenv("CHROMIUM_EXECUTABLE") or None,
+        headless=True, chromium_executable=os.getenv("CHROMIUM_EXECUTABLE") or None, **extra,
     )
 
 
@@ -104,3 +104,23 @@ def test_price_api_refused_falls_back_to_window_price(tmp_path):
     # Sans classement possible : ordre alphabétique, prix lu dans la fenêtre.
     assert [(l["title"], l["price"]) for l in site.listings] == [
         ("Château de Versailles", "863"), ("Château de Versailles", "863")]
+
+
+def test_only_selected_rarities_are_loaded_and_sold(tmp_path):
+    collection = [entry("a1", "A", "Pomme", "SR"), entry("b1", "B", "Château de Versailles", "C"),
+                  entry("c1", "C", "Tour Eiffel", "L"), entry("f1", "F", "Loire", "UR")]
+    with FakeWikiMasters(collection, API_AVERAGES, UI_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [], sell_rarities=("L", "SR"))
+        result = run_once(config, dry_run=True)
+    assert result.listed == 2
+    # Le script demande la collection au site rareté par rareté, sans parcourir le reste
+    # (les autres requêtes viennent de la page /collection elle-même).
+    rarities = {q.split("rarity=")[1] for q in site.collection_requests if "rarity=" in q}
+    assert rarities == {"L", "SR"}
+
+
+def test_session_cookies_skip_the_login_page(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, challenge="manual") as site:
+        config = make_config(tmp_path, site.url, [], session_cookies="other=1; session=ok")
+        result = run_once(config, dry_run=True)
+    assert result.listed == 5 and site.logins == 0 and site.signups == 0

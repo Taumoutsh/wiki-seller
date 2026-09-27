@@ -30,8 +30,7 @@ AUCTION_DURATION = timedelta(hours=1)
 RESTART_MARGIN = timedelta(minutes=1)
 RETRY_AFTER_ERROR = timedelta(minutes=10)
 PRICE_CACHE_TTL = timedelta(hours=3)
-PRICE_BATCH = 5  # requêtes de prix envoyées en même temps
-PRICE_SAVE_EVERY = 200
+PRICE_SAVE_EVERY = 50
 
 
 @dataclass
@@ -110,7 +109,7 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
         log.info("Aucune place libre aux enchères : rien à faire pour l'instant.")
         return RunResult(0, None, True, market.earliest_end())
 
-    entries, in_trade = site.fetch_collection()
+    entries, in_trade = site.fetch_collection(config.sell_rarities)
     groups = parse_collection(entries, excluded_copy_ids=in_trade)
     sellable = [g for g in groups if copies_available(g, safe_names, market.selling) > 0]
     log.info("%d carte(s) distincte(s), dont %d avec des exemplaires à vendre.", len(groups), len(sellable))
@@ -119,32 +118,29 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
     cache = load_price_cache(config)
     averages: dict[str, float | None] = {}
     unknown: set[str] = set()
-    missing = []
+    price_api_ok = True
+    fetched = 0
     for group in sellable:
         key = f"{group.card_id}:{group.rarity}"
         if key in cache:
             averages[group.card_id] = cache[key]["average"]
-        else:
-            missing.append(group)
-    if missing:
-        log.info("Prix moyens à récupérer : %d carte(s) (%d déjà en cache).", len(missing), len(averages))
-    for start in range(0, len(missing), PRICE_BATCH):
-        batch = missing[start:start + PRICE_BATCH]
+            continue
+        if not price_api_ok:
+            unknown.add(group.card_id)
+            continue
         try:
-            fetched = site.fetch_averages([(g.card_id, g.rarity) for g in batch])
+            averages[group.card_id] = site.fetch_average(group.card_id, group.rarity)
         except PriceApiUnavailable as exc:
             log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
                         "sans classement pour les cartes concernées.", exc)
-            unknown.update(g.card_id for g in missing[start:])
-            break
-        for group in batch:
-            averages[group.card_id] = fetched[group.card_id]
-            cache[f"{group.card_id}:{group.rarity}"] = {"average": fetched[group.card_id], "at": now_utc().isoformat()}
-        done = start + len(batch)
-        if done % PRICE_SAVE_EVERY < PRICE_BATCH or done == len(missing):
+            price_api_ok = False
+            unknown.add(group.card_id)
+            continue
+        cache[key] = {"average": averages[group.card_id], "at": now_utc().isoformat()}
+        fetched += 1
+        if fetched % PRICE_SAVE_EVERY == 0:
             save_price_cache(config, cache)  # une passe interrompue ne perd pas les prix déjà lus
-            log.info("Prix moyens : %d/%d.", done, len(missing))
-        time.sleep(0.2)
+        time.sleep(0.3)
     save_price_cache(config, cache)
 
     plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown)

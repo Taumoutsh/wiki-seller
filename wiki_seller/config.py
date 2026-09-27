@@ -17,6 +17,15 @@ def _bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "oui", "on")
 
 
+# Seules les cartes rares sont analysées : la collection grossit bien plus vite que le
+# nombre de ventes possibles (5 à la fois), et chaque carte coûte une requête de prix.
+DEFAULT_SELL_RARITIES = "L,SR"
+
+
+def _rarities(value: str) -> tuple[str, ...]:
+    return tuple(r.strip().upper() for r in value.replace(";", ",").split(",") if r.strip())
+
+
 @dataclass(frozen=True)
 class Config:
     mail: str
@@ -28,6 +37,10 @@ class Config:
     auction_duration_label: str
     headless: bool
     chromium_executable: str | None
+    # Raretés mises en vente (codes du site : L, UR, SR, R, PC, C) ; vide = toutes.
+    sell_rarities: tuple[str, ...] = ()
+    # Cookies d'une session connectée (« nom=valeur; nom2=valeur2 »), voir README.
+    session_cookies: str = ""
 
     @property
     def storage_state_file(self) -> Path:
@@ -68,4 +81,6 @@ def load_config() -> Config:
         auction_duration_label=os.getenv("AUCTION_DURATION_LABEL", "1 h"),
         headless=_bool(os.getenv("HEADLESS"), True),
         chromium_executable=os.getenv("CHROMIUM_EXECUTABLE") or None,
+        sell_rarities=_rarities(os.getenv("SELL_RARITIES", DEFAULT_SELL_RARITIES)),
+        session_cookies=os.getenv("SESSION_COOKIES", "").strip(),
     )
