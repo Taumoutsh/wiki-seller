@@ -115,10 +115,16 @@ tourne régulièrement.
 
    puis ouvrez ce favori sur wiki-masters.com : les cookies de session (au moins deux,
    `…-auth-token.0` et `…-auth-token.1`) sont copiés, sur une seule ligne.
-3. Collez-les dans le `.env` du serveur, entre guillemets :
-   `SESSION_COOKIES="sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…"`
+3. Sur le serveur, lancez `./update_session.sh`, collez les cookies (une ou plusieurs
+   lignes, ils ne s'affichent pas) et validez par une ligne vide. Le script réécrit
+   `SESSION_COOKIES` dans `.env`, supprime l'ancienne session de `state/` et relance le
+   conteneur (`--no-restart` pour ne pas le relancer). À la main, la ligne s'écrit
+   `SESSION_COOKIES=sb-…-auth-token.0=base64-…;sb-…-auth-token.1=…`.
 4. **Ne vous déconnectez pas** ensuite sur ce navigateur : « Se déconnecter » ferme
-   aussi la session copiée. Fermez simplement l'onglet.
+   aussi la session copiée. N'utilisez plus non plus cette session sur le téléphone :
+   deux appareils qui la renouvellent chacun de leur côté peuvent la faire annuler.
+   Effacez plutôt les données du site (Safari : Réglages → Safari → Avancé → Données
+   des sites web) puis reconnectez-vous : vous aurez une session à vous.
 
 Le script n'utilise `SESSION_COOKIES` que s'il n'a pas de session valide dans `state/`.
 Si le journal indique « La session de SESSION_COOKIES est expirée », recommencez ces
