@@ -23,6 +23,9 @@ log = logging.getLogger(__name__)
 
 COLLECTION_PAGE_GUARD = 500
 DEFAULT_MAX_AUCTIONS = 5
+# Attente de la vérification anti-bot avant de pouvoir cliquer sur « Connexion ».
+LOGIN_WAIT_HEADLESS = 30
+LOGIN_WAIT_HEADED = 300
 
 # Libellés de l'interface (repris du site).
 SELL_BUTTON = re.compile(r"Mettre aux ench[èe]res", re.I)
@@ -33,8 +36,7 @@ AVERAGE_LABEL = re.compile(r"Prix moyen", re.I)
 SLOTS_TEXT = re.compile(r"Ench[èe]res actives\s*:?\s*(\d+)\s*/\s*(\d+)", re.I)
 AVERAGE_AFTER = re.compile(r"Prix moyen\s*(?:de vente)?\s*(?:\([^)]*\))?\s*:?\s*(\d[\d \u00a0\u202f.,]*)", re.I)
 AVERAGE_UNAVAILABLE = re.compile(r"Prix moyen\s*:?\s*(indisponible|aucun|n/?a|[-—–]|0\b)", re.I)
-LOGIN_TOGGLE = re.compile(r"^\s*(se connecter|connexion|j.ai d[ée]j[àa] un compte.*|d[ée]j[àa] inscrit.*)\s*$", re.I)
-LOGIN_SUBMIT = re.compile(r"se connecter|connexion|connecter|valider|continuer|login", re.I)
+LOGIN_SUBMIT = re.compile(r"^\s*(connexion|se connecter)\s*$", re.I)
 ANTIBOT_TEXT = re.compile(r"robot|humain|anti-?bot|v[ée]rification|captcha", re.I)
 ANTIBOT_CONFIRM = re.compile(r"continuer|valider|confirmer|v[ée]rifier|envoyer|^\s*ok\s*$", re.I)
 COOKIE_ACCEPT = re.compile(r"tout accepter|accepter|j.accepte", re.I)
@@ -218,22 +220,6 @@ class WikiMasters:
             return
         self.login()
 
-    def _looks_like_signup_form(self) -> bool:
-        page = self.page
-        extra_fields = page.locator(
-            "input[name*=user i]:visible, input[name*=pseudo i]:visible, "
-            "input[placeholder*=pseudo i]:visible, input[placeholder*=utilisateur i]:visible"
-        )
-        return page.locator("input[type=password]:visible").count() > 1 or extra_fields.count() > 0
-
-    def _show_login_form(self) -> None:
-        for role in ("tab", "button", "link"):
-            toggle = self.page.get_by_role(role, name=LOGIN_TOGGLE)
-            if toggle.count():
-                toggle.first.click()
-                self.page.wait_for_timeout(500)
-                return
-
     def _wait_logged_in(self, seconds: float) -> bool:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
@@ -245,35 +231,43 @@ class WikiMasters:
         return False
 
     def login(self) -> None:
+        """Connexion par la page /login (et non /signup, qui affiche l'inscription).
+
+        Le bouton « Connexion » reste désactivé tant que la vérification Cloudflare
+        Turnstile (« Vérifiez que vous êtes humain ») n'est pas validée. Le script ne
+        la contourne pas : il attend qu'elle passe seule, ou qu'une personne coche la
+        case dans le navigateur ouvert avec --headed. La session est ensuite réutilisée."""
         page = self.page
         log.info("Connexion à %s avec %s", self.config.base_url, self.config.mail)
-        page.goto(self.url("/signup"), wait_until="domcontentloaded")
-        page.locator("input[type=password]").first.wait_for(state="visible", timeout=20000)
-        self.step("login-page")
-        if self._looks_like_signup_form():
-            self._show_login_form()
-
-        email = page.locator(
-            "input[type=email]:visible, input[name*=mail i]:visible, "
-            "input[placeholder*=mail i]:visible, input[autocomplete=email]:visible"
-        ).first
+        page.goto(self.url("/login"), wait_until="domcontentloaded")
         password = page.locator("input[type=password]:visible").first
+        password.wait_for(state="visible", timeout=20000)
+        email = page.locator("input[type=email]:visible, input[autocomplete=email]:visible").first
         email.fill(self.config.mail)
         password.fill(self.config.password)
         self.step("login-filled")
-        password.press("Enter")
-        if self._wait_logged_in(5):
-            return
-        # Entrée ne soumet pas toujours le formulaire : clic sur son bouton de connexion
-        # (le plus petit bloc qui contient à la fois le champ mot de passe et le bouton).
-        form = page.locator("form, div").filter(has=password).filter(
-            has=page.get_by_role("button", name=LOGIN_SUBMIT)).last
-        if form.count():
-            form.get_by_role("button", name=LOGIN_SUBMIT).last.click()
+
+        submit = page.get_by_role("button", name=LOGIN_SUBMIT).first
+        wait_s = LOGIN_WAIT_HEADLESS if self.config.headless else LOGIN_WAIT_HEADED
+        if not submit.is_enabled():
+            log.info("Bouton « Connexion » désactivé : attente de la vérification anti-bot "
+                     "Cloudflare (jusqu'à %d s)%s.", wait_s,
+                     "" if self.config.headless else " ; cochez la case dans le navigateur")
+        deadline = time.monotonic() + wait_s
+        while not submit.is_enabled():
+            if time.monotonic() > deadline:
+                self.snapshot("login-blocked")
+                raise SiteError(
+                    "Connexion bloquée par la vérification anti-bot Cloudflare. Lancez une fois "
+                    "`python -m wiki_seller --dry-run --headed` sur une machine avec écran et cochez "
+                    "la case : la session enregistrée dans state/ sera ensuite réutilisée.")
+            page.wait_for_timeout(500)
+
+        submit.click()
         if self._wait_logged_in(30):
             return
         self.snapshot("login-failed")
-        raise SiteError("Connexion échouée (identifiants, popup anti-bot ou formulaire différent ?)")
+        raise SiteError("Connexion échouée (identifiants refusés ou formulaire différent ?)")
 
     # ─────────────────────────── Lectures ───────────────────────────
 

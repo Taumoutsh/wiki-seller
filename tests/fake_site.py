@@ -1,7 +1,7 @@
 """Faux wiki-masters.com minimal pour tester le parcours complet en local.
 
-Il reproduit les éléments utilisés par le script : formulaire /signup avec onglet
-« Se connecter », popup anti-bot avec case à cocher, API JSON, page /collection avec
+Il reproduit les éléments utilisés par le script : page /login dont le bouton attend
+une vérification anti-bot, popup anti-bot avec case à cocher, API JSON, page /collection avec
 recherche, tuiles, fenêtre « Mettre aux enchères » et « Prix moyen » chargé en différé."""
 
 import json
@@ -9,28 +9,32 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+# Comme le vrai site : /signup affiche l'inscription, avec un lien vers /login.
 SIGNUP_HTML = """<!doctype html><html><body>
-<div>
-  <button id="tab-signup">Créer un compte</button>
-  <button id="tab-login" role="tab">Se connecter</button>
-</div>
-<form id="signup">
-  <input name="username" placeholder="Pseudo">
-  <input type="email" placeholder="Email"><input type="password" placeholder="Mot de passe">
-  <input type="password" placeholder="Confirmer">
-</form>
-<form id="login" style="display:none">
-  <input type="email" placeholder="Adresse mail"><input type="password" placeholder="Mot de passe">
-  <button type="button" id="do-login">Se connecter</button>
+<h2>Créer un compte</h2>
+<p>Déjà inscrit ? <a href="/login">Se connecter</a></p>
+<form id="signup" onsubmit="event.preventDefault(); fetch('/auth/signup', {method: 'POST'})">
+  <label for="username">Nom d'utilisateur</label><input id="username" autocomplete="username" placeholder="WikiMaster42">
+  <label for="email">Adresse courriel</label><input id="email" type="email" autocomplete="email">
+  <label for="password">Mot de passe</label><input id="password" type="password" autocomplete="new-password">
+  <button type="submit">Créer mon compte</button>
+</form></body></html>"""
+
+# /login : « Connexion » reste désactivé tant que la vérification anti-bot (Cloudflare
+# Turnstile sur le vrai site) n'est pas validée. __CHALLENGE__ : "auto" la valide seule
+# au bout d'une seconde, "manual" jamais (il faudrait qu'une personne coche la case).
+LOGIN_HTML = """<!doctype html><html><body>
+<form id="login">
+  <label for="email">Adresse courriel</label><input id="email" type="email">
+  <label for="password">Mot de passe</label><input id="password" type="password">
+  <div id="challenge">Vérifiez que vous êtes humain.</div>
+  <button type="submit" id="do-login" disabled>Connexion</button>
 </form>
 <script>
-document.getElementById('tab-login').onclick = () => {
-  document.getElementById('signup').style.display = 'none';
-  document.getElementById('login').style.display = 'block';
-};
-// Pas de bouton submit : Entrée ne soumet rien, il faut cliquer sur « Se connecter ».
-document.getElementById('do-login').onclick = async () => {
-  const [mail, pwd] = [...document.querySelectorAll('#login input')].map(i => i.value);
+if ('__CHALLENGE__' === 'auto') setTimeout(() => document.getElementById('do-login').disabled = false, 1000);
+document.getElementById('login').onsubmit = async (e) => {
+  e.preventDefault();
+  const mail = document.getElementById('email').value, pwd = document.getElementById('password').value;
   const r = await fetch('/auth/login', {method: 'POST', body: JSON.stringify({mail, pwd})});
   if (r.ok) location.href = '/collection';
 };
@@ -102,7 +106,8 @@ load();
 
 class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
-                 mail="me@example.com", password="secret", sales_forbidden=False):
+                 mail="me@example.com", password="secret", sales_forbidden=False,
+                 challenge="auto"):
         self.collection = collection
         self.averages = averages  # card_id -> moyenne API
         self.ui_averages = ui_averages if ui_averages is not None else {}
@@ -111,7 +116,9 @@ class FakeWikiMasters:
         self.mail, self.password = mail, password
         self.sales_forbidden = sales_forbidden
         self.listings = []
+        self.challenge = challenge
         self.logins = 0
+        self.signups = 0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -151,6 +158,9 @@ class FakeWikiMasters:
                 qs = parse_qs(url.query)
                 if url.path == "/signup":
                     return self._send(200, SIGNUP_HTML, "text/html; charset=utf-8")
+                if url.path == "/login":
+                    html = LOGIN_HTML.replace("__CHALLENGE__", site.challenge)
+                    return self._send(200, html, "text/html; charset=utf-8")
                 if url.path == "/collection":
                     html = COLLECTION_HTML.replace("__UI_AVERAGES__", json.dumps(site.ui_averages))
                     return self._send(200, html, "text/html; charset=utf-8")
@@ -180,6 +190,9 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path == "/auth/signup":
+                    site.signups += 1
+                    return self._send(200, {})
                 if self.path == "/auth/login":
                     if body.get("mail") == site.mail and body.get("pwd") == site.password:
                         site.logins += 1

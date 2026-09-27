@@ -7,7 +7,7 @@ import pytest
 
 from wiki_seller.config import Config
 from wiki_seller.main import run_once
-from wiki_seller.site import ListingStatus
+from wiki_seller.site import ListingStatus, SiteError
 
 from .fake_site import FakeWikiMasters
 
@@ -54,7 +54,16 @@ def test_full_run_lists_most_expensive_first(tmp_path):
         ("Loire", "105", "1 h"),
         ("Rhône", "70", "1 h"),
     ]
-    assert site.logins == 1
+    assert site.logins == 1 and site.signups == 0
+
+
+def test_login_blocked_by_antibot_check_fails_cleanly(tmp_path, monkeypatch):
+    monkeypatch.setattr("wiki_seller.site.LOGIN_WAIT_HEADLESS", 2)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, challenge="manual") as site:
+        config = make_config(tmp_path, site.url, [])
+        with pytest.raises(SiteError, match="anti-bot"):
+            run_once(config)
+    assert site.logins == 0 and site.signups == 0 and site.listings == []
 
 
 def test_second_run_reuses_session_and_respects_slots(tmp_path):

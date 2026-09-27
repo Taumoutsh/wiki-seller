@@ -5,8 +5,8 @@ Met automatiquement aux enchères les cartes de votre collection
 
 À chaque passe, le script :
 
-1. se connecte avec `MAIL` / `PASSWORD` depuis la page `/signup`. Il coche la popup
-   anti-bot si elle apparaît, et réutilise ensuite la session enregistrée.
+1. se connecte avec `MAIL` / `PASSWORD` sur la page `/login` (voir « Première
+   connexion » ci-dessous), puis réutilise la session enregistrée dans `state/`.
 2. compte les enchères en cours. Le site en autorise 5 à la fois : s'il n'y a plus
    de place, le script s'arrête là.
 3. lit la collection et retire les cartes protégées. Pour une carte protégée,
@@ -50,6 +50,22 @@ Une liste JSON des noms de cartes à ne pas vendre, tels qu'affichés sur le sit
 La comparaison ignore les majuscules, les accents et les espaces en trop. Le fichier
 est relu à chaque passe : on peut le modifier sans redémarrer le script. S'il est
 absent, le script refuse de tourner. Une liste vide `[]` vend tout.
+
+## Première connexion (vérification Cloudflare)
+
+Sur la page `/login`, le bouton « Connexion » reste désactivé tant que la case
+Cloudflare « Vérifiez que vous êtes humain » n'est pas validée. Le script ne coche pas
+cette case à votre place. Il remplit le formulaire, puis attend :
+
+- sans écran (par défaut), 30 s. Si la vérification ne passe pas toute seule, il
+  s'arrête avec le message « Connexion bloquée par la vérification anti-bot Cloudflare » ;
+- avec `--headed`, 5 min, le temps que vous cochiez la case dans la fenêtre ouverte.
+
+Une fois connecté, la session est enregistrée dans `state/storage_state.json` et
+réutilisée aux passes suivantes. Sur un serveur sans écran, faites cette première
+connexion sur votre ordinateur (`python -m wiki_seller --dry-run --headed`), puis copiez
+`state/storage_state.json` dans le dossier `state/` du serveur. Recommencez si la
+session expire.
 
 ## Utilisation
 
