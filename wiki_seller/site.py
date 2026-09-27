@@ -312,6 +312,37 @@ class WikiMasters:
             data = self.api_get_ok(f"/api/marketplace/cards/{card_id}/sales?scope=summary")
         except (SessionExpired, SiteError) as exc:
             raise PriceApiUnavailable(str(exc)) from exc
+        return self._average_from(data, rarity)
+
+    def fetch_averages(self, cards: list[tuple[str, str | None]]) -> dict[str, float | None]:
+        """Prix moyens de plusieurs cartes, PRICE_BATCH requêtes à la fois (une collection
+        compte vite des milliers de cartes). Les réponses en erreur temporaire sont
+        redemandées une par une."""
+        paths = [f"/api/marketplace/cards/{card_id}/sales?scope=summary" for card_id, _ in cards]
+        results = self.page.evaluate(
+            """async (paths) => Promise.all(paths.map(async (path) => {
+                const res = await fetch(path, {credentials: 'include', headers: {accept: 'application/json'}});
+                let data = null;
+                try { data = await res.json(); } catch (e) {}
+                return {status: res.status, data};
+            }))""",
+            paths,
+        )
+        averages: dict[str, float | None] = {}
+        for (card_id, rarity), result in zip(cards, results):
+            status = result["status"]
+            if 200 <= status < 300:
+                averages[card_id] = self._average_from(result["data"], rarity)
+            elif status == 404:
+                averages[card_id] = None
+            elif status == 429 or status >= 500:
+                averages[card_id] = self.fetch_average(card_id, rarity)
+            else:
+                raise PriceApiUnavailable(f"{paths[0]}… → HTTP {status}")
+        return averages
+
+    @staticmethod
+    def _average_from(data: object, rarity: str | None) -> float | None:
         summary = data.get("summary") if isinstance(data, dict) else None
         if not isinstance(summary, dict) or not summary:
             return None

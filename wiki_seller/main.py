@@ -30,6 +30,8 @@ AUCTION_DURATION = timedelta(hours=1)
 RESTART_MARGIN = timedelta(minutes=1)
 RETRY_AFTER_ERROR = timedelta(minutes=10)
 PRICE_CACHE_TTL = timedelta(hours=3)
+PRICE_BATCH = 5  # requêtes de prix envoyées en même temps
+PRICE_SAVE_EVERY = 200
 
 
 @dataclass
@@ -117,25 +119,32 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
     cache = load_price_cache(config)
     averages: dict[str, float | None] = {}
     unknown: set[str] = set()
-    price_api_ok = True
+    missing = []
     for group in sellable:
         key = f"{group.card_id}:{group.rarity}"
         if key in cache:
             averages[group.card_id] = cache[key]["average"]
-            continue
-        if not price_api_ok:
-            unknown.add(group.card_id)
-            continue
+        else:
+            missing.append(group)
+    if missing:
+        log.info("Prix moyens à récupérer : %d carte(s) (%d déjà en cache).", len(missing), len(averages))
+    for start in range(0, len(missing), PRICE_BATCH):
+        batch = missing[start:start + PRICE_BATCH]
         try:
-            averages[group.card_id] = site.fetch_average(group.card_id, group.rarity)
+            fetched = site.fetch_averages([(g.card_id, g.rarity) for g in batch])
         except PriceApiUnavailable as exc:
             log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
                         "sans classement pour les cartes concernées.", exc)
-            price_api_ok = False
-            unknown.add(group.card_id)
-            continue
-        cache[key] = {"average": averages[group.card_id], "at": now_utc().isoformat()}
-        time.sleep(0.3)
+            unknown.update(g.card_id for g in missing[start:])
+            break
+        for group in batch:
+            averages[group.card_id] = fetched[group.card_id]
+            cache[f"{group.card_id}:{group.rarity}"] = {"average": fetched[group.card_id], "at": now_utc().isoformat()}
+        done = start + len(batch)
+        if done % PRICE_SAVE_EVERY < PRICE_BATCH or done == len(missing):
+            save_price_cache(config, cache)  # une passe interrompue ne perd pas les prix déjà lus
+            log.info("Prix moyens : %d/%d.", done, len(missing))
+        time.sleep(0.2)
     save_price_cache(config, cache)
 
     plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown)
