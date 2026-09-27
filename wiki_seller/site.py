@@ -622,6 +622,11 @@ class WikiMasters:
                 self.snapshot("packs-page")
                 raise SiteError("Page des paquets inattendue (bouton « Ouvrir » introuvable)")
             available = self.packs_available()
+            if opened == 0:
+                log.info("Paquets disponibles : %s%s.", "compteur introuvable" if available is None else available,
+                         "" if button.is_enabled() else " (bouton « Ouvrir » désactivé)")
+            if available is None:
+                self.snapshot("packs-counter")
             if not available or not button.is_enabled():
                 break
             if dry_run:

@@ -124,8 +124,14 @@ def run_once(config: Config, dry_run: bool = False, debug: bool = False) -> RunR
     log.info("%d carte(s) protégée(s) dans %s.", len(safe_names), config.safe_cards_file)
     with open_site(config, debug) as site:
         site.refresh_market()
-        if in_packs_window(config, local_now()):
+        now = local_now()
+        if in_packs_window(config, now):
+            log.info("Paquets : il est %s, dans la plage %s h : ouverture.", now.strftime("%H:%M"),
+                     "-".join(map(str, config.packs_hours)))
             _open_packs(site, dry_run)
+        elif config.packs_hours:
+            log.info("Paquets : il est %s, hors de la plage %s h.", now.strftime("%H:%M"),
+                     "-".join(map(str, config.packs_hours)))
         _buy(site, config, dry_run)
         return _sell(site, config, safe_names, dry_run)
 
@@ -339,6 +345,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.headed:
         config = dataclasses.replace(config, headless=False)
     setup_logging(config)
+    log.info("Démarrage%s : raretés %s, paquets %s, enchères « %s », passe toutes les %s, achats %s.",
+             " (simulation)" if args.dry_run else "", ",".join(config.sell_rarities) or "toutes",
+             "-".join(map(str, config.packs_hours)) + " h" if config.packs_hours else "désactivés",
+             config.auction_duration_label, config.pass_interval, config.wanted_cards_file)
 
     try:
         if args.loop:
