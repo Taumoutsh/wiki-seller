@@ -4,8 +4,15 @@ services:
     restart: unless-stopped
     # MAIL et PASSWORD (et les réglages optionnels) sont lus depuis .env.
     env_file: .env
+    # Ressources maximales : la moitié du serveur (4 cœurs) et 2 Go de RAM par défaut,
+    # réglables dans .env avec CPU_LIMIT et MEM_LIMIT.
+    cpus: ${CPU_LIMIT:-2}
+    mem_limit: ${MEM_LIMIT:-2g}
+    # Chromium utilise /dev/shm ; les 64 Mo par défaut de Docker le font planter.
+    shm_size: 512m
     volumes:
-      # Liste des cartes protégées, modifiable sans reconstruire l'image
-      # (relue à chaque passe).
+      # Cartes protégées et cartes à acheter, modifiables sans reconstruire l'image
+      # (relues à chaque passe).
       - ./safed_cards.json:/app/safed_cards.json:ro
+      - ./wanted_cards.json:/app/wanted_cards.json:ro
       - ./state:/app/state

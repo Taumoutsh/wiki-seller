@@ -83,3 +83,37 @@ def test_run_interval_rejects_bad_values(monkeypatch, value):
     monkeypatch.setenv("RUN_INTERVAL", value)
     with pytest.raises(ConfigError):
         load_config()
+
+
+def test_packs_window_and_next_wake(tmp_path):
+    import json as _json
+
+    from wiki_seller.main import in_packs_window, next_wake
+
+    night = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    assert in_packs_window(night, datetime(2026, 1, 1, 0, 0)) and in_packs_window(night, datetime(2026, 1, 1, 5, 59))
+    assert not in_packs_window(night, datetime(2026, 1, 1, 6, 0))
+    wrap = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None, packs_hours=(22, 2))
+    assert in_packs_window(wrap, datetime(2026, 1, 1, 23)) and in_packs_window(wrap, datetime(2026, 1, 1, 1))
+    assert not in_packs_window(wrap, datetime(2026, 1, 1, 12))
+
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    next_pass = now + timedelta(minutes=30)
+    assert next_wake(next_pass, night, now) == (next_pass, False)
+    end = now + timedelta(minutes=10)
+    night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": end.isoformat()}}}))
+    wake, snipe = next_wake(next_pass, night, now)
+    assert snipe and wake == end - timedelta(seconds=20) - timedelta(seconds=45)
+
+
+def test_wanted_cards_file(tmp_path):
+    from wiki_seller.buying import WantedCardsError, load_wanted_cards
+
+    path = tmp_path / "wanted.json"
+    assert load_wanted_cards(path) == []
+    path.write_text('[{"name": " Tour Eiffel ", "max_price": 500}]')
+    assert [(c.name, c.max_price, c.key) for c in load_wanted_cards(path)] == [("Tour Eiffel", 500, "tour eiffel")]
+    for bad in ('{"name": "x"}', '[{"name": "x", "max_price": "10"}]', '[{"max_price": 10}]', "[,"):
+        path.write_text(bad)
+        with pytest.raises(WantedCardsError):
+            load_wanted_cards(path)

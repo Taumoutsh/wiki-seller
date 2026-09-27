@@ -42,6 +42,25 @@ def parse_duration(text: str) -> timedelta | None:
     return duration if duration > timedelta(0) else None
 
 
+def _hours(value: str) -> tuple[int, int] | None:
+    """« 0-6 » → (0, 6) ; vide → None (désactivé)."""
+    if not value.strip():
+        return None
+    match = re.fullmatch(r"\s*(\d{1,2})\s*[-–àa]\s*(\d{1,2})\s*h?\s*", value)
+    if not match or not (0 <= int(match.group(1)) <= 23 and 0 <= int(match.group(2)) <= 24):
+        raise ConfigError(f"OPEN_PACKS_HOURS illisible ({value!r}) : écrivez par ex. « 0-6 ».")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _positive_int(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) < 1:
+        raise ConfigError(f"{name} doit être un nombre entier positif.")
+    return int(raw)
+
+
 def _rarities(value: str) -> tuple[str, ...]:
     return tuple(r.strip().upper() for r in value.replace(";", ",").split(",") if r.strip())
 
@@ -63,6 +82,12 @@ class Config:
     session_cookies: str = ""
     # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
     run_interval: timedelta | None = None
+    # Achats : liste des cartes voulues, budget total optionnel, avance avant la fin.
+    wanted_cards_file: Path = Path("wanted_cards.json")
+    max_total_bids: int | None = None
+    snipe_lead: timedelta = timedelta(seconds=20)
+    # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
+    packs_hours: tuple[int, int] | None = (0, 6)
 
     @property
     def pass_interval(self) -> timedelta:
@@ -75,6 +100,10 @@ class Config:
     @property
     def run_state_file(self) -> Path:
         return self.state_dir / "run_state.json"
+
+    @property
+    def wanted_state_file(self) -> Path:
+        return self.state_dir / "wanted_state.json"
 
     @property
     def debug_dir(self) -> Path:
@@ -106,6 +135,13 @@ def load_config() -> Config:
         if run_interval < MIN_RUN_INTERVAL:
             raise ConfigError(f"RUN_INTERVAL doit être d'au moins {MIN_RUN_INTERVAL.seconds // 60} min.")
 
+    snipe_lead = None
+    raw_lead = os.getenv("SNIPE_LEAD", "").strip()
+    if raw_lead:
+        snipe_lead = timedelta(seconds=int(raw_lead)) if raw_lead.isdigit() else None
+        if snipe_lead is None or not timedelta(seconds=5) <= snipe_lead <= timedelta(minutes=5):
+            raise ConfigError("SNIPE_LEAD doit être un nombre de secondes entre 5 et 300.")
+
     return Config(
         mail=mail,
         password=password,
@@ -119,4 +155,8 @@ def load_config() -> Config:
         sell_rarities=_rarities(os.getenv("SELL_RARITIES", DEFAULT_SELL_RARITIES)),
         session_cookies=os.getenv("SESSION_COOKIES", "").strip(),
         run_interval=run_interval,
+        wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
+        max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
+        snipe_lead=snipe_lead or timedelta(seconds=20),
+        packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
     )

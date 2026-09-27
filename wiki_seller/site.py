@@ -9,7 +9,8 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from enum import Enum
 from pathlib import Path
 
@@ -40,6 +41,15 @@ LOGIN_SUBMIT = re.compile(r"^\s*(connexion|se connecter)\s*$", re.I)
 ANTIBOT_TEXT = re.compile(r"robot|humain|anti-?bot|v[ée]rification|captcha", re.I)
 ANTIBOT_CONFIRM = re.compile(r"continuer|valider|confirmer|v[ée]rifier|envoyer|^\s*ok\s*$", re.I)
 COOKIE_ACCEPT = re.compile(r"tout accepter|accepter|j.accepte", re.I)
+PACKS_AVAILABLE = re.compile(r"(\d+)\s*/\s*(\d+)\s*paquets?\s+disponibles?", re.I)
+PACK_OPEN_BUTTON = 'button:has(span:text-is("Ouvrir"))'
+PACK_MORE_CARDS = re.compile(r"Encore\s+\d+\s+cartes?", re.I)
+PACK_CONTINUE = re.compile(r"^\s*Continuer\s*$", re.I)
+BID_INPUT = 'input[aria-label="Montant de la mise"]'
+BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
+BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
+PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
+MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 
 
 class SessionExpired(Exception):
@@ -337,10 +347,15 @@ class WikiMasters:
                  f" de rareté {', '.join(rarities)}" if rarities else "")
         return entries, in_trade
 
-    def fetch_market_state(self) -> MarketState:
-        data = self.api_get_ok("/api/marketplace?page=1&limit=50&sort=recent&mine=1")
+    def fetch_mine(self) -> dict:
+        """Onglets « Mes ventes » (selling), « Mes enchères » (bidding) et « Gagnées » (won)."""
+        data = self.api_get_ok(MINE_PATH)
         if not isinstance(data, dict) or not isinstance(data.get("selling"), list):
             raise SiteError("Réponse inattendue pour les enchères en cours")
+        return data
+
+    def fetch_market_state(self) -> MarketState:
+        data = self.fetch_mine()
         selling = [a for a in data["selling"] if isinstance(a, dict) and a.get("status", "active") == "active"]
         max_auctions = data.get("maxConcurrentAuctions")
         if not isinstance(max_auctions, int) or max_auctions < 1:
@@ -520,3 +535,158 @@ class WikiMasters:
             except Exception:
                 pass
             return ListingResult(ListingStatus.FAILED, detail=str(exc).splitlines()[0])
+
+    # ─────────────────────────── Marché : rafraîchissement ───────────────────────────
+
+    def refresh_market(self) -> None:
+        """Recharge le Marché : après la fin d'une enchère, la page (et le compteur
+        « Enchères actives ») n'est pas toujours à jour tant qu'on ne l'a pas rechargée."""
+        page = self.page
+        try:
+            page.goto(self.url("/marketplace"), wait_until="domcontentloaded")
+            page.get_by_placeholder(SEARCH_PLACEHOLDER).first.wait_for(state="visible", timeout=30000)
+            page.reload(wait_until="domcontentloaded")
+            page.get_by_placeholder(SEARCH_PLACEHOLDER).first.wait_for(state="visible", timeout=30000)
+        except PlaywrightTimeout:
+            log.warning("Le Marché a mis trop de temps à se recharger ; on continue.")
+
+    def server_clock_offset(self) -> timedelta:
+        """Écart entre l'horloge du site (en-tête Date) et la nôtre, pour viser juste
+        avant la fin d'une enchère."""
+        try:
+            date = self.page.evaluate(
+                "async () => (await fetch('/api/wikibidous', {credentials: 'include'})).headers.get('date')")
+            server = parsedate_to_datetime(date) if date else None
+        except Exception:
+            server = None
+        if not server:
+            return timedelta(0)
+        offset = server - datetime.now(timezone.utc)
+        return offset if abs(offset) > timedelta(seconds=2) else timedelta(0)
+
+    # ─────────────────────────── Paquets ───────────────────────────
+
+    def packs_available(self) -> int | None:
+        match = PACKS_AVAILABLE.search(self.page.locator("body").inner_text())
+        return int(match.group(1)) if match else None
+
+    def _next_card_button(self) -> Locator | None:
+        """Flèche « suivant » du carrousel : le bouton sans texte le plus à droite,
+        à hauteur des points de pagination."""
+        boxes = self.page.evaluate("""() => [...document.querySelectorAll('button')]
+            .map((b, i) => ({i, text: (b.innerText || '').trim(), aria: b.getAttribute('aria-label') || '',
+                             disabled: b.disabled, r: b.getBoundingClientRect()}))
+            .filter(b => b.r.width > 0 && b.r.height > 0)
+            .map(b => ({i: b.i, text: b.text, aria: b.aria, disabled: b.disabled,
+                        x: b.r.x, y: b.r.y + b.r.height / 2, w: b.r.width}))""")
+        blank = [b for b in boxes if not b["text"] and not b["aria"]]
+        if not blank:
+            return None
+        # Les points et les deux flèches sont sur une même ligne ; on prend la ligne la
+        # plus peuplée, puis le bouton le plus à droite.
+        rows: dict[int, list[dict]] = {}
+        for b in blank:
+            rows.setdefault(round(b["y"] / 10), []).append(b)
+        row = max(rows.values(), key=len)
+        best = max(row, key=lambda b: b["x"])
+        if best["disabled"]:
+            return None
+        return self.page.locator("button").nth(best["i"])
+
+    def open_packs(self, dry_run: bool) -> int:
+        """Ouvre tous les paquets disponibles : « Ouvrir », faire défiler les 5 cartes,
+        « Continuer ». Renvoie le nombre de paquets ouverts."""
+        page = self.page
+        opened = 0
+        for _ in range(PACK_GUARD):
+            page.goto(self.url("/pulls"), wait_until="domcontentloaded")
+            button = page.locator(PACK_OPEN_BUTTON).first
+            try:
+                button.wait_for(state="visible", timeout=30000)
+                page.wait_for_function(
+                    "() => /paquets?\\s+disponibles?/i.test(document.body.innerText)", timeout=15000)
+            except PlaywrightTimeout:
+                self.snapshot("packs-page")
+                raise SiteError("Page des paquets inattendue (bouton « Ouvrir » introuvable)")
+            available = self.packs_available()
+            if not available or not button.is_enabled():
+                break
+            if dry_run:
+                log.info("Simulation : %d paquet(s) seraient ouverts.", available)
+                return 0
+            button.click()
+            self._reveal_pack()
+            opened += 1
+            log.info("Paquet ouvert (%d restant(s) avant ouverture).", available - 1)
+        return opened
+
+    def _reveal_pack(self) -> None:
+        page = self.page
+        page.get_by_role("button", name=PACK_MORE_CARDS).or_(
+            page.get_by_role("button", name=PACK_CONTINUE)).first.wait_for(state="visible", timeout=30000)
+        self.step("pack-revealed")
+        for _ in range(12):
+            done = page.get_by_role("button", name=PACK_CONTINUE)
+            if done.count() and done.first.is_visible() and done.first.is_enabled():
+                done.first.click()
+                page.wait_for_timeout(1000)
+                return
+            arrow = self._next_card_button()
+            if arrow is not None:
+                arrow.click()
+            else:
+                page.keyboard.press("ArrowRight")
+            page.wait_for_timeout(700)
+        self.snapshot("pack-stuck")
+        raise SiteError("Impossible d'atteindre « Continuer » à la fin du paquet")
+
+    # ─────────────────────────── Achats ───────────────────────────
+
+    def search_auctions(self, name: str) -> list[dict]:
+        from urllib.parse import quote_plus
+
+        data = self.api_get_ok(f"/api/marketplace?page=1&limit=50&sort=recent&q={quote_plus(name)}")
+        auctions = data.get("auctions") if isinstance(data, dict) else None
+        return [a for a in auctions or [] if isinstance(a, dict)]
+
+    def fetch_auction(self, auction_id: str) -> dict | None:
+        data = self.api_get_ok(f"/api/marketplace/{auction_id}")
+        auction = data.get("auction") if isinstance(data, dict) else None
+        return auction if isinstance(auction, dict) else None
+
+    def place_bid(self, auction_id: str, max_price: int, dry_run: bool) -> tuple[str, int | None]:
+        """Ouvre l'enchère et clique sur « Miser » avec le montant prérempli par le site
+        (la mise minimale), s'il ne dépasse pas max_price.
+
+        Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
+        page = self.page
+        page.goto(self.url(f"/marketplace/{auction_id}"), wait_until="domcontentloaded")
+        field = page.locator(BID_INPUT).first
+        try:
+            field.wait_for(state="visible", timeout=30000)
+            page.wait_for_function(
+                "(sel) => { const e = document.querySelector(sel); return e && e.value !== ''; }",
+                arg=BID_INPUT, timeout=10000)
+        except PlaywrightTimeout:
+            self.snapshot(f"bid-{auction_id}")
+            return "failed", None
+        amount = parse_int(field.input_value())
+        if amount is None:
+            return "failed", None
+        if amount > max_price:
+            return "too_high", amount
+        balance = BALANCE_TEXT.search(page.locator("body").inner_text())
+        if balance and amount > parse_int(balance.group(1)):
+            return "no_funds", amount
+        self.step(f"bid-ready-{auction_id}")
+        if dry_run:
+            return "dry_run", amount
+        page.get_by_role("button", name=BID_BUTTON).first.click()
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            page.wait_for_timeout(1000)
+            auction = self.fetch_auction(auction_id)
+            if auction and (auction.get("current_bid") or 0) >= amount:
+                return "bid", amount
+        self.snapshot(f"bid-refused-{auction_id}")
+        return "failed", amount

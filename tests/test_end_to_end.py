@@ -6,10 +6,10 @@ import os
 import pytest
 
 from wiki_seller.config import Config
-from wiki_seller.main import run_once
+from wiki_seller.main import run_once, run_snipe
 from wiki_seller.site import ListingStatus, SiteError
 
-from .fake_site import FakeWikiMasters
+from .fake_site import ME, FakeWikiMasters, market_auction
 
 
 def entry(copy_id, card_id, title, rarity="R"):
@@ -31,9 +31,13 @@ UI_AVERAGES = {"Pomme": 21, "Château de Versailles": 1234, "Tour Eiffel": 5000,
                "Loire": 150, "Rhône": 100}
 
 
-def make_config(tmp_path, url, safe, **extra):
+def make_config(tmp_path, url, safe, wanted=None, **extra):
     safe_file = tmp_path / "safed_cards.json"
     safe_file.write_text(json.dumps(safe), encoding="utf-8")
+    wanted_file = tmp_path / "wanted_cards.json"
+    if wanted is not None:
+        wanted_file.write_text(json.dumps(wanted), encoding="utf-8")
+    extra = {"packs_hours": None, "wanted_cards_file": wanted_file, **extra}
     return Config(
         mail="me@example.com", password="secret", base_url=url, safe_cards_file=safe_file,
         state_dir=tmp_path / "state", price_ratio=0.7, auction_duration_label="1 h",
@@ -124,3 +128,77 @@ def test_session_cookies_skip_the_login_page(tmp_path):
         config = make_config(tmp_path, site.url, [], session_cookies="other=1; session=ok")
         result = run_once(config, dry_run=True)
     assert result.listed == 5 and site.logins == 0 and site.signups == 0
+
+
+def test_packs_are_opened_during_the_night_window(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3) as site:
+        config = make_config(tmp_path, site.url, [], packs_hours=(0, 24))
+        run_once(config, dry_run=False)
+    assert site.packs_opened == 3 and site.packs == 0
+
+
+def test_packs_are_not_opened_in_dry_run_or_outside_the_window(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=2) as site:
+        run_once(make_config(tmp_path, site.url, [], packs_hours=(0, 24)), dry_run=True)
+        run_once(make_config(tmp_path, site.url, [], packs_hours=None), dry_run=True)
+    assert site.packs_opened == 0
+
+
+def eiffel_auctions():
+    return [market_auction("e1", "Gustave Eiffel", 200), market_auction("e2", "Gustave Eiffel", 150),
+            market_auction("e3", "Gustave Eiffel (homonymie)", 10),
+            market_auction("e4", "Gustave Eiffel", 100, seller=ME)]
+
+
+def test_buys_the_cheapest_matching_auction_and_rebids_within_limit(tmp_path):
+    wanted = [{"name": "gustave eiffel", "max_price": 300}]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=wanted)
+        run_once(config)
+        assert site.bids == [("e2", 150)]  # la moins chère, ni l'homonyme ni la nôtre
+        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+        assert state["status"] == "bidding" and state["auction_id"] == "e2" and state["end_at"]
+
+        run_once(config)  # on mène déjà : pas de nouvelle mise
+        assert len(site.bids) == 1
+
+        site.outbid("e2", 250)
+        run_snipe(config)  # la fin est loin : la surenchère attend la passe normale
+        assert len(site.bids) == 1
+        run_once(config)
+        assert site.bids[-1] == ("e2", 260)
+
+        site.outbid("e2", 295)  # prochaine mise 305 > 300 : on s'arrête là
+        run_once(config)
+        assert site.bids[-1] == ("e2", 260)
+
+        # Le rival se retire (enchère annulée de son côté) : on remporte à 260.
+        site.auctions["e2"].update(current_bid=260, current_bidder_id=ME)
+        site.settle("e2")
+        run_once(config)
+    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+    assert state["status"] == "won"
+
+
+def test_buying_dry_run_places_no_bid(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}])
+        run_once(config, dry_run=True)
+    assert site.bids == []
+
+
+def test_snipe_bids_just_before_the_end(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    end = (datetime.now(timezone.utc) + timedelta(seconds=40)).isoformat()
+    auction = market_auction("s1", "Victor Hugo", 50, end_at=end)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=25))
+        run_once(config)
+        assert site.bids == [("s1", 50)]
+        site.outbid("s1", 70)
+        run_snipe(config)
+        # La surenchère n'est partie qu'une fois arrivé à 25 s de la fin.
+        assert site.bids[-1] == ("s1", 80)
+        assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=26)

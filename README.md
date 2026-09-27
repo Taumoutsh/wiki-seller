@@ -5,6 +5,8 @@ Met automatiquement aux enchères les cartes de votre collection
 
 À chaque passe, le script :
 
+0. entre **0 h et 6 h** (heure de Paris), ouvre tous les paquets disponibles (voir
+   « Paquets »), puis mise sur les cartes de `wanted_cards.json` (voir « Achats ») ;
 1. réutilise la session enregistrée dans `state/`, sinon celle de `SESSION_COOKIES`,
    sinon se connecte avec `MAIL` / `PASSWORD` sur `/login` (voir « Première connexion »).
 2. compte les enchères en cours. Le site en autorise 5 à la fois : s'il n'y a plus
@@ -23,6 +25,41 @@ Met automatiquement aux enchères les cartes de votre collection
 En mode `--loop`, la passe suivante démarre **`RUN_INTERVAL` après la dernière mise en
 vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient déjà
 prises, elle démarre dès la fin de la première enchère en cours.
+
+## Paquets
+
+Dans la plage `OPEN_PACKS_HOURS` (par défaut `0-6`), chaque passe va dans « Paquets »,
+clique sur « Ouvrir », fait défiler les 5 cartes avec la flèche, clique sur « Continuer »
+et recommence tant qu'il reste des paquets. Le site en stocke 10 au maximum. En
+simulation (`--dry-run`), aucun paquet n'est ouvert.
+
+## Achats (wanted_cards.json)
+
+```json
+[
+  {"name": "Tour Eiffel", "max_price": 500},
+  {"name": "Victor Hugo", "max_price": 120}
+]
+```
+
+Pour chaque carte, **un seul exemplaire** est acheté :
+
+- si vous avez déjà une enchère sur cette carte dans « Mes enchères », elle est reprise ;
+- sinon, le script cherche la carte dans « Marché » et choisit l'enchère la moins chère
+  dont la mise minimale ne dépasse pas `max_price` ;
+- il clique sur « Miser » avec le montant prérempli par le site (la mise minimale),
+  jamais directement votre maximum ;
+- s'il est dépassé, il surenchérit à la passe suivante, tant que la limite le permet ;
+- la boucle se réveille aussi **`SNIPE_LEAD` secondes (20 par défaut) avant la fin**
+  pour surenchérir si besoin, puis surveille l'enchère jusqu'à sa vraie fin (le site la
+  prolonge de 60 s après toute mise dans les 10 dernières secondes) ;
+- une fois la carte gagnée, elle n'est plus recherchée.
+
+Le suivi (enchère choisie, heure de fin, carte obtenue) est dans
+`state/wanted_state.json` ; `wanted_cards.json` n'est jamais modifié par le script. Pour
+racheter une carte déjà obtenue, supprimez sa ligne de `state/wanted_state.json`. Le
+fichier est relu à chaque passe. `MAX_TOTAL_BIDS` limite la somme des mises en cours.
+En simulation, aucune mise n'est faite.
 
 ## Installation locale
 
@@ -114,21 +151,28 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `HEADLESS` | `true` | `false` pour voir le navigateur |
 | `CHROMIUM_EXECUTABLE` | *(vide)* | Chromium déjà installé à utiliser |
 | `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir plus haut) |
+| `OPEN_PACKS_HOURS` | `0-6` | Heures de Paris où les paquets sont ouverts ; vide = jamais |
+| `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
+| `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
+| `SNIPE_LEAD` | `20` | Secondes avant la fin d'une enchère pour surenchérir |
+| `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
 | `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
 
 ## Docker (serveur)
 
 ```bash
 cp .env.example .env && cp safed_cards.example.json safed_cards.json   # à remplir
+cp wanted_cards.example.json wanted_cards.json                          # ou echo '[]' > wanted_cards.json
 mkdir -p state
 docker compose up -d --build
 docker compose logs -f
 ```
 
-Créez bien `safed_cards.json` **avant** le premier `up`. Sinon Docker crée un
+Créez bien `safed_cards.json` et `wanted_cards.json` **avant** le premier `up`. Sinon Docker crée un
 dossier à sa place.
 
-Le conteneur tourne en mode `--loop` et redémarre tout seul. `safed_cards.json` est
+Le conteneur tourne en mode `--loop` et redémarre tout seul. Il est limité à 2 cœurs et
+2 Go de RAM (`CPU_LIMIT` et `MEM_LIMIT` dans `.env`). `safed_cards.json` est
 monté depuis le serveur : il suffit de le modifier, sans reconstruire l'image.
 
 Le `.env`, lui, n'est lu qu'à la création du conteneur. Après l'avoir modifié, lancez

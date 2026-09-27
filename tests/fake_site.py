@@ -104,10 +104,73 @@ load();
 </script></body></html>"""
 
 
+# /pulls : comme le vrai site, « Ouvrir » (span dans le bouton), « N / 10 paquets
+# disponibles », puis un carrousel de 5 cartes : flèches sans texte, points, et un bouton
+# « Encore k cartes » (désactivé) qui devient « Continuer » sur la dernière carte. La
+# touche flèche droite du clavier ne fait rien (comme sur le vrai site).
+PULLS_HTML = """<!doctype html><html><body><main id="main"></main>
+<script>
+let packs = __PACKS__, card = 0;
+const main = document.getElementById('main');
+function home() {
+  main.innerHTML = `<h1>Ouvrir un paquet</h1>
+    <button id="open" ${packs ? '' : 'disabled'}><img alt="Paquet"><span>Ouvrir</span></button>
+    <div>${packs} / 10</div><div>paquets disponibles</div>`;
+  document.getElementById('open').onclick = async () => {
+    packs = (await (await fetch('/api/packs/open', {method: 'POST'})).json()).remaining;
+    card = 0; reveal();
+  };
+}
+function reveal() {
+  const dots = [0,1,2,3,4].map(i => `<button class="dot">${''}</button>`).join('');
+  main.innerHTML = `<div>Carte ${card + 1} / 5</div><div class="card">Carte n°${card + 1}</div>
+    <div style="display:flex">
+      <button id="prev" ${card ? '' : 'disabled'}><svg width="10" height="10"></svg></button>${dots}
+      <button id="next" ${card < 4 ? '' : 'disabled'}><svg width="10" height="10"></svg></button>
+    </div>
+    ${card < 4 ? `<button disabled>Encore ${4 - card} cartes</button>` : '<button id="done">Continuer</button>'}`;
+  document.getElementById('prev').onclick = () => { card--; reveal(); };
+  document.getElementById('next').onclick = () => { card++; reveal(); };
+  const done = document.getElementById('done');
+  if (done) done.onclick = home;
+}
+home();
+</script></body></html>"""
+
+MARKET_HTML = """<!doctype html><html><body>
+<input type="search" placeholder="Rechercher une carte…"><button disabled>Rechercher</button>
+</body></html>"""
+
+# /marketplace/<id> : champ « Montant de la mise » prérempli avec la mise minimale.
+AUCTION_HTML = """<!doctype html><html><body><div id="a"></div>
+<script>
+async function load() {
+  const a = (await (await fetch('/api/marketplace/__ID__')).json()).auction;
+  const min = a.current_bid === null ? a.base_amount : a.current_bid + __STEP__;
+  document.getElementById('a').innerHTML = `<h1>${a.card.wikipedia_title}</h1>
+    <p>Votre solde : 1 747 wikibidous</p>
+    <input type="number" aria-label="Montant de la mise" value="${min}">
+    <button id="bid">Miser</button>`;
+  document.getElementById('bid').onclick = () => fetch('/api/marketplace/__ID__/bid', {method: 'POST',
+    body: JSON.stringify({amount: Number(document.querySelector('input').value)})});
+}
+setTimeout(load, 300);
+</script></body></html>"""
+
+ME = "me-id"
+BID_STEP = 10
+
+
+def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", seller="other", current=None):
+    return {"id": auction_id, "card": {"wikipedia_title": title}, "seller_id": seller, "base_amount": base,
+            "effective_bid": current or base, "current_bid": current, "current_bidder_id": None if current is None else "rival",
+            "end_at": end_at, "status": "active", "winner_id": None, "final_price": None}
+
+
 class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
                  mail="me@example.com", password="secret", sales_forbidden=False,
-                 challenge="auto"):
+                 challenge="auto", packs=0, auctions=None):
         self.collection = collection
         self.averages = averages  # card_id -> moyenne API
         self.ui_averages = ui_averages if ui_averages is not None else {}
@@ -117,6 +180,10 @@ class FakeWikiMasters:
         self.sales_forbidden = sales_forbidden
         self.listings = []
         self.challenge = challenge
+        self.packs = packs
+        self.packs_opened = 0
+        self.auctions = {a["id"]: a for a in auctions or []}
+        self.bids = []  # (auction_id, montant) misés par nous
         self.logins = 0
         self.signups = 0
         self.collection_requests = []
@@ -165,7 +232,15 @@ class FakeWikiMasters:
                 if url.path == "/collection":
                     html = COLLECTION_HTML.replace("__UI_AVERAGES__", json.dumps(site.ui_averages))
                     return self._send(200, html, "text/html; charset=utf-8")
+                if url.path == "/pulls":
+                    return self._send(200, PULLS_HTML.replace("__PACKS__", str(site.packs)), "text/html; charset=utf-8")
+                if url.path == "/marketplace":
+                    return self._send(200, MARKET_HTML, "text/html; charset=utf-8")
                 if url.path.startswith("/marketplace/"):
+                    auction_id = url.path.split("/")[2]
+                    if auction_id in site.auctions:
+                        html = AUCTION_HTML.replace("__ID__", auction_id).replace("__STEP__", str(BID_STEP))
+                        return self._send(200, html, "text/html; charset=utf-8")
                     return self._send(200, "<html><body>Enchère créée</body></html>", "text/html")
                 if not url.path.startswith("/api/"):
                     return self._send(404, "<html>404</html>", "text/html")
@@ -180,8 +255,19 @@ class FakeWikiMasters:
                     site.collection_requests.append(url.query)
                     return self._send(200, {"collection": items if page == 0 else []})
                 if url.path == "/api/marketplace" and qs.get("mine") == ["1"]:
-                    return self._send(200, {"selling": site.selling, "bidding": [],
+                    mine = {a for a, _ in site.bids}
+                    bidding = [a for i, a in site.auctions.items() if i in mine and a["status"] == "active"]
+                    won = [a for a in site.auctions.values() if a["winner_id"] == ME]
+                    selling = [dict(a, seller_id=ME) for a in site.selling]
+                    selling += [a for a in site.auctions.values() if a["seller_id"] == ME and a["status"] == "active"]
+                    return self._send(200, {"selling": selling, "bidding": bidding, "won": won,
                                             "maxConcurrentAuctions": site.max_auctions})
+                if url.path == "/api/marketplace" and "q" in qs:
+                    q = qs["q"][0].lower()
+                    found = [a for a in site.auctions.values() if q in a["card"]["wikipedia_title"].lower()]
+                    return self._send(200, {"auctions": found, "page": 1, "limit": 50, "hasMore": False})
+                if url.path.startswith("/api/marketplace/") and url.path.split("/")[3] in site.auctions:
+                    return self._send(200, {"auction": site.auctions[url.path.split("/")[3]], "bids": []})
                 if url.path.startswith("/api/marketplace/cards/"):
                     if site.sales_forbidden:
                         return self._send(403, {"error": "forbidden"})
@@ -194,6 +280,18 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path == "/api/packs/open" and self._authed() and site.packs > 0:
+                    site.packs -= 1
+                    site.packs_opened += 1
+                    return self._send(200, {"remaining": site.packs})
+                if self.path.startswith("/api/marketplace/") and self.path.endswith("/bid") and self._authed():
+                    auction = site.auctions[self.path.split("/")[3]]
+                    minimum = auction["base_amount"] if auction["current_bid"] is None else auction["current_bid"] + BID_STEP
+                    if body.get("amount", 0) < minimum or auction["status"] != "active":
+                        return self._send(400, {"error": "mise trop basse"})
+                    site.bids.append((auction["id"], body["amount"]))
+                    auction.update(current_bid=body["amount"], effective_bid=body["amount"], current_bidder_id=ME)
+                    return self._send(200, {})
                 if self.path == "/auth/signup":
                     site.signups += 1
                     return self._send(200, {})
@@ -213,3 +311,11 @@ class FakeWikiMasters:
                 return self._send(404, {})
 
         return Handler
+
+
+    def outbid(self, auction_id, amount):
+        self.auctions[auction_id].update(current_bid=amount, effective_bid=amount, current_bidder_id="rival")
+
+    def settle(self, auction_id):
+        a = self.auctions[auction_id]
+        a.update(status="settled_sold", winner_id=a["current_bidder_id"], final_price=a["current_bid"])

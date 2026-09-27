@@ -6,7 +6,8 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     TZ=Europe/Paris \
     STATE_DIR=/app/state \
-    SAFE_CARDS_FILE=/app/safed_cards.json
+    SAFE_CARDS_FILE=/app/safed_cards.json \
+    WANTED_CARDS_FILE=/app/wanted_cards.json
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

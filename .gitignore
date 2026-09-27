@@ -1,6 +1,7 @@
 # Secrets et données personnelles
 .env
 safed_cards.json
+wanted_cards.json
 
 # État d'exécution (session navigateur, journal, captures de débogage)
 state/
