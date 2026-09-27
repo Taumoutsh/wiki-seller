@@ -48,6 +48,7 @@ PACK_CONTINUE = re.compile(r"^\s*Continuer\s*$", re.I)
 BID_INPUT = 'input[aria-label="Montant de la mise"]'
 BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
 BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
+PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « Continuer »
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 
@@ -593,12 +594,12 @@ class WikiMasters:
             return None
         return self.page.locator("button").nth(best["i"])
 
-    def open_packs(self, dry_run: bool) -> int:
-        """Ouvre tous les paquets disponibles : « Ouvrir », faire défiler les 5 cartes,
-        « Continuer ». Renvoie le nombre de paquets ouverts."""
+    def open_packs(self, dry_run: bool, limit: int | None = None) -> int:
+        """Ouvre les paquets disponibles (tous, ou au plus `limit`) : « Ouvrir », faire
+        défiler les cartes, « Continuer ». Renvoie le nombre de paquets ouverts."""
         page = self.page
         opened = 0
-        for _ in range(PACK_GUARD):
+        for _ in range(min(PACK_GUARD, limit or PACK_GUARD)):
             page.goto(self.url("/pulls"), wait_until="domcontentloaded")
             button = page.locator(PACK_OPEN_BUTTON).first
             try:
@@ -625,20 +626,20 @@ class WikiMasters:
         page.get_by_role("button", name=PACK_MORE_CARDS).or_(
             page.get_by_role("button", name=PACK_CONTINUE)).first.wait_for(state="visible", timeout=30000)
         self.step("pack-revealed")
-        for _ in range(12):
-            done = page.get_by_role("button", name=PACK_CONTINUE)
-            if done.count() and done.first.is_visible() and done.first.is_enabled():
-                done.first.click()
-                page.wait_for_timeout(1000)
-                return
+        done = page.get_by_role("button", name=PACK_CONTINUE)
+        deadline = time.monotonic() + PACK_REVEAL_TIMEOUT
+        # Tant que « Continuer » n'est pas là, carte suivante.
+        while not (done.count() and done.first.is_visible() and done.first.is_enabled()):
+            if time.monotonic() > deadline:
+                self.snapshot("pack-stuck")
+                raise SiteError("Impossible d'atteindre « Continuer » à la fin du paquet")
             arrow = self._next_card_button()
             if arrow is not None:
                 arrow.click()
-            else:
-                page.keyboard.press("ArrowRight")
             page.wait_for_timeout(700)
-        self.snapshot("pack-stuck")
-        raise SiteError("Impossible d'atteindre « Continuer » à la fin du paquet")
+        self.step("pack-last-card")
+        done.first.click()
+        page.wait_for_timeout(1000)
 
     # ─────────────────────────── Achats ───────────────────────────
 
