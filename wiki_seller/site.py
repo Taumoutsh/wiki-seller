@@ -52,6 +52,7 @@ BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
 PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « Continuer »
 PACK_SIZE = 5  # cartes par paquet
 PACK_CARD_WAIT = 5  # secondes au plus sur une carte pour que le site la compte comme vue
+PACK_COUNTER_SETTLE = 8  # secondes pour que le compteur de /pulls quitte son 0 provisoire
 PACK_RATE_LIMIT_BUDGET = 600  # secondes d'attente cumulée au plus pour la limite de cadence
 LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut être en vente ou en échange)
 API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythme humain
@@ -732,30 +733,46 @@ class WikiMasters:
         row = self._carousel_row()
         return [self.page.locator("button").nth(b["i"]) for b in row[1:-1]]
 
-    def open_packs_api(self, dry_run: bool, limit: int | None = None) -> int:
-        """Ouvre les paquets par l'API : POST /api/packs/open (sans corps) renvoie
-        directement les 5 cartes ; le défilé à l'écran n'est qu'un affichage."""
+    def packs_counter(self) -> int | None:
+        """Compteur « N / 10 paquets disponibles » de /pulls. La page affiche d'abord
+        0 le temps de charger le vrai nombre : on attend qu'il se stabilise."""
         page = self.page
         page.goto(self.url("/pulls"), wait_until="domcontentloaded")
         try:
             page.wait_for_function(
                 "() => /paquets?\\s+disponibles?/i.test(document.body.innerText)", timeout=30000)
         except PlaywrightTimeout:
-            self.snapshot("packs-page")
-            raise SiteError("Compteur de paquets introuvable sur /pulls")
+            return None
+        return self._settled_packs_available()
+
+    def _settled_packs_available(self) -> int | None:
+        deadline = time.monotonic() + PACK_COUNTER_SETTLE
         available = self.packs_available()
-        log.info("Paquets disponibles : %s.", "compteur introuvable" if available is None else available)
-        if not available:
-            return 0
+        while not available and time.monotonic() < deadline:
+            self.page.wait_for_timeout(300)
+            available = self.packs_available()
+        return available
+
+    def open_packs_api(self, dry_run: bool, limit: int | None = None) -> int:
+        """Ouvre les paquets par l'API : POST /api/packs/open (sans corps) renvoie
+        directement les 5 cartes ; le défilé à l'écran n'est qu'un affichage.
+
+        Le compteur de la page ne sert qu'au journal : on ouvre jusqu'à ce que le site
+        refuse (plus de paquet), en respectant sa limite de cadence."""
+        available = self.packs_counter()
+        log.info("Paquets disponibles (page) : %s.", "compteur illisible" if available is None else available)
         if dry_run:
-            log.info("Simulation : %d paquet(s) seraient ouverts.", available)
+            log.info("Simulation : %s paquet(s) seraient ouverts.", available if available is not None else "?")
             return 0
+        page = self.page
         opened = 0
-        target = min(available, limit or available, PACK_GUARD)
+        target = min(limit or PACK_GUARD, PACK_GUARD)
         waited = 0.0
         while opened < target:
             status, data, text = self.api_post("/api/packs/open")
-            if status == 429 and isinstance(data, dict) and not data.get("rate_limit_daily"):
+            remaining = data.get("packs_remaining") if isinstance(data, dict) else None
+            if status == 429 and isinstance(data, dict) and not data.get("rate_limit_daily") \
+                    and remaining != 0:
                 # « Ouverture trop rapide » : le site dit quand réessayer (retry_after).
                 wait = rate_limit_wait(data.get("retry_after"), self.server_clock_offset())
                 if waited + wait > PACK_RATE_LIMIT_BUDGET:
@@ -764,18 +781,20 @@ class WikiMasters:
                 log.info("Paquets : ouverture trop rapide, nouvel essai dans %.0f s.", wait)
                 waited += wait
                 page.wait_for_timeout(wait * 1000)
-                if isinstance(data.get("packs_remaining"), int):
-                    target = min(target, opened + data["packs_remaining"])
                 continue
             if not 200 <= status < 300:
-                log.info("Paquets : le site refuse l'ouverture (HTTP %d : %s).", status, text[:200])
+                if opened or available:
+                    log.info("Paquets : plus d'ouverture possible (HTTP %d : %s).", status, text[:200])
                 break
             opened += 1
             cards = pack_cards(data)
-            log.info("Paquet ouvert (%d restant(s)) : %s.", available - opened, pack_summary(cards))
+            left = f"{remaining} restant(s)" if isinstance(remaining, int) else f"n°{opened}"
+            log.info("Paquet ouvert (%s) : %s.", left, pack_summary(cards))
             for card in cards:
                 if card["rarity"] in NOTABLE_RARITIES:
                     log.info("  ★ %s — %s%s", card["rarity"], card["title"], " (brillante)" if card["shiny"] else "")
+            if remaining == 0:
+                break
             page.wait_for_timeout(API_ACTION_PAUSE)
         return opened
 
@@ -794,7 +813,7 @@ class WikiMasters:
             except PlaywrightTimeout:
                 self.snapshot("packs-page")
                 raise SiteError("Page des paquets inattendue (bouton « Ouvrir » introuvable)")
-            available = self.packs_available()
+            available = self._settled_packs_available()
             if opened == 0:
                 log.info("Paquets disponibles : %s%s.", "compteur introuvable" if available is None else available,
                          "" if button.is_enabled() else " (bouton « Ouvrir » désactivé)")

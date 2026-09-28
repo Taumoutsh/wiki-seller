@@ -112,7 +112,7 @@ load();
 # touche flèche droite du clavier ne fait rien (comme sur le vrai site).
 PULLS_HTML = """<!doctype html><html><body><main id="main"></main>
 <script>
-let packs = __PACKS__, card = 0, seen = new Set(), arrived = 0;
+let packs = 0, card = 0, seen = new Set(), arrived = 0;
 const SEEN_AFTER = __SEEN_AFTER__;  // ms sur une carte pour qu'elle compte comme vue
 function leave() { if (Date.now() - arrived >= SEEN_AFTER) seen.add(card); }
 setInterval(() => { if (main.querySelector('.card') && Date.now() - arrived >= SEEN_AFTER && !seen.has(card)) { seen.add(card); reveal(false); } }, 100);
@@ -143,6 +143,8 @@ function reveal(moved = true) {
   if (done) done.onclick = home;
 }
 home();
+// Comme le vrai site : 0 d'abord, le vrai nombre une fois chargé.
+setTimeout(() => { packs = __PACKS__; if (!main.querySelector('.card')) home(); }, 1500);
 </script></body></html>"""
 
 MARKET_HTML = """<!doctype html><html><body>
@@ -194,6 +196,7 @@ class FakeWikiMasters:
         self.pack_cooldown = pack_cooldown  # secondes entre deux ouvertures (429 sinon)
         self.last_pack_at = -1e9
         self.rate_limited = 0
+        self.pack_refusals = 0
         self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
         self.api_listings = []  # corps des mises en vente reçues par l'API
         self.packs_opened = 0
@@ -308,13 +311,16 @@ class FakeWikiMasters:
                                                 "retry_after": retry.isoformat().replace("+00:00", "Z"),
                                                 "packs_remaining": site.packs})
                     site.last_pack_at = now
+                if self.path == "/api/packs/open" and self._authed() and site.packs == 0:
+                    site.pack_refusals += 1
+                    return self._send(400, {"error": "Aucun paquet disponible", "packs_remaining": 0})
                 if self.path == "/api/packs/open" and self._authed() and site.packs > 0:
                     site.packs -= 1
                     site.packs_opened += 1
                     pulled = [{"id": f"u{site.packs_opened}{i}", "card": {"wikipedia_title": f"Tirage {site.packs_opened}-{i}",
                                                                            "rarity": r}, "is_shiny": i == 4}
                               for i, r in enumerate(["C", "C", "PC", "UR", "L"])]
-                    return self._send(200, {"remaining": site.packs, "cards": pulled})
+                    return self._send(200, {"remaining": site.packs, "packs_remaining": site.packs, "cards": pulled})
                 if self.path.startswith("/api/marketplace/") and self.path.endswith("/bid") and self._authed():
                     auction = site.auctions[self.path.split("/")[3]]
                     minimum = auction["base_amount"] if auction["current_bid"] is None else auction["current_bid"] + BID_STEP
