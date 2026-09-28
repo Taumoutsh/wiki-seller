@@ -199,7 +199,7 @@ dans `state/`.
   depuis la page connectée.
 - **Actions** (par défaut, `ACTIONS_VIA=api`) : les requêtes que la page envoie elle-même,
   depuis la page connectée : `POST /api/packs/open` (sans corps, renvoie les 5 cartes),
-  `POST /api/marketplace` (`card_id`, `base_amount`, `duration_minutes`) et
+  `POST /api/marketplace` (`card_id` = identifiant de l'exemplaire possédé, `base_amount`, `duration_minutes`) et
   `POST /api/marketplace/<id>/bid` (`amount`, lu dans le champ prérempli de la page de
   l'enchère). Une carte sans prix moyen côté API passe par la fenêtre d'enchère.
 - **Mise en vente avec `ACTIONS_VIA=page`** : le script passe par l'interface, comme à la main.

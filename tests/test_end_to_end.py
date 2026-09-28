@@ -251,20 +251,21 @@ def test_api_mode_lists_by_request_with_api_average(tmp_path):
         config = make_config(tmp_path, site.url, [], actions_via_api=True)
         result = run_once(config)
     assert result.listed == 3
-    # Prix moyen de l'API (et non celui de la fenêtre), carte par son identifiant de carte.
+    # Prix moyen de l'API (et non celui de la fenêtre), par l'identifiant d'un exemplaire.
     assert site.api_listings == [
-        {"card_id": "C", "base_amount": 3500, "duration_minutes": 60},
-        {"card_id": "B", "base_amount": 560, "duration_minutes": 60},
-        {"card_id": "B", "base_amount": 560, "duration_minutes": 60},
+        {"card_id": "c1", "base_amount": 3500, "duration_minutes": 60},
+        {"card_id": "b1", "base_amount": 560, "duration_minutes": 60},
+        {"card_id": "b2", "base_amount": 560, "duration_minutes": 60},  # l'autre exemplaire
     ]
 
 
-def test_api_mode_falls_back_to_copy_id(tmp_path, caplog):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, listing_id="copy") as site:
+def test_api_mode_falls_back_to_card_id(tmp_path, caplog):
+    # Si le site attendait l'identifiant de la carte (409 avec celui de l'exemplaire).
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, listing_id="card") as site:
         with caplog.at_level("INFO"):
             run_once(make_config(tmp_path, site.url, [], actions_via_api=True))
-    assert [l["card_id"] for l in site.api_listings] == ["c1"]
-    assert "identifiant de l'exemplaire" in caplog.text
+    assert [l["card_id"] for l in site.api_listings] == ["C"]
+    assert "identifiant de la carte" in caplog.text
 
 
 def test_api_mode_opens_packs_and_bids_by_request(tmp_path, caplog):

@@ -145,11 +145,14 @@ def run_snipe(config: Config, dry_run: bool = False, debug: bool = False) -> Non
         run_bids(site, config, dry_run, snipe_only=True)
 
 
-def _list(site: WikiMasters, config: Config, item, dry_run: bool):
+def _list(site: WikiMasters, config: Config, item, dry_run: bool, copy_index: int = 0):
     """Par l'API quand le prix moyen est connu ; sinon par la fenêtre d'enchère, qui
-    affiche la « Moyenne »."""
+    affiche la « Moyenne ». Le n-ième exemplaire vendu dans la passe part avec le n-ième
+    identifiant d'exemplaire (le premier vient d'être mis en vente)."""
     if config.actions_via_api and item.average:
-        return site.list_card_api(item.card_id, item.copy_ids, item.title, item.average, dry_run)
+        k = copy_index % len(item.copy_ids) if item.copy_ids else 0
+        copies = item.copy_ids[k:] + item.copy_ids[:k]
+        return site.list_card_api(item.card_id, copies, item.title, item.average, dry_run)
     return site.list_card(item.title, item.average, dry_run)
 
 
@@ -235,15 +238,15 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
     for item in plan.items:
         if listed >= free or slots_full:
             break
-        for _ in range(item.copies_to_sell):
+        for copy_index in range(item.copies_to_sell):
             if listed >= free:
                 break
-            result = _list(site, config, item, dry_run)
+            result = _list(site, config, item, dry_run, copy_index)
             if result.status is ListingStatus.FAILED:
                 # Souvent passager (« Le chargement de la collection a échoué », fenêtre lente).
                 log.info("%s : échec (%s), nouvel essai.", item.title, result.detail)
                 time.sleep(RETRY_LISTING_AFTER)
-                result = _list(site, config, item, dry_run)
+                result = _list(site, config, item, dry_run, copy_index)
             if result.status in (ListingStatus.LISTED, ListingStatus.DRY_RUN):
                 listed += 1
                 if result.status is ListingStatus.LISTED:

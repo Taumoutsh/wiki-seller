@@ -53,6 +53,7 @@ PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « C
 PACK_SIZE = 5  # cartes par paquet
 PACK_CARD_WAIT = 5  # secondes au plus sur une carte pour que le site la compte comme vue
 PACK_RATE_LIMIT_BUDGET = 600  # secondes d'attente cumulée au plus pour la limite de cadence
+LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut être en vente ou en échange)
 API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythme humain
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
@@ -583,8 +584,9 @@ class WikiMasters:
     def list_card_api(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float,
                       dry_run: bool) -> ListingResult:
         """Mise en vente par l'API : POST /api/marketplace {card_id, base_amount,
-        duration_minutes}. L'identifiant attendu est celui de la carte ; s'il est refusé,
-        on essaie celui d'un exemplaire possédé."""
+        duration_minutes}. Malgré son nom, `card_id` attend l'identifiant de l'exemplaire
+        possédé (avec celui de la carte, le site répond 409 « Vous ne possédez pas cette
+        carte ») : on essaie les exemplaires, puis la carte en dernier recours."""
         price = sale_price(average, self.config.price_ratio)
         if price < 1:
             return ListingResult(ListingStatus.NO_AVERAGE, average=average, detail="prix calculé nul")
@@ -592,16 +594,16 @@ class WikiMasters:
         if dry_run:
             return ListingResult(ListingStatus.DRY_RUN, price=price, average=average)
         text = ""
-        for candidate in (card_id, *copy_ids[:1]):
+        for candidate in (*copy_ids[:LISTING_COPY_TRIES], card_id):
             body = {"card_id": candidate, "base_amount": price, "duration_minutes": duration}
             status, data, text = self.api_post("/api/marketplace", body)
             if 200 <= status < 300:
-                if candidate != card_id:
-                    log.info("Mise en vente acceptée avec l'identifiant de l'exemplaire (%s).", title)
+                if candidate == card_id and copy_ids:
+                    log.info("Mise en vente acceptée avec l'identifiant de la carte (%s).", title)
                 return ListingResult(ListingStatus.LISTED, price=price, average=average)
             if SLOTS_FULL_TEXT.search(text):
                 return ListingResult(ListingStatus.SLOTS_FULL, detail=text[:200])
-            if status not in (400, 404, 422):
+            if status not in (400, 404, 409, 422):
                 break
         return ListingResult(ListingStatus.FAILED, price, average, f"HTTP {status} : {text[:200]}")
 

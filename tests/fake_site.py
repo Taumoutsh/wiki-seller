@@ -178,7 +178,7 @@ def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", 
 class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
                  mail="me@example.com", password="secret", sales_forbidden=False,
-                 challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="card",
+                 challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="copy",
                  pack_cooldown=0.0):
         self.collection = collection
         self.averages = averages  # card_id -> moyenne API
@@ -340,7 +340,7 @@ class FakeWikiMasters:
                         by_copy = {c["id"]: c for c in site.collection}
                         known = by_copy if site.listing_id == "copy" else by_card
                         if body["card_id"] not in known:
-                            return self._send(400, {"error": "Carte introuvable"})
+                            return self._send(409, {"error": "Vous ne possédez pas cette carte"})
                         site.api_listings.append(body)
                         labels = {10: "10 min", 30: "30 min", 60: "1 h"}
                         body = {"card_id": body["card_id"], "title": known[body["card_id"]]["card"]["wikipedia_title"],
