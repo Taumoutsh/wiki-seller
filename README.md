@@ -53,7 +53,10 @@ Pour chaque carte, **un seul exemplaire** est acheté :
 - la boucle se réveille aussi **`SNIPE_LEAD` secondes (20 par défaut) avant la fin**
   pour surenchérir si besoin, puis surveille l'enchère jusqu'à sa vraie fin (le site la
   prolonge de 60 s après toute mise dans les 10 dernières secondes) ;
-- une fois la carte gagnée, elle n'est plus recherchée.
+- **une seule enchère à la fois par carte** : si vous menez déjà une enchère de cette
+  carte dans « Mes enchères », le script la suit et ne mise nulle part ailleurs ;
+- une fois la carte gagnée (y compris sur une autre enchère que celle suivie), elle
+  n'est plus recherchée : un seul exemplaire est acheté.
 
 Le suivi (enchère choisie, heure de fin, carte obtenue) est dans
 `state/wanted_state.json` ; `wanted_cards.json` n'est jamais modifié par le script. Pour

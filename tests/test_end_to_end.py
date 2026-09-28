@@ -279,3 +279,37 @@ def test_api_mode_opens_packs_and_bids_by_request(tmp_path, caplog):
     posts = [json.loads(l) for l in config.api_trace_file.read_text().splitlines() if '"POST"' in l]
     # Paquets, puis mise ; la tentative de mise en vente qui suit est refusée faute de place.
     assert [p["path"] for p in posts][:3] == ["/api/packs/open", "/api/packs/open", "/api/marketplace/e2/bid"]
+
+
+def test_no_second_bid_while_leading_another_auction_of_the_card(tmp_path):
+    auctions = eiffel_auctions()
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=auctions) as site:
+        # Vous menez déjà e1 (mise à la main, ou suivi perdu) ; le suivi pointe ailleurs.
+        site.bids.append(("e1", 200))
+        site.auctions["e1"].update(current_bid=200, current_bidder_id=ME)
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}])
+        config.wanted_state_file.parent.mkdir(parents=True, exist_ok=True)
+        config.wanted_state_file.write_text(json.dumps(
+            {"my_id": ME, "cards": {"gustave eiffel": {"name": "Gustave Eiffel", "status": "searching"}}}))
+        run_once(config)
+    assert site.bids == [("e1", 200)]  # aucune mise sur e2, pourtant moins chère
+    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+    assert state["auction_id"] == "e1" and state["status"] == "bidding"
+
+
+def test_card_won_elsewhere_is_not_bought_again(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    auctions = eiffel_auctions()
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=auctions) as site:
+        site.auctions["e1"].update(status="settled_sold", winner_id=ME, final_price=210,
+                                   settled_at=datetime.now(timezone.utc).isoformat())
+        since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}])
+        config.wanted_state_file.parent.mkdir(parents=True, exist_ok=True)
+        config.wanted_state_file.write_text(json.dumps(
+            {"my_id": ME, "cards": {"gustave eiffel": {"name": "Gustave Eiffel", "since": since}}}))
+        run_once(config)
+    assert site.bids == []
+    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+    assert state["status"] == "won" and state["price"] == 210

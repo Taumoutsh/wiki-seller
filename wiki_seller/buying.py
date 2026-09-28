@@ -96,6 +96,17 @@ def choose_auction(auctions: list[dict], card: WantedCard, my_id: str | None, no
     return candidates[0][2] if candidates else None
 
 
+def won_since(mine: dict, card: WantedCard, since: datetime | None) -> dict | None:
+    """Enchère de cette carte dans « Gagnées », réglée depuis `since`."""
+    for auction in mine.get("won") or []:
+        if not isinstance(auction, dict) or normalize_name(auction_title(auction)) != card.key:
+            continue
+        settled = parse_time(auction.get("settled_at")) or parse_time(auction.get("end_at"))
+        if since is None or (settled and settled >= since):
+            return auction
+    return None
+
+
 def my_user_id(mine: dict, known: str | None) -> str | None:
     if known:
         return known
@@ -164,14 +175,30 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
     try:
         for card in wanted:
             entry = state.card(card)
+            entry.setdefault("since", buyer.now().isoformat())
             if entry.get("status") == "won":
                 continue
+            # Un seul exemplaire : une enchère de cette carte gagnée depuis qu'elle est
+            # dans la liste suffit, même si ce n'était pas celle que le script suivait.
+            won = won_since(mine, card, parse_time(entry["since"]))
+            if won:
+                log.info("Achat : « %s » obtenue pour %s.", card.name, won.get("final_price"))
+                entry.update(status="won", auction_id=won.get("id"), price=won.get("final_price"))
+                entry.pop("end_at", None)
+                continue
+            # Une seule enchère à la fois : si vous menez déjà une enchère de cette carte
+            # dans « Mes enchères », c'est elle qu'on suit, et on ne mise nulle part ailleurs.
+            mine_for_card = [a for a in bidding if normalize_name(auction_title(a)) == card.key
+                             and a.get("status", "active") == "active"]
+            leading_here = [a for a in mine_for_card if buyer.leading(a)]
             auction_id = entry.get("auction_id")
-            if not auction_id:  # enchère déjà en cours dans « Mes enchères » (misée à la main ?)
-                mine_for_card = [a for a in bidding if normalize_name(auction_title(a)) == card.key
-                                 and a.get("status", "active") == "active"]
-                if mine_for_card:
-                    auction_id = mine_for_card[0]["id"]
+            if leading_here and auction_id not in {a["id"] for a in leading_here}:
+                if auction_id:
+                    log.info("Achat : « %s » — vous menez déjà une autre enchère de cette carte ; "
+                             "elle seule est suivie.", card.name)
+                auction_id = leading_here[0]["id"]
+            elif not auction_id and mine_for_card:  # enchère misée à la main ?
+                auction_id = mine_for_card[0]["id"]
             auction = site.fetch_auction(auction_id) if auction_id else None
 
             if auction and auction.get("status") != "active":
