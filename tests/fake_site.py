@@ -135,6 +135,7 @@ function reveal(moved = true) {
     </div>
     ${card < 4 || !allSeen ? `<button disabled>Encore ${SEEN_AFTER ? Math.max(1, 5 - seen.size) : 4 - card} cartes</button>` : '<button id="done">Continuer</button>'}`;
   document.getElementById('prev').onclick = () => { leave(); card--; reveal(); };
+  document.querySelectorAll('.dot').forEach((d, i) => d.onclick = () => { leave(); card = i; reveal(); });
   document.getElementById('next').onclick = () => { leave(); card++; reveal(); };
   const done = document.getElementById('done');
   if (done) done.onclick = home;

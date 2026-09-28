@@ -217,13 +217,11 @@ def test_card_with_parentheses_is_found_without_them(tmp_path):
     assert site.bids == [("d1", 1)]
 
 
-def test_pack_scrolled_too_fast_is_replayed_slowly(tmp_path, caplog):
-    # Le site ne compte une carte comme vue qu'après 1 s : le défilé rapide arrive au bout
-    # sans « Continuer », le script refait le défilé lentement.
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=1, seen_after_ms=1000) as site:
+def test_pack_waits_for_each_card_to_be_counted(tmp_path):
+    # Comme sur le vrai site : « Encore N cartes » ne baisse qu'une fois la carte affichée
+    # un moment (ici 1 s). Le script attend ce décompte avant la carte suivante.
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=2, seen_after_ms=1000) as site:
         from wiki_seller.main import open_site
         with open_site(make_config(tmp_path, site.url, []), debug=False) as wm:
-            with caplog.at_level("INFO"):
-                assert wm.open_packs(dry_run=False) == 1
-    assert site.packs_opened == 1
-    assert "nouveau défilé, plus lent" in caplog.text
+            assert wm.open_packs(dry_run=False) == 2
+    assert site.packs_opened == 2

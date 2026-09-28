@@ -49,8 +49,8 @@ BID_INPUT = 'input[aria-label="Montant de la mise"]'
 BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
 BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
 PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « Continuer »
-PACK_STUCK_AFTER = 2  # secondes sur la dernière carte sans « Continuer » avant de refaire le défilé
-PACK_SLOW_PAUSE = 1500  # millisecondes sur chaque carte lors du défilé lent
+PACK_SIZE = 5  # cartes par paquet
+PACK_CARD_WAIT = 5  # secondes au plus sur une carte pour que le site la compte comme vue
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 
@@ -628,9 +628,9 @@ class WikiMasters:
     def _next_card_button(self) -> Locator | None:
         return self._carousel_arrow(right=True)
 
-    def _carousel_arrow(self, right: bool) -> Locator | None:
-        """Flèche du carrousel (None si absente ou désactivée) : le bouton sans texte le
-        plus à droite (ou à gauche), à hauteur des points de pagination."""
+    def _carousel_row(self) -> list[dict]:
+        """Boutons sans texte de la ligne du carrousel, de gauche à droite : flèche
+        gauche, un point par carte, flèche droite."""
         boxes = self.page.evaluate("""() => [...document.querySelectorAll('button')]
             .map((b, i) => ({i, text: (b.innerText || '').trim(), aria: b.getAttribute('aria-label') || '',
                              disabled: b.disabled, r: b.getBoundingClientRect()}))
@@ -639,17 +639,24 @@ class WikiMasters:
                         x: b.r.x, y: b.r.y + b.r.height / 2, w: b.r.width}))""")
         blank = [b for b in boxes if not b["text"] and not b["aria"]]
         if not blank:
-            return None
-        # Les points et les deux flèches sont sur une même ligne ; on prend la ligne la
-        # plus peuplée, puis le bouton le plus à droite.
+            return []
+        # Les points et les deux flèches sont sur une même ligne : la plus peuplée.
         rows: dict[int, list[dict]] = {}
         for b in blank:
             rows.setdefault(round(b["y"] / 10), []).append(b)
-        row = max(rows.values(), key=len)
-        best = (max if right else min)(row, key=lambda b: b["x"])
-        if best["disabled"]:
+        return sorted(max(rows.values(), key=len), key=lambda b: b["x"])
+
+    def _carousel_arrow(self, right: bool) -> Locator | None:
+        """Flèche du carrousel (None si absente ou désactivée)."""
+        row = self._carousel_row()
+        if not row:
             return None
-        return self.page.locator("button").nth(best["i"])
+        best = row[-1] if right else row[0]
+        return None if best["disabled"] else self.page.locator("button").nth(best["i"])
+
+    def _carousel_dots(self) -> list[Locator]:
+        row = self._carousel_row()
+        return [self.page.locator("button").nth(b["i"]) for b in row[1:-1]]
 
     def open_packs(self, dry_run: bool, limit: int | None = None) -> int:
         """Ouvre les paquets disponibles (tous, ou au plus `limit`) : « Ouvrir », faire
@@ -691,54 +698,65 @@ class WikiMasters:
                     log.info("  ★ %s — %s%s", card["rarity"], card["title"], " (brillante)" if card["shiny"] else "")
         return opened
 
+    def _cards_left(self) -> int | None:
+        """Nombre du bouton « Encore N cartes » : les cartes que le site ne compte pas
+        encore comme vues. 0 quand « Continuer » est affiché, None si illisible."""
+        page = self.page
+        done = page.get_by_role("button", name=PACK_CONTINUE)
+        if done.count() and done.first.is_visible() and done.first.is_enabled():
+            return 0
+        more = page.get_by_role("button", name=PACK_MORE_CARDS)
+        if not more.count():
+            return None
+        match = re.search(r"\d+", more.first.inner_text())
+        return int(match.group()) if match else None
+
+    def _wait_card_counted(self, before: int | None) -> int | None:
+        """Attend que le compteur « Encore N cartes » baisse (au plus PACK_CARD_WAIT)."""
+        deadline = time.monotonic() + PACK_CARD_WAIT
+        left = self._cards_left()
+        while left is not None and before is not None and left >= before and left > 0 \
+                and time.monotonic() < deadline:
+            self.page.wait_for_timeout(150)
+            left = self._cards_left()
+        return left
+
     def _reveal_pack(self) -> None:
+        """Fait défiler le paquet : le site ne compte une carte comme vue qu'au bout d'un
+        moment (« Encore N cartes » baisse alors) ; on attend ce décompte avant la carte
+        suivante, sinon « Continuer » n'apparaît jamais."""
         page = self.page
         page.get_by_role("button", name=PACK_MORE_CARDS).or_(
             page.get_by_role("button", name=PACK_CONTINUE)).first.wait_for(state="visible", timeout=30000)
         self.step("pack-revealed")
-        done = page.get_by_role("button", name=PACK_CONTINUE)
         deadline = time.monotonic() + PACK_REVEAL_TIMEOUT
-        replayed = False
-        stuck_since = None
-        # Tant que « Continuer » n'est pas là, carte suivante.
-        while not (done.count() and done.first.is_visible() and done.first.is_enabled()):
+        # La première carte aussi doit être comptée avant de passer à la suivante.
+        left = self._wait_card_counted(PACK_SIZE)
+        revisited = False
+        while left != 0:
             if time.monotonic() > deadline:
                 self.snapshot("pack-stuck")
-                raise SiteError("Impossible d'atteindre « Continuer » à la fin du paquet")
+                raise SiteError(f"Impossible d'atteindre « Continuer » (encore {left} carte(s))")
             arrow = self._next_card_button()
             if arrow is not None:
                 arrow.click()
-                stuck_since = None
-            elif stuck_since is None:
-                stuck_since = time.monotonic()
-            elif time.monotonic() - stuck_since > PACK_STUCK_AFTER and not replayed:
-                # Dernière carte sans « Continuer » : défilé trop rapide, certaines cartes
-                # n'ont pas compté comme vues. On revient au début et on refait lentement.
-                log.info("« Continuer » absent sur la dernière carte : nouveau défilé, plus lent.")
-                self._replay_pack_slowly()
-                replayed = True
-                stuck_since = None
-                continue
-            page.wait_for_timeout(700)
+                left = self._wait_card_counted(left)
+            elif not revisited:
+                # Dernière carte, mais des cartes pas comptées : on repasse sur chacune.
+                log.info("Paquet : encore %s carte(s) non comptée(s) sur la dernière carte, "
+                         "nouveau passage sur chaque carte.", left)
+                for dot in self._carousel_dots():
+                    dot.click()
+                    left = self._wait_card_counted(left)
+                    if left == 0:
+                        break
+                revisited = True
+            else:
+                page.wait_for_timeout(500)
+                left = self._cards_left()
         self.step("pack-last-card")
-        done.first.click()
+        page.get_by_role("button", name=PACK_CONTINUE).first.click()
         page.wait_for_timeout(1000)
-
-    def _replay_pack_slowly(self) -> None:
-        page = self.page
-        for _ in range(10):  # retour à la première carte
-            back = self._carousel_arrow(right=False)
-            if back is None:
-                break
-            back.click()
-            page.wait_for_timeout(300)
-        for _ in range(10):  # puis chaque carte, en s'y arrêtant
-            page.wait_for_timeout(PACK_SLOW_PAUSE)
-            arrow = self._next_card_button()
-            if arrow is None:
-                break
-            arrow.click()
-        page.wait_for_timeout(PACK_SLOW_PAUSE)
 
     # ─────────────────────────── Achats ───────────────────────────
 
