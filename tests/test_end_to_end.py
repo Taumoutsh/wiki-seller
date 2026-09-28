@@ -215,3 +215,15 @@ def test_card_with_parentheses_is_found_without_them(tmp_path):
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Dewey Martin (acteur)", "max_price": 5}])
         run_once(config)
     assert site.bids == [("d1", 1)]
+
+
+def test_pack_scrolled_too_fast_is_replayed_slowly(tmp_path, caplog):
+    # Le site ne compte une carte comme vue qu'après 1 s : le défilé rapide arrive au bout
+    # sans « Continuer », le script refait le défilé lentement.
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=1, seen_after_ms=1000) as site:
+        from wiki_seller.main import open_site
+        with open_site(make_config(tmp_path, site.url, []), debug=False) as wm:
+            with caplog.at_level("INFO"):
+                assert wm.open_packs(dry_run=False) == 1
+    assert site.packs_opened == 1
+    assert "nouveau défilé, plus lent" in caplog.text

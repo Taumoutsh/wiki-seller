@@ -110,7 +110,10 @@ load();
 # touche flèche droite du clavier ne fait rien (comme sur le vrai site).
 PULLS_HTML = """<!doctype html><html><body><main id="main"></main>
 <script>
-let packs = __PACKS__, card = 0;
+let packs = __PACKS__, card = 0, seen = new Set(), arrived = 0;
+const SEEN_AFTER = __SEEN_AFTER__;  // ms sur une carte pour qu'elle compte comme vue
+function leave() { if (Date.now() - arrived >= SEEN_AFTER) seen.add(card); }
+setInterval(() => { if (main.querySelector('.card') && Date.now() - arrived >= SEEN_AFTER && !seen.has(card)) { seen.add(card); reveal(false); } }, 100);
 const main = document.getElementById('main');
 function home() {
   main.innerHTML = `<h1>Ouvrir un paquet</h1>
@@ -118,19 +121,21 @@ function home() {
     <div>${packs} / 10</div><div>paquets disponibles</div>`;
   document.getElementById('open').onclick = async () => {
     packs = (await (await fetch('/api/packs/open', {method: 'POST'})).json()).remaining;
-    card = 0; reveal();
+    card = 0; seen = new Set(); reveal();
   };
 }
-function reveal() {
+function reveal(moved = true) {
+  if (moved) arrived = Date.now();
+  const allSeen = seen.size >= 5 || (SEEN_AFTER === 0);
   const dots = [0,1,2,3,4].map(i => `<button class="dot">${''}</button>`).join('');
   main.innerHTML = `<div>Carte ${card + 1} / 5</div><div class="card">Carte n°${card + 1}</div>
     <div style="display:flex">
       <button id="prev" ${card ? '' : 'disabled'}><svg width="10" height="10"></svg></button>${dots}
       <button id="next" ${card < 4 ? '' : 'disabled'}><svg width="10" height="10"></svg></button>
     </div>
-    ${card < 4 ? `<button disabled>Encore ${4 - card} cartes</button>` : '<button id="done">Continuer</button>'}`;
-  document.getElementById('prev').onclick = () => { card--; reveal(); };
-  document.getElementById('next').onclick = () => { card++; reveal(); };
+    ${card < 4 || !allSeen ? `<button disabled>Encore ${SEEN_AFTER ? Math.max(1, 5 - seen.size) : 4 - card} cartes</button>` : '<button id="done">Continuer</button>'}`;
+  document.getElementById('prev').onclick = () => { leave(); card--; reveal(); };
+  document.getElementById('next').onclick = () => { leave(); card++; reveal(); };
   const done = document.getElementById('done');
   if (done) done.onclick = home;
 }
@@ -170,7 +175,7 @@ def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", 
 class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
                  mail="me@example.com", password="secret", sales_forbidden=False,
-                 challenge="auto", packs=0, auctions=None):
+                 challenge="auto", packs=0, auctions=None, seen_after_ms=0):
         self.collection = collection
         self.averages = averages  # card_id -> moyenne API
         self.ui_averages = ui_averages if ui_averages is not None else {}
@@ -181,6 +186,7 @@ class FakeWikiMasters:
         self.listings = []
         self.challenge = challenge
         self.packs = packs
+        self.seen_after_ms = seen_after_ms
         self.packs_opened = 0
         self.auctions = {a["id"]: a for a in auctions or []}
         self.bids = []  # (auction_id, montant) misés par nous
@@ -233,7 +239,8 @@ class FakeWikiMasters:
                     html = COLLECTION_HTML.replace("__UI_AVERAGES__", json.dumps(site.ui_averages))
                     return self._send(200, html, "text/html; charset=utf-8")
                 if url.path == "/pulls":
-                    return self._send(200, PULLS_HTML.replace("__PACKS__", str(site.packs)), "text/html; charset=utf-8")
+                    html = PULLS_HTML.replace("__PACKS__", str(site.packs)).replace("__SEEN_AFTER__", str(site.seen_after_ms))
+                    return self._send(200, html, "text/html; charset=utf-8")
                 if url.path == "/marketplace":
                     return self._send(200, MARKET_HTML, "text/html; charset=utf-8")
                 if url.path.startswith("/marketplace/"):

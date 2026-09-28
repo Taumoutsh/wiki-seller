@@ -49,6 +49,8 @@ BID_INPUT = 'input[aria-label="Montant de la mise"]'
 BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
 BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
 PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « Continuer »
+PACK_STUCK_AFTER = 2  # secondes sur la dernière carte sans « Continuer » avant de refaire le défilé
+PACK_SLOW_PAUSE = 1500  # millisecondes sur chaque carte lors du défilé lent
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 
@@ -624,8 +626,11 @@ class WikiMasters:
         return int(match.group(1)) if match else None
 
     def _next_card_button(self) -> Locator | None:
-        """Flèche « suivant » du carrousel : le bouton sans texte le plus à droite,
-        à hauteur des points de pagination."""
+        return self._carousel_arrow(right=True)
+
+    def _carousel_arrow(self, right: bool) -> Locator | None:
+        """Flèche du carrousel (None si absente ou désactivée) : le bouton sans texte le
+        plus à droite (ou à gauche), à hauteur des points de pagination."""
         boxes = self.page.evaluate("""() => [...document.querySelectorAll('button')]
             .map((b, i) => ({i, text: (b.innerText || '').trim(), aria: b.getAttribute('aria-label') || '',
                              disabled: b.disabled, r: b.getBoundingClientRect()}))
@@ -641,7 +646,7 @@ class WikiMasters:
         for b in blank:
             rows.setdefault(round(b["y"] / 10), []).append(b)
         row = max(rows.values(), key=len)
-        best = max(row, key=lambda b: b["x"])
+        best = (max if right else min)(row, key=lambda b: b["x"])
         if best["disabled"]:
             return None
         return self.page.locator("button").nth(best["i"])
@@ -693,6 +698,8 @@ class WikiMasters:
         self.step("pack-revealed")
         done = page.get_by_role("button", name=PACK_CONTINUE)
         deadline = time.monotonic() + PACK_REVEAL_TIMEOUT
+        replayed = False
+        stuck_since = None
         # Tant que « Continuer » n'est pas là, carte suivante.
         while not (done.count() and done.first.is_visible() and done.first.is_enabled()):
             if time.monotonic() > deadline:
@@ -701,10 +708,37 @@ class WikiMasters:
             arrow = self._next_card_button()
             if arrow is not None:
                 arrow.click()
+                stuck_since = None
+            elif stuck_since is None:
+                stuck_since = time.monotonic()
+            elif time.monotonic() - stuck_since > PACK_STUCK_AFTER and not replayed:
+                # Dernière carte sans « Continuer » : défilé trop rapide, certaines cartes
+                # n'ont pas compté comme vues. On revient au début et on refait lentement.
+                log.info("« Continuer » absent sur la dernière carte : nouveau défilé, plus lent.")
+                self._replay_pack_slowly()
+                replayed = True
+                stuck_since = None
+                continue
             page.wait_for_timeout(700)
         self.step("pack-last-card")
         done.first.click()
         page.wait_for_timeout(1000)
+
+    def _replay_pack_slowly(self) -> None:
+        page = self.page
+        for _ in range(10):  # retour à la première carte
+            back = self._carousel_arrow(right=False)
+            if back is None:
+                break
+            back.click()
+            page.wait_for_timeout(300)
+        for _ in range(10):  # puis chaque carte, en s'y arrêtant
+            page.wait_for_timeout(PACK_SLOW_PAUSE)
+            arrow = self._next_card_button()
+            if arrow is None:
+                break
+            arrow.click()
+        page.wait_for_timeout(PACK_SLOW_PAUSE)
 
     # ─────────────────────────── Achats ───────────────────────────
 
