@@ -348,7 +348,7 @@ class FakeWikiMasters:
                         if body["card_id"] not in known:
                             return self._send(409, {"error": "Vous ne possédez pas cette carte"})
                         site.api_listings.append(body)
-                        labels = {10: "10 min", 30: "30 min", 60: "1 h"}
+                        labels = {10: "10 min", 30: "30 min", 60: "1 h", 360: "6 h", 720: "12 h"}
                         body = {"card_id": body["card_id"], "title": known[body["card_id"]]["card"]["wikipedia_title"],
                                 "price": str(body["base_amount"]), "duration": labels[body["duration_minutes"]]}
                     site.listings.append(body)

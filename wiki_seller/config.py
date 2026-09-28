@@ -27,6 +27,8 @@ DEFAULT_SELL_RARITIES = "L,SR"
 # En dessous, une nouvelle passe démarrerait avant la fin de la précédente (~4 min).
 MIN_RUN_INTERVAL = timedelta(minutes=5)
 DEFAULT_RUN_INTERVAL = timedelta(hours=1)
+# La nuit, moins d'activité : ventes plus longues pour laisser les enchères monter.
+DEFAULT_NIGHT_DURATIONS = "1-3=12 h;3-6=6 h"
 
 
 def parse_duration(text: str) -> timedelta | None:
@@ -69,6 +71,19 @@ def _actions_via(value: str) -> bool:
     return value == "api"
 
 
+def _night_durations(value: str) -> tuple[tuple[int, int, str], ...]:
+    """« 1-3=12 h;3-6=6 h » → ((1, 3, "12 h"), (3, 6, "6 h")) ; vide → ()."""
+    ranges = []
+    for part in filter(None, (p.strip() for p in value.split(";"))):
+        hours, sep, label = part.partition("=")
+        span = _hours(hours) if sep else None
+        label = label.strip()
+        if not span or not parse_duration(label):
+            raise ConfigError(f"NIGHT_DURATIONS illisible ({part!r}) : écrivez par ex. « 1-3=12 h;3-6=6 h ».")
+        ranges.append((span[0], span[1], label))
+    return tuple(ranges)
+
+
 def _positive_int(name: str) -> int | None:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -103,6 +118,8 @@ class Config:
     wanted_cards_file: Path = Path("wanted_cards.json")
     max_total_bids: int | None = None
     snipe_lead: timedelta = timedelta(seconds=5)
+    # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
+    night_durations: tuple[tuple[int, int, str], ...] = ()
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
     packs_hours: tuple[int, int] | None = (0, 6)
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
@@ -113,6 +130,14 @@ class Config:
     # sans descendre sous price_floor_ratio × prix moyen.
     market_adjust: bool = False
     price_floor_ratio: float = 0.5
+
+    def duration_label_at(self, hour: int) -> str:
+        """Libellé de durée des ventes à cette heure : plage de NIGHT_DURATIONS, sinon
+        AUCTION_DURATION_LABEL."""
+        for start, end, label in self.night_durations:
+            if (start <= hour < end) if start < end else (hour >= start or hour < end):
+                return label
+        return self.auction_duration_label
 
     @property
     def pass_interval(self) -> timedelta:
@@ -188,6 +213,7 @@ def load_config() -> Config:
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
         snipe_lead=snipe_lead or timedelta(seconds=5),
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
+        night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
         api_trace=_bool(os.getenv("API_TRACE"), False),
         actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),
         market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),

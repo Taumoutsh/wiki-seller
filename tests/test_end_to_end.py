@@ -395,3 +395,9 @@ def test_api_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
     # Surenchère au pas du site (70 + 10), partie dans les 6 dernières secondes.
     assert site.bids[-1] == ("s1", 80)
     assert "surenchère de 80 sur « Victor Hugo »" in caplog.text
+
+
+def test_night_sale_duration(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1) as site:
+        run_once(make_config(tmp_path, site.url, [], actions_via_api=True, night_durations=((0, 24, "12 h"),)))
+    assert site.api_listings[0]["duration_minutes"] == 720

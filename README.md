@@ -25,7 +25,8 @@ Met automatiquement aux enchères les cartes de votre collection
 
 En mode `--loop`, la passe suivante démarre **`RUN_INTERVAL` après la dernière mise en
 vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient déjà
-prises, elle démarre dès la fin de la première enchère en cours.
+prises, elle démarre dès la fin de la première enchère en cours, et au plus tard
+`RUN_INTERVAL` plus tard (les ventes de nuit durent jusqu'à 12 h).
 
 ## Paquets
 
@@ -164,6 +165,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `STATE_DIR` | `state` | Session, journal, captures |
 | `PRICE_RATIO` | `0.70` | Part du prix moyen utilisée pour la mise |
 | `AUCTION_DURATION_LABEL` | `1 h` | Durée des enchères : libellé exact d'un bouton du site (`10 min`, `30 min`, `1 h`, `3 h`, `6 h`, `12 h`) |
+| `NIGHT_DURATIONS` | `1-3=12 h;3-6=6 h` | Durée des ventes selon l'heure (Paris) : de 1 h à 3 h, enchères de 12 h ; de 3 h à 6 h, de 6 h ; le reste du temps `AUCTION_DURATION_LABEL`. Vide = jamais |
 | `RUN_INTERVAL` | *(durée des enchères)* | Délai avant la passe suivante (`10 min`, `1 h`, `1h30`… ; 5 min minimum) |
 | `HEADLESS` | `true` | `false` pour voir le navigateur |
 | `CHROMIUM_EXECUTABLE` | *(vide)* | Chromium déjà installé à utiliser |

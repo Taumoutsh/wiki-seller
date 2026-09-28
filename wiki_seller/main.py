@@ -187,9 +187,17 @@ def _list(site: WikiMasters, config: Config, item, dry_run: bool, copy_index: in
         k = copy_index % len(item.copy_ids) if item.copy_ids else 0
         copies = item.copy_ids[k:] + item.copy_ids[:k]
         adjust = market_adjuster(site, config, item.title, my_auction_ids)
-        return site.list_card_api(item.card_id, copies, item.title, item.average, dry_run, adjust)
+        return site.list_card_api(item.card_id, copies, item.title, item.average, dry_run, adjust,
+                                  sale_duration(config))
     adjust = market_adjuster(site, config, item.title, my_auction_ids)
-    return site.list_card(item.title, item.average, dry_run, adjust)
+    return site.list_card(item.title, item.average, dry_run, adjust, sale_duration(config))
+
+
+def sale_duration(config: Config) -> str:
+    label = config.duration_label_at(local_now().hour)
+    if label != config.auction_duration_label:
+        log.info("Durée de nuit : enchère de %s.", label)
+    return label
 
 
 def _open_packs(site: WikiMasters, dry_run: bool) -> None:
@@ -323,7 +331,9 @@ def next_run_at(result: RunResult, config: Config, now: datetime) -> datetime:
     if result.last_listing_at:
         target = result.last_listing_at + interval + RESTART_MARGIN
     elif result.slots_full and result.earliest_auction_end:
-        target = result.earliest_auction_end + RESTART_MARGIN
+        # Au plus RUN_INTERVAL : avec des ventes de nuit de 12 h, on ne dort pas jusqu'à
+        # leur fin (paquets, achats).
+        target = min(result.earliest_auction_end + RESTART_MARGIN, now + interval)
     elif result.slots_full:
         stored = read_json(config.run_state_file, {}).get("last_listing_at")
         target = (datetime.fromisoformat(stored) + interval + RESTART_MARGIN

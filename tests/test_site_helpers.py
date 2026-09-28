@@ -63,9 +63,11 @@ def test_next_run_follows_auction_duration_or_run_interval(tmp_path):
     explicit = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None,
                       run_interval=timedelta(minutes=20))
     assert next_run_at(listed, explicit, now) == now + timedelta(minutes=21)
-    # Places pleines : on attend toujours la fin de la première enchère.
+    # Places pleines : fin de la première enchère, mais au plus RUN_INTERVAL.
     full = RunResult(0, None, True, now + timedelta(minutes=45))
-    assert next_run_at(full, explicit, now) == now + timedelta(minutes=46)
+    assert next_run_at(full, explicit, now) == now + timedelta(minutes=20)
+    soon = RunResult(0, None, True, now + timedelta(minutes=5))
+    assert next_run_at(soon, explicit, now) == now + timedelta(minutes=6)
 
 
 @pytest.mark.parametrize("value, expected", [("", None), ("15 min", timedelta(minutes=15)), ("2 h", timedelta(hours=2))])
@@ -166,3 +168,27 @@ def test_rate_limit_wait():
     assert rate_limit_wait("2020-01-01T00:00:00Z") == 2.0  # déjà passé : petit délai
     far = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
     assert rate_limit_wait(far) == 120.0
+
+
+def test_night_durations(tmp_path, monkeypatch):
+    from wiki_seller.config import _night_durations
+
+    config = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None,
+                    night_durations=_night_durations("1-3=12 h;3-6=6 h"))
+    assert [config.duration_label_at(h) for h in (0, 1, 2, 3, 5, 6, 23)] == \
+        ["1 h", "12 h", "12 h", "6 h", "6 h", "1 h", "1 h"]
+    assert _night_durations("") == ()
+    for bad in ("1-3", "1-3=bientôt", "25-3=1 h"):
+        with pytest.raises(ConfigError):
+            _night_durations(bad)
+    monkeypatch.setenv("MAIL", "m")
+    monkeypatch.setenv("PASSWORD", "p")
+    monkeypatch.delenv("NIGHT_DURATIONS", raising=False)
+    assert load_config().night_durations == ((1, 3, "12 h"), (3, 6, "6 h"))
+
+
+def test_full_slots_wait_is_capped_by_run_interval(tmp_path):
+    config = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    now = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    full = RunResult(0, None, True, now + timedelta(hours=11))  # ventes de nuit de 12 h
+    assert next_run_at(full, config, now) == now + timedelta(hours=1)

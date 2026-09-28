@@ -544,9 +544,9 @@ class WikiMasters:
         modal = page.locator("div").filter(has=launch).filter(has=page.locator("input")).last
         return modal.locator("input[type=number], input[inputmode=numeric], input[type=text]").first
 
-    def _select_duration(self, launch: Locator) -> None:
+    def _select_duration(self, launch: Locator, label: str) -> None:
         page = self.page
-        pattern = duration_pattern(self.config.auction_duration_label)
+        pattern = duration_pattern(label)
         # Plus petit bloc contenant à la fois « Lancer l'enchère » et l'option de durée.
         modal = page.locator("div").filter(has=launch).filter(has=page.get_by_text(pattern)).last
         if not modal.count():
@@ -570,7 +570,7 @@ class WikiMasters:
         if text.count():
             text.first.click()
             return
-        raise SiteError(f"Durée « {self.config.auction_duration_label} » introuvable")
+        raise SiteError(f"Durée « {label} » introuvable")
 
     def _cancel(self) -> None:
         cancel = self.page.get_by_role("button", name=CANCEL_BUTTON)
@@ -583,7 +583,7 @@ class WikiMasters:
             self.page.keyboard.press("Escape")
 
     def list_card_api(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float,
-                      dry_run: bool, adjust=None) -> ListingResult:
+                      dry_run: bool, adjust=None, duration_label: str | None = None) -> ListingResult:
         """Mise en vente par l'API : POST /api/marketplace {card_id, base_amount,
         duration_minutes}. Malgré son nom, `card_id` attend l'identifiant de l'exemplaire
         possédé (avec celui de la carte, le site répond 409 « Vous ne possédez pas cette
@@ -593,7 +593,7 @@ class WikiMasters:
             price = adjust(price, average)
         if price < 1:
             return ListingResult(ListingStatus.NO_AVERAGE, average=average, detail="prix calculé nul")
-        duration = auction_minutes(self.config.auction_duration_label)
+        duration = auction_minutes(duration_label or self.config.auction_duration_label)
         if dry_run:
             return ListingResult(ListingStatus.DRY_RUN, price=price, average=average)
         text = ""
@@ -611,7 +611,7 @@ class WikiMasters:
         return ListingResult(ListingStatus.FAILED, price, average, f"HTTP {status} : {text[:200]}")
 
     def list_card(self, title: str, fallback_average: float | None, dry_run: bool,
-                  adjust=None) -> ListingResult:
+                  adjust=None, duration_label: str | None = None) -> ListingResult:
         page = self.page
         try:
             self.open_card(title)
@@ -647,7 +647,7 @@ class WikiMasters:
             if typed != price:
                 raise SiteError(f"le champ de mise affiche {price_input.input_value()!r} au lieu de {price}")
 
-            self._select_duration(launch)
+            self._select_duration(launch, duration_label or self.config.auction_duration_label)
             self.step(f"ready-{title}")
 
             if dry_run:
