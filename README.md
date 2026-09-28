@@ -55,9 +55,12 @@ l'autre. Pour chaque carte :
   la vraie mise minimale (champ prérempli) ; si elle reste dans la limite, il attend la
   fin de l'enchère pour surenchérir ; sinon il abandonne cette enchère et en cherche
   une autre ;
-- la boucle se réveille aussi **`SNIPE_LEAD` secondes (20 par défaut) avant la fin**
-  pour surenchérir si besoin, puis surveille l'enchère jusqu'à sa vraie fin (le site la
-  prolonge de 60 s après toute mise dans les 10 dernières secondes) ;
+- la boucle se réveille pour la **dernière minute** de l'enchère (avant une passe
+  normale si les deux se chevauchent), relit l'enchère **chaque seconde** et, si vous
+  n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (5 par défaut) de la fin**,
+  dans la limite, directement par l'API avec le pas de surenchère appris sur la page ;
+  une mise des 10 dernières secondes prolonge l'enchère de 60 s : la surveillance
+  continue jusqu'à la vraie fin ;
 - **une seule enchère à la fois par carte** : si vous menez déjà une enchère de cette
   carte dans « Mes enchères », le script la suit et ne mise nulle part ailleurs ;
 - chaque enchère gagnée (y compris une autre que celle suivie) compte ; une fois
@@ -168,7 +171,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `OPEN_PACKS_HOURS` | `0-6` | Heures de Paris où les paquets sont ouverts ; vide = jamais |
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
-| `SNIPE_LEAD` | `20` | Secondes avant la fin d'une enchère pour surenchérir |
+| `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |
 | `MARKET_ADJUST` | `true` | Avant chaque vente, lit les enchères en cours de la même carte (mise actuelle, sinon mise de départ) : si le prix est sous leur moyenne, + un écart type ; au-dessus, - un écart type ; moins de 2 enchères : inchangé |
 | `PRICE_FLOOR_RATIO` | `0.5` | Plancher de l'ajustement : jamais sous cette part du prix moyen |
 | `ACTIONS_VIA` | `api` | `api` : paquets, ventes et mises par requêtes directes ; `page` : clics dans les pages (ancien mode) |

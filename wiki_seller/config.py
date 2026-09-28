@@ -102,7 +102,7 @@ class Config:
     # Achats : liste des cartes voulues, budget total optionnel, avance avant la fin.
     wanted_cards_file: Path = Path("wanted_cards.json")
     max_total_bids: int | None = None
-    snipe_lead: timedelta = timedelta(seconds=20)
+    snipe_lead: timedelta = timedelta(seconds=5)
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
     packs_hours: tuple[int, int] | None = (0, 6)
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
@@ -168,8 +168,8 @@ def load_config() -> Config:
     raw_lead = os.getenv("SNIPE_LEAD", "").strip()
     if raw_lead:
         snipe_lead = timedelta(seconds=int(raw_lead)) if raw_lead.isdigit() else None
-        if snipe_lead is None or not timedelta(seconds=5) <= snipe_lead <= timedelta(minutes=5):
-            raise ConfigError("SNIPE_LEAD doit être un nombre de secondes entre 5 et 300.")
+        if snipe_lead is None or not timedelta(seconds=2) <= snipe_lead <= timedelta(minutes=5):
+            raise ConfigError("SNIPE_LEAD doit être un nombre de secondes entre 2 et 300.")
 
     return Config(
         mail=mail,
@@ -186,7 +186,7 @@ def load_config() -> Config:
         run_interval=run_interval,
         wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
-        snipe_lead=snipe_lead or timedelta(seconds=20),
+        snipe_lead=snipe_lead or timedelta(seconds=5),
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
         api_trace=_bool(os.getenv("API_TRACE"), False),
         actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),

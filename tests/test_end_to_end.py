@@ -376,3 +376,22 @@ def test_sale_price_lowered_when_above_current_auctions(tmp_path):
         run_once(make_config(tmp_path, site.url, [], actions_via_api=True, market_adjust=True))
     # 3500 au-dessus de la moyenne 2500 : moins l'écart type 500.
     assert site.api_listings[0]["base_amount"] == 3000
+
+
+def test_api_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
+    from datetime import datetime, timedelta, timezone
+
+    auction = market_auction("s1", "Victor Hugo", 50)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             actions_via_api=True, snipe_lead=timedelta(seconds=6))
+        run_once(config)
+        assert site.bids == [("s1", 50)]
+        site.outbid("s1", 70)
+        end = datetime.now(timezone.utc) + timedelta(seconds=14)
+        site.auctions["s1"]["end_at"] = end.isoformat()
+        with caplog.at_level("INFO"):
+            run_snipe(config)
+    # Surenchère au pas du site (70 + 10), partie dans les 6 dernières secondes.
+    assert site.bids[-1] == ("s1", 80)
+    assert "surenchère de 80 sur « Victor Hugo »" in caplog.text

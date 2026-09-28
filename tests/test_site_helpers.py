@@ -103,7 +103,12 @@ def test_packs_window_and_next_wake(tmp_path):
     end = now + timedelta(minutes=10)
     night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": end.isoformat()}}}))
     wake, snipe = next_wake(next_pass, night, now)
-    assert snipe and wake == end - timedelta(seconds=20) - timedelta(seconds=45)
+    # Réveil 60 s (début de la surveillance) + 45 s (démarrage) avant la fin.
+    assert snipe and wake == end - timedelta(seconds=60) - timedelta(seconds=45)
+    # Une fin d'enchère juste après la prochaine passe passe avant elle.
+    later = now + timedelta(minutes=33)
+    night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": later.isoformat()}}}))
+    assert next_wake(next_pass, night, now) == (later - timedelta(seconds=105), True)
 
 
 def test_wanted_cards_file(tmp_path):

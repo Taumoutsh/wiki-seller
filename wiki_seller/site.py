@@ -928,6 +928,16 @@ class WikiMasters:
         auction = data.get("auction") if isinstance(data, dict) else None
         return auction if isinstance(auction, dict) else None
 
+    def post_bid(self, auction_id: str, amount: int) -> bool:
+        """Mise par l'API (POST /api/marketplace/<id>/bid {amount}) ; True si acceptée."""
+        status, data, text = self.api_post(f"/api/marketplace/{auction_id}/bid", {"amount": amount})
+        if 200 <= status < 300:
+            confirmed = data if isinstance(data, dict) and "current_bid" in data else self.fetch_auction(auction_id)
+            if (confirmed or {}).get("current_bid") and confirmed["current_bid"] >= amount:
+                return True
+        log.warning("Mise de %d refusée par le site (HTTP %d : %s).", amount, status, text[:200])
+        return False
+
     def read_min_bid(self, auction_id: str) -> int | None:
         """Mise minimale exacte : le montant prérempli sur la page de l'enchère."""
         page = self.page
@@ -961,12 +971,8 @@ class WikiMasters:
         if dry_run:
             return "dry_run", amount
         if self.config.actions_via_api:
-            status, data, text = self.api_post(f"/api/marketplace/{auction_id}/bid", {"amount": amount})
-            if 200 <= status < 300:
-                confirmed = data if isinstance(data, dict) and "current_bid" in data else self.fetch_auction(auction_id)
-                if (confirmed or {}).get("current_bid") and confirmed["current_bid"] >= amount:
-                    return "bid", amount
-            log.warning("Mise refusée par le site (HTTP %d : %s).", status, text[:200])
+            if self.post_bid(auction_id, amount):
+                return "bid", amount
             self.snapshot(f"bid-refused-{auction_id}")
             return "failed", amount
         page.get_by_role("button", name=BID_BUTTON).first.click()

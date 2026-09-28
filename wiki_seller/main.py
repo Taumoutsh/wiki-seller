@@ -39,6 +39,7 @@ RETRY_AFTER_ERROR = timedelta(minutes=10)
 PRICE_CACHE_TTL = timedelta(hours=3)
 PRICE_SAVE_EVERY = 50
 RETRY_LISTING_AFTER = 5  # secondes
+PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 SITE_TIMEZONE = "Europe/Paris"
 
 
@@ -336,7 +337,8 @@ def next_wake(next_pass: datetime, config: Config, now: datetime) -> tuple[datet
     """Prochain réveil : la passe normale, ou avant, la fin d'une enchère suivie.
     Renvoie (heure, True si c'est un réveil de surenchère)."""
     snipe = WantedState(config.wanted_state_file).next_snipe_at(config.snipe_lead)
-    if snipe and now - timedelta(seconds=30) <= snipe < next_pass:
+    # Une passe dure plusieurs minutes : un réveil qui tomberait pendant la passe passe avant.
+    if snipe and now - timedelta(seconds=30) <= snipe < next_pass + PASS_DURATION_GUARD:
         return max(snipe, now), True
     return next_pass, False
 
