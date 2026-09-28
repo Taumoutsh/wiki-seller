@@ -244,3 +244,38 @@ def test_redact_masks_secret_fields():
 
     assert redact({"amount": 5, "access_token": "x", "nested": [{"refresh_token": "y", "id": 1}]}) == \
         {"amount": 5, "access_token": "***", "nested": [{"refresh_token": "***", "id": 1}]}
+
+
+def test_api_mode_lists_by_request_with_api_average(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=3) as site:
+        config = make_config(tmp_path, site.url, [], actions_via_api=True)
+        result = run_once(config)
+    assert result.listed == 3
+    # Prix moyen de l'API (et non celui de la fenêtre), carte par son identifiant de carte.
+    assert site.api_listings == [
+        {"card_id": "C", "base_amount": 3500, "duration_minutes": 60},
+        {"card_id": "B", "base_amount": 560, "duration_minutes": 60},
+        {"card_id": "B", "base_amount": 560, "duration_minutes": 60},
+    ]
+
+
+def test_api_mode_falls_back_to_copy_id(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, listing_id="copy") as site:
+        with caplog.at_level("INFO"):
+            run_once(make_config(tmp_path, site.url, [], actions_via_api=True))
+    assert [l["card_id"] for l in site.api_listings] == ["c1"]
+    assert "identifiant de l'exemplaire" in caplog.text
+
+
+def test_api_mode_opens_packs_and_bids_by_request(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, packs=2,
+                         auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}],
+                             actions_via_api=True, packs_hours=(0, 24), api_trace=True)
+        with caplog.at_level("INFO"):
+            run_once(config)
+    assert site.packs_opened == 2 and "★ UR — Tirage 1-3" in caplog.text
+    assert site.bids == [("e2", 150)]
+    posts = [json.loads(l) for l in config.api_trace_file.read_text().splitlines() if '"POST"' in l]
+    # Paquets, puis mise ; la tentative de mise en vente qui suit est refusée faute de place.
+    assert [p["path"] for p in posts][:3] == ["/api/packs/open", "/api/packs/open", "/api/marketplace/e2/bid"]

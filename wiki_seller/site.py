@@ -47,10 +47,12 @@ PACK_MORE_CARDS = re.compile(r"Encore\s+\d+\s+cartes?", re.I)
 PACK_CONTINUE = re.compile(r"^\s*Continuer\s*$", re.I)
 BID_INPUT = 'input[aria-label="Montant de la mise"]'
 BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
+SLOTS_FULL_TEXT = re.compile(r"maximum|limite|trop d.ench|max.*ench|concurrent", re.I)
 BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
 PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « Continuer »
 PACK_SIZE = 5  # cartes par paquet
 PACK_CARD_WAIT = 5  # secondes au plus sur une carte pour que le site la compte comme vue
+API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythme humain
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 
@@ -166,6 +168,16 @@ def pack_summary(cards: list[dict]) -> str:
     return f"{len(cards)} cartes : {', '.join(parts)}"
 
 
+def auction_minutes(label: str) -> int:
+    """« 1 h » → 60, « 10 min » → 10 (durée envoyée à l'API)."""
+    from .config import parse_duration
+
+    duration = parse_duration(label)
+    if duration is None:
+        raise SiteError(f"Durée d'enchère illisible : {label!r}")
+    return int(duration.total_seconds() // 60)
+
+
 def search_queries(name: str) -> list[str]:
     """Requêtes à essayer pour la recherche du Marché, de la plus précise à la plus large."""
     queries = [name.strip()]
@@ -269,6 +281,25 @@ class WikiMasters:
             path,
         )
         return result["status"], result["data"]
+
+    def api_post(self, path: str, body: dict | None = None) -> tuple[int, object, str]:
+        """POST JSON depuis la page connectée (mêmes cookies que les clics).
+        Renvoie (code, JSON ou None, texte brut)."""
+        result = self.page.evaluate(
+            """async ([path, body]) => {
+                const init = {method: 'POST', credentials: 'include', headers: {accept: 'application/json'}};
+                if (body !== null) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
+                const res = await fetch(path, init);
+                const text = await res.text();
+                let data = null;
+                try { data = JSON.parse(text); } catch (e) {}
+                return {status: res.status, data, text: text.slice(0, 500)};
+            }""",
+            [path, body],
+        )
+        if result["status"] in (401, 403) and path.startswith("/api/") and "Non autoris" in result["text"]:
+            raise SessionExpired(f"{path} → HTTP {result['status']}")
+        return result["status"], result["data"], result["text"]
 
     def api_get_ok(self, path: str) -> object:
         for attempt in range(3):
@@ -533,6 +564,31 @@ class WikiMasters:
         except Exception:
             self.page.keyboard.press("Escape")
 
+    def list_card_api(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float,
+                      dry_run: bool) -> ListingResult:
+        """Mise en vente par l'API : POST /api/marketplace {card_id, base_amount,
+        duration_minutes}. L'identifiant attendu est celui de la carte ; s'il est refusé,
+        on essaie celui d'un exemplaire possédé."""
+        price = sale_price(average, self.config.price_ratio)
+        if price < 1:
+            return ListingResult(ListingStatus.NO_AVERAGE, average=average, detail="prix calculé nul")
+        duration = auction_minutes(self.config.auction_duration_label)
+        if dry_run:
+            return ListingResult(ListingStatus.DRY_RUN, price=price, average=average)
+        text = ""
+        for candidate in (card_id, *copy_ids[:1]):
+            body = {"card_id": candidate, "base_amount": price, "duration_minutes": duration}
+            status, data, text = self.api_post("/api/marketplace", body)
+            if 200 <= status < 300:
+                if candidate != card_id:
+                    log.info("Mise en vente acceptée avec l'identifiant de l'exemplaire (%s).", title)
+                return ListingResult(ListingStatus.LISTED, price=price, average=average)
+            if SLOTS_FULL_TEXT.search(text):
+                return ListingResult(ListingStatus.SLOTS_FULL, detail=text[:200])
+            if status not in (400, 404, 422):
+                break
+        return ListingResult(ListingStatus.FAILED, price, average, f"HTTP {status} : {text[:200]}")
+
     def list_card(self, title: str, fallback_average: float | None, dry_run: bool) -> ListingResult:
         page = self.page
         try:
@@ -657,6 +713,39 @@ class WikiMasters:
     def _carousel_dots(self) -> list[Locator]:
         row = self._carousel_row()
         return [self.page.locator("button").nth(b["i"]) for b in row[1:-1]]
+
+    def open_packs_api(self, dry_run: bool, limit: int | None = None) -> int:
+        """Ouvre les paquets par l'API : POST /api/packs/open (sans corps) renvoie
+        directement les 5 cartes ; le défilé à l'écran n'est qu'un affichage."""
+        page = self.page
+        page.goto(self.url("/pulls"), wait_until="domcontentloaded")
+        try:
+            page.wait_for_function(
+                "() => /paquets?\\s+disponibles?/i.test(document.body.innerText)", timeout=30000)
+        except PlaywrightTimeout:
+            self.snapshot("packs-page")
+            raise SiteError("Compteur de paquets introuvable sur /pulls")
+        available = self.packs_available()
+        log.info("Paquets disponibles : %s.", "compteur introuvable" if available is None else available)
+        if not available:
+            return 0
+        if dry_run:
+            log.info("Simulation : %d paquet(s) seraient ouverts.", available)
+            return 0
+        opened = 0
+        for _ in range(min(available, limit or available, PACK_GUARD)):
+            status, data, text = self.api_post("/api/packs/open")
+            if not 200 <= status < 300:
+                log.info("Paquets : le site refuse l'ouverture (HTTP %d : %s).", status, text[:200])
+                break
+            opened += 1
+            cards = pack_cards(data)
+            log.info("Paquet ouvert (%d restant(s)) : %s.", available - opened, pack_summary(cards))
+            for card in cards:
+                if card["rarity"] in NOTABLE_RARITIES:
+                    log.info("  ★ %s — %s%s", card["rarity"], card["title"], " (brillante)" if card["shiny"] else "")
+            page.wait_for_timeout(API_ACTION_PAUSE)
+        return opened
 
     def open_packs(self, dry_run: bool, limit: int | None = None) -> int:
         """Ouvre les paquets disponibles (tous, ou au plus `limit`) : « Ouvrir », faire
@@ -810,6 +899,15 @@ class WikiMasters:
         self.step(f"bid-ready-{auction_id}")
         if dry_run:
             return "dry_run", amount
+        if self.config.actions_via_api:
+            status, data, text = self.api_post(f"/api/marketplace/{auction_id}/bid", {"amount": amount})
+            if 200 <= status < 300:
+                confirmed = data if isinstance(data, dict) and "current_bid" in data else self.fetch_auction(auction_id)
+                if (confirmed or {}).get("current_bid") and confirmed["current_bid"] >= amount:
+                    return "bid", amount
+            log.warning("Mise refusée par le site (HTTP %d : %s).", status, text[:200])
+            self.snapshot(f"bid-refused-{auction_id}")
+            return "failed", amount
         page.get_by_role("button", name=BID_BUTTON).first.click()
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:

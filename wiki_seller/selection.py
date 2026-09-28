@@ -125,6 +125,7 @@ class SaleItem:
     average: float | None  # None : prix inconnu côté API, lu dans la fenêtre d'enchère
     price: int | None
     copies_to_sell: int
+    copy_ids: tuple[str, ...] = ()  # exemplaires possédés (secours si le site attend leur id)
 
 
 @dataclass
@@ -158,7 +159,8 @@ def build_sale_plan(
         if copies <= 0:
             continue
         if group.card_id in unknown_prices:
-            unknown.append(SaleItem(group.card_id, group.title, group.rarity, None, None, copies))
+            unknown.append(SaleItem(group.card_id, group.title, group.rarity, None, None, copies,
+                                    tuple(group.copy_ids)))
             continue
         average = averages.get(group.card_id)
         if not average or average <= 0:
@@ -168,7 +170,8 @@ def build_sale_plan(
         if price < 1:
             skipped.append((group.title, f"prix calculé nul (moyenne {average})"))
             continue
-        items.append(SaleItem(group.card_id, group.title, group.rarity, average, price, copies))
+        items.append(SaleItem(group.card_id, group.title, group.rarity, average, price, copies,
+                              tuple(group.copy_ids)))
     items.sort(key=lambda i: (-i.average, normalize_name(i.title)))
     unknown.sort(key=lambda i: normalize_name(i.title))
     return SalePlan(items=items + unknown, skipped=skipped)

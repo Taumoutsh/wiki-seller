@@ -176,7 +176,7 @@ def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", 
 class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
                  mail="me@example.com", password="secret", sales_forbidden=False,
-                 challenge="auto", packs=0, auctions=None, seen_after_ms=0):
+                 challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="card"):
         self.collection = collection
         self.averages = averages  # card_id -> moyenne API
         self.ui_averages = ui_averages if ui_averages is not None else {}
@@ -188,6 +188,8 @@ class FakeWikiMasters:
         self.challenge = challenge
         self.packs = packs
         self.seen_after_ms = seen_after_ms
+        self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
+        self.api_listings = []  # corps des mises en vente reçues par l'API
         self.packs_opened = 0
         self.auctions = {a["id"]: a for a in auctions or []}
         self.bids = []  # (auction_id, montant) misés par nous
@@ -304,7 +306,8 @@ class FakeWikiMasters:
                         return self._send(400, {"error": "mise trop basse"})
                     site.bids.append((auction["id"], body["amount"]))
                     auction.update(current_bid=body["amount"], effective_bid=body["amount"], current_bidder_id=ME)
-                    return self._send(200, {})
+                    return self._send(200, {"auction_id": auction["id"], "current_bid": body["amount"],
+                                            "bidder_balance": 1747 - body["amount"]})
                 if self.path == "/auth/signup":
                     site.signups += 1
                     return self._send(200, {})
@@ -315,12 +318,22 @@ class FakeWikiMasters:
                     return self._send(400, {"error": "bad credentials"})
                 if self.path == "/api/marketplace" and self._authed():
                     if len(site.selling) >= site.max_auctions:
-                        return self._send(400, {"error": "quota"})
+                        return self._send(400, {"error": "Nombre maximum d'enchères actives atteint"})
+                    if "base_amount" in body:  # requête directe, comme le vrai site
+                        by_card = {c["card"]["id"]: c for c in site.collection}
+                        by_copy = {c["id"]: c for c in site.collection}
+                        known = by_copy if site.listing_id == "copy" else by_card
+                        if body["card_id"] not in known:
+                            return self._send(400, {"error": "Carte introuvable"})
+                        site.api_listings.append(body)
+                        labels = {10: "10 min", 30: "30 min", 60: "1 h"}
+                        body = {"card_id": body["card_id"], "title": known[body["card_id"]]["card"]["wikipedia_title"],
+                                "price": str(body["base_amount"]), "duration": labels[body["duration_minutes"]]}
                     site.listings.append(body)
                     auction = {"id": f"a{len(site.listings)}", "card_id": body["card_id"], "status": "active",
                                "end_at": "2030-01-01T10:00:00Z"}
                     site.selling.append(auction)
-                    return self._send(200, {"auction_id": auction["id"]})
+                    return self._send(201, {"auction_id": auction["id"]})
                 return self._send(404, {})
 
         return Handler

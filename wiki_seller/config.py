@@ -52,6 +52,13 @@ def _hours(value: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+def _actions_via(value: str) -> bool:
+    value = value.strip().lower() or "api"
+    if value not in ("api", "page"):
+        raise ConfigError("ACTIONS_VIA doit valoir « api » (requêtes directes) ou « page » (clics).")
+    return value == "api"
+
+
 def _positive_int(name: str) -> int | None:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -90,6 +97,8 @@ class Config:
     packs_hours: tuple[int, int] | None = (0, 6)
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
     api_trace: bool = False
+    # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
+    actions_via_api: bool = False
 
     @property
     def pass_interval(self) -> timedelta:
@@ -166,4 +175,5 @@ def load_config() -> Config:
         snipe_lead=snipe_lead or timedelta(seconds=20),
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
         api_trace=_bool(os.getenv("API_TRACE"), False),
+        actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),
     )

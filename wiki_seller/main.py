@@ -145,9 +145,17 @@ def run_snipe(config: Config, dry_run: bool = False, debug: bool = False) -> Non
         run_bids(site, config, dry_run, snipe_only=True)
 
 
+def _list(site: WikiMasters, config: Config, item, dry_run: bool):
+    """Par l'API quand le prix moyen est connu ; sinon par la fenêtre d'enchère, qui
+    affiche la « Moyenne »."""
+    if config.actions_via_api and item.average:
+        return site.list_card_api(item.card_id, item.copy_ids, item.title, item.average, dry_run)
+    return site.list_card(item.title, item.average, dry_run)
+
+
 def _open_packs(site: WikiMasters, dry_run: bool) -> None:
     try:
-        opened = site.open_packs(dry_run)
+        opened = (site.open_packs_api if site.config.actions_via_api else site.open_packs)(dry_run)
         if opened:
             log.info("Paquets : %d ouvert(s).", opened)
     except SessionExpired:
@@ -230,12 +238,12 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
         for _ in range(item.copies_to_sell):
             if listed >= free:
                 break
-            result = site.list_card(item.title, item.average, dry_run)
+            result = _list(site, config, item, dry_run)
             if result.status is ListingStatus.FAILED:
                 # Souvent passager (« Le chargement de la collection a échoué », fenêtre lente).
                 log.info("%s : échec (%s), nouvel essai.", item.title, result.detail)
                 time.sleep(RETRY_LISTING_AFTER)
-                result = site.list_card(item.title, item.average, dry_run)
+                result = _list(site, config, item, dry_run)
             if result.status in (ListingStatus.LISTED, ListingStatus.DRY_RUN):
                 listed += 1
                 if result.status is ListingStatus.LISTED:
@@ -352,8 +360,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.trace_api:
         config = dataclasses.replace(config, api_trace=True)
     setup_logging(config)
-    log.info("Démarrage%s : raretés %s, paquets %s, enchères « %s », passe toutes les %s, achats %s.",
-             " (simulation)" if args.dry_run else "", ",".join(config.sell_rarities) or "toutes",
+    log.info("Démarrage%s (actions par %s) : raretés %s, paquets %s, enchères « %s », passe toutes les %s, achats %s.",
+             " (simulation)" if args.dry_run else "", "l'API" if config.actions_via_api else "la page",
+             ",".join(config.sell_rarities) or "toutes",
              "-".join(map(str, config.packs_hours)) + " h" if config.packs_hours else "désactivés",
              config.auction_duration_label, config.pass_interval, config.wanted_cards_file)
 

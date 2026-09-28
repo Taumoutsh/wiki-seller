@@ -161,6 +161,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `20` | Secondes avant la fin d'une enchère pour surenchérir |
+| `ACTIONS_VIA` | `api` | `api` : paquets, ventes et mises par requêtes directes ; `page` : clics dans les pages (ancien mode) |
 | `API_TRACE` | *(vide)* | `1` : noter les appels à l'API du site dans `state/api.log` (sans cookies ni en-têtes) ; équivaut à `--trace-api` |
 | `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
 | `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
@@ -193,7 +194,12 @@ dans `state/`.
   script utilise l'API JSON que le site appelle lui-même (`/api/my-collection`,
   `/api/marketplace?mine=1`, `/api/marketplace/cards/<id>/sales?scope=summary`),
   depuis la page connectée.
-- **Mise en vente** : le script passe uniquement par l'interface, comme à la main.
+- **Actions** (par défaut, `ACTIONS_VIA=api`) : les requêtes que la page envoie elle-même,
+  depuis la page connectée : `POST /api/packs/open` (sans corps, renvoie les 5 cartes),
+  `POST /api/marketplace` (`card_id`, `base_amount`, `duration_minutes`) et
+  `POST /api/marketplace/<id>/bid` (`amount`, lu dans le champ prérempli de la page de
+  l'enchère). Une carte sans prix moyen côté API passe par la fenêtre d'enchère.
+- **Mise en vente avec `ACTIONS_VIA=page`** : le script passe par l'interface, comme à la main.
   Le prix de la mise est calculé à partir de la « Moyenne » affichée dans la fenêtre
   d'enchère. Le prix moyen de l'API ne sert qu'au classement, et de secours si le
   libellé est absent.
