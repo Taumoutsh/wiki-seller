@@ -88,6 +88,8 @@ class Config:
     snipe_lead: timedelta = timedelta(seconds=20)
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
     packs_hours: tuple[int, int] | None = (0, 6)
+    # Journal des appels à l'API du site dans state/api.log (--trace-api).
+    api_trace: bool = False
 
     @property
     def pass_interval(self) -> timedelta:
@@ -104,6 +106,10 @@ class Config:
     @property
     def wanted_state_file(self) -> Path:
         return self.state_dir / "wanted_state.json"
+
+    @property
+    def api_trace_file(self) -> Path:
+        return self.state_dir / "api.log"
 
     @property
     def debug_dir(self) -> Path:
@@ -159,4 +165,5 @@ def load_config() -> Config:
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
         snipe_lead=snipe_lead or timedelta(seconds=20),
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
+        api_trace=_bool(os.getenv("API_TRACE"), False),
     )

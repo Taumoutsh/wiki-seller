@@ -161,6 +161,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `20` | Secondes avant la fin d'une enchère pour surenchérir |
+| `API_TRACE` | *(vide)* | `1` : noter les appels à l'API du site dans `state/api.log` (sans cookies ni en-têtes) ; équivaut à `--trace-api` |
 | `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
 | `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
 

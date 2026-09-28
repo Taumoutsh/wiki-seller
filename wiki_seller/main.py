@@ -27,6 +27,7 @@ from .selection import (
     parse_collection,
 )
 from .site import ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
+from .trace import install_api_trace
 
 log = logging.getLogger("wiki_seller")
 
@@ -106,6 +107,8 @@ def open_site(config: Config, debug: bool):
             viewport={"width": 1440, "height": 900},
         )
         context.set_default_timeout(20000)
+        if config.api_trace:
+            install_api_trace(context, config.base_url, config.api_trace_file)
         site = WikiMasters(context.new_page(), config, debug=debug)
         try:
             site.ensure_logged_in()
@@ -334,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="tout simuler : ni « Lancer l'enchère », ni « Miser », ni ouverture de paquets")
     parser.add_argument("--loop", action="store_true", help="tourner en continu (relance RUN_INTERVAL après la dernière vente)")
     parser.add_argument("--headed", action="store_true", help="afficher le navigateur")
+    parser.add_argument("--trace-api", action="store_true",
+                        help="noter les appels à l'API du site dans state/api.log (sans cookies)")
     parser.add_argument("--debug", action="store_true", help="captures d'écran à chaque étape dans state/debug/")
     args = parser.parse_args(argv)
 
@@ -344,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.headed:
         config = dataclasses.replace(config, headless=False)
+    if args.trace_api:
+        config = dataclasses.replace(config, api_trace=True)
     setup_logging(config)
     log.info("Démarrage%s : raretés %s, paquets %s, enchères « %s », passe toutes les %s, achats %s.",
              " (simulation)" if args.dry_run else "", ",".join(config.sell_rarities) or "toutes",

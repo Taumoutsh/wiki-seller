@@ -225,3 +225,22 @@ def test_pack_waits_for_each_card_to_be_counted(tmp_path):
         with open_site(make_config(tmp_path, site.url, []), debug=False) as wm:
             assert wm.open_packs(dry_run=False) == 2
     assert site.packs_opened == 2
+
+
+def test_api_trace_logs_calls_without_secrets(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}],
+                             api_trace=True)
+        run_once(config)
+    lines = [json.loads(l) for l in config.api_trace_file.read_text().splitlines()]
+    bids = [l for l in lines if l["method"] == "POST" and l["path"].endswith("/bid")]
+    assert bids and bids[0]["sent"] == '{"amount": 150}' and bids[0]["status"] == 200
+    assert any(l["path"].startswith("/api/marketplace?") and l["received"] for l in lines)
+    assert "session=ok" not in config.api_trace_file.read_text()
+
+
+def test_redact_masks_secret_fields():
+    from wiki_seller.trace import redact
+
+    assert redact({"amount": 5, "access_token": "x", "nested": [{"refresh_token": "y", "id": 1}]}) == \
+        {"amount": 5, "access_token": "***", "nested": [{"refresh_token": "***", "id": 1}]}
