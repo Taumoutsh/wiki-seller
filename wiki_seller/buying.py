@@ -154,14 +154,18 @@ class WantedState:
         tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.path)
 
-    def next_snipe_at(self, lead: timedelta, offset: timedelta = timedelta(0)) -> datetime | None:
-        """Heure (horloge locale) à laquelle se réveiller pour la prochaine fin d'enchère suivie."""
+    def next_snipe_at(self, lead: timedelta, now: datetime | None = None,
+                      offset: timedelta = timedelta(0)) -> datetime | None:
+        """Heure (horloge locale) à laquelle se réveiller pour la prochaine fin d'enchère
+        suivie encore à venir. Si ce moment est déjà passé (fin repoussée d'une minute à
+        chaque surenchère), c'est maintenant."""
+        now = now or datetime.now(timezone.utc)
         ends = [parse_time(c.get("end_at")) for c in self.data["cards"].values()
                 if c.get("status") == "bidding"]
-        ends = [e for e in ends if e]
+        ends = [e - offset for e in ends if e and e - offset > now]
         if not ends:
             return None
-        return min(ends) - offset - max(lead, WATCH_START) - SNIPE_STARTUP
+        return max(min(ends) - max(lead, WATCH_START) - SNIPE_STARTUP, now)
 
 
 def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> None:
@@ -399,4 +403,4 @@ class _Buyer:
 
 
 WATCH_POLL = 1  # secondes entre deux vérifications pendant la fin d'enchère
-WATCH_GUARD = timedelta(minutes=15)  # jamais plus longtemps sur une même enchère
+WATCH_GUARD = timedelta(minutes=60)  # guerre d'enchères : chaque mise ajoute une minute

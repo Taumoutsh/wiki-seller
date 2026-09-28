@@ -109,6 +109,14 @@ def test_packs_window_and_next_wake(tmp_path):
     later = now + timedelta(minutes=33)
     night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": later.isoformat()}}}))
     assert next_wake(next_pass, night, now) == (later - timedelta(seconds=105), True)
+    # Fin repoussée (surenchères) : l'heure de réveil est passée mais la fin est à venir.
+    soon = now + timedelta(seconds=40)
+    night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": soon.isoformat()}}}))
+    assert next_wake(next_pass, night, now) == (now, True)
+    # Enchère terminée (pas encore réglée par une passe) : pas de réveil en boucle.
+    past = now - timedelta(seconds=10)
+    night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": past.isoformat()}}}))
+    assert next_wake(next_pass, night, now) == (next_pass, False)
 
 
 def test_wanted_cards_file(tmp_path):

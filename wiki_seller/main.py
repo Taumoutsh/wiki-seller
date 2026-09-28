@@ -336,10 +336,10 @@ def next_run_at(result: RunResult, config: Config, now: datetime) -> datetime:
 def next_wake(next_pass: datetime, config: Config, now: datetime) -> tuple[datetime, bool]:
     """Prochain réveil : la passe normale, ou avant, la fin d'une enchère suivie.
     Renvoie (heure, True si c'est un réveil de surenchère)."""
-    snipe = WantedState(config.wanted_state_file).next_snipe_at(config.snipe_lead)
+    snipe = WantedState(config.wanted_state_file).next_snipe_at(config.snipe_lead, now)
     # Une passe dure plusieurs minutes : un réveil qui tomberait pendant la passe passe avant.
-    if snipe and now - timedelta(seconds=30) <= snipe < next_pass + PASS_DURATION_GUARD:
-        return max(snipe, now), True
+    if snipe and snipe < next_pass + PASS_DURATION_GUARD:
+        return snipe, True
     return next_pass, False
 
 
