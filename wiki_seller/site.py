@@ -52,6 +52,7 @@ BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d \u00a0\u202f]*)", re.I)
 PACK_REVEAL_TIMEOUT = 60  # secondes pour faire défiler un paquet jusqu'à « Continuer »
 PACK_SIZE = 5  # cartes par paquet
 PACK_CARD_WAIT = 5  # secondes au plus sur une carte pour que le site la compte comme vue
+PACK_RATE_LIMIT_BUDGET = 600  # secondes d'attente cumulée au plus pour la limite de cadence
 API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythme humain
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
@@ -166,6 +167,21 @@ def pack_summary(cards: list[dict]) -> str:
     if others:
         parts.append(f"{others} autre(s)")
     return f"{len(cards)} cartes : {', '.join(parts)}"
+
+
+def rate_limit_wait(retry_after: object, offset: timedelta = timedelta(0)) -> float:
+    """Secondes à attendre avant `retry_after` (heure ISO du site), + 1 s de marge ;
+    entre 2 et 120 s si l'heure est absente ou incohérente."""
+    when = None
+    if isinstance(retry_after, str):
+        try:
+            when = datetime.fromisoformat(retry_after.replace("Z", "+00:00"))
+        except ValueError:
+            when = None
+    if when is None:
+        return 10.0
+    seconds = (when - (datetime.now(timezone.utc) + offset)).total_seconds() + 1
+    return min(max(seconds, 2.0), 120.0)
 
 
 def auction_minutes(label: str) -> int:
@@ -733,8 +749,22 @@ class WikiMasters:
             log.info("Simulation : %d paquet(s) seraient ouverts.", available)
             return 0
         opened = 0
-        for _ in range(min(available, limit or available, PACK_GUARD)):
+        target = min(available, limit or available, PACK_GUARD)
+        waited = 0.0
+        while opened < target:
             status, data, text = self.api_post("/api/packs/open")
+            if status == 429 and isinstance(data, dict) and not data.get("rate_limit_daily"):
+                # « Ouverture trop rapide » : le site dit quand réessayer (retry_after).
+                wait = rate_limit_wait(data.get("retry_after"), self.server_clock_offset())
+                if waited + wait > PACK_RATE_LIMIT_BUDGET:
+                    log.info("Paquets : cadence limitée par le site, suite à la prochaine passe.")
+                    break
+                log.info("Paquets : ouverture trop rapide, nouvel essai dans %.0f s.", wait)
+                waited += wait
+                page.wait_for_timeout(wait * 1000)
+                if isinstance(data.get("packs_remaining"), int):
+                    target = min(target, opened + data["packs_remaining"])
+                continue
             if not 200 <= status < 300:
                 log.info("Paquets : le site refuse l'ouverture (HTTP %d : %s).", status, text[:200])
                 break

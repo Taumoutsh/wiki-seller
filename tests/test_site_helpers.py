@@ -140,3 +140,14 @@ def test_pack_cards_and_summary():
                      {"title": "Loire", "rarity": "L", "shiny": False}]
     assert pack_summary(cards) == "3 cartes : 1 L, 1 UR, 1 C"
     assert pack_summary([]) == "contenu non lu"
+
+
+def test_rate_limit_wait():
+    from wiki_seller.site import rate_limit_wait
+
+    soon = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    assert 29 <= rate_limit_wait(soon) <= 32
+    assert rate_limit_wait(None) == 10.0
+    assert rate_limit_wait("2020-01-01T00:00:00Z") == 2.0  # déjà passé : petit délai
+    far = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    assert rate_limit_wait(far) == 120.0

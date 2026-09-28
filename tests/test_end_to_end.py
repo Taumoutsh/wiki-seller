@@ -313,3 +313,13 @@ def test_card_won_elsewhere_is_not_bought_again(tmp_path):
     assert site.bids == []
     state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
     assert state["status"] == "won" and state["price"] == 210
+
+
+def test_api_packs_wait_for_rate_limit(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, pack_cooldown=3) as site:
+        from wiki_seller.main import open_site
+        with open_site(make_config(tmp_path, site.url, [], actions_via_api=True), debug=False) as wm:
+            with caplog.at_level("INFO"):
+                assert wm.open_packs_api(dry_run=False) == 3
+    assert site.packs_opened == 3 and site.rate_limited >= 1
+    assert "ouverture trop rapide, nouvel essai" in caplog.text

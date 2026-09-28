@@ -6,6 +6,8 @@ recherche, tuiles, fenêtre « Mettre aux enchères » et « Prix moyen » charg
 
 import json
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -176,7 +178,8 @@ def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", 
 class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
                  mail="me@example.com", password="secret", sales_forbidden=False,
-                 challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="card"):
+                 challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="card",
+                 pack_cooldown=0.0):
         self.collection = collection
         self.averages = averages  # card_id -> moyenne API
         self.ui_averages = ui_averages if ui_averages is not None else {}
@@ -188,6 +191,9 @@ class FakeWikiMasters:
         self.challenge = challenge
         self.packs = packs
         self.seen_after_ms = seen_after_ms
+        self.pack_cooldown = pack_cooldown  # secondes entre deux ouvertures (429 sinon)
+        self.last_pack_at = -1e9
+        self.rate_limited = 0
         self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
         self.api_listings = []  # corps des mises en vente reçues par l'API
         self.packs_opened = 0
@@ -292,6 +298,16 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path == "/api/packs/open" and self._authed() and site.packs > 0 and site.pack_cooldown:
+                    now = time.monotonic()
+                    if now - site.last_pack_at < site.pack_cooldown:
+                        retry = datetime.now(timezone.utc) + timedelta(seconds=site.pack_cooldown - (now - site.last_pack_at))
+                        site.rate_limited += 1
+                        return self._send(429, {"error": "Ouverture trop rapide. Attends un instant avant d'ouvrir un autre paquet.",
+                                                "rate_limited": True, "rate_limit_daily": False,
+                                                "retry_after": retry.isoformat().replace("+00:00", "Z"),
+                                                "packs_remaining": site.packs})
+                    site.last_pack_at = now
                 if self.path == "/api/packs/open" and self._authed() and site.packs > 0:
                     site.packs -= 1
                     site.packs_opened += 1
