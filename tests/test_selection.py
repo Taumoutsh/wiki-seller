@@ -90,3 +90,22 @@ def test_cards_with_unknown_api_price_come_last():
     groups = parse_collection([entry("a1", "A", "Zèbre"), entry("b1", "B", "Abeille"), entry("c1", "C", "Connue")])
     plan = build_sale_plan(groups, set(), {"C": 50}, [], 0.7, unknown_prices={"A", "B"})
     assert [(i.title, i.price) for i in plan.items] == [("Connue", 35), ("Abeille", None), ("Zèbre", None)]
+
+
+def test_adjust_to_market():
+    from wiki_seller.selection import adjust_to_market, competitor_price
+
+    # Sous la moyenne des enchères en cours : + un écart type.
+    up = adjust_to_market(228, 326, [300, 320, 340], 0.5)
+    assert up.price == 244 and up.competitors == 3 and round(up.stdev) == 16
+    # Au-dessus : - un écart type.
+    assert adjust_to_market(228, 326, [100, 120], 0.5).price == 218
+    # Jamais sous 50 % du prix moyen.
+    assert adjust_to_market(228, 326, [100, 300], 0.5).price == 163
+    # Moins de deux enchères : inchangé.
+    assert adjust_to_market(228, 326, [5], 0.5).price == 228
+    assert adjust_to_market(228, 326, [], 0.5).price == 228
+    # Prix d'une enchère : mise actuelle, sinon mise de départ.
+    assert competitor_price({"current_bid": 40, "base_amount": 10}) == 40
+    assert competitor_price({"current_bid": None, "base_amount": 10}) == 10
+    assert competitor_price({}) is None

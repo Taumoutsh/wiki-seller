@@ -52,6 +52,16 @@ def _hours(value: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+def _ratio(name: str, default: str) -> float:
+    try:
+        value = float(os.getenv(name, default) or default)
+    except ValueError as exc:
+        raise ConfigError(f"{name} doit être un nombre, ex. {default}") from exc
+    if not 0 < value <= 1:
+        raise ConfigError(f"{name} doit être compris entre 0 et 1.")
+    return value
+
+
 def _actions_via(value: str) -> bool:
     value = value.strip().lower() or "api"
     if value not in ("api", "page"):
@@ -99,6 +109,10 @@ class Config:
     api_trace: bool = False
     # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
     actions_via_api: bool = False
+    # Prix de vente ajusté d'un écart type d'après les enchères en cours de la même carte,
+    # sans descendre sous price_floor_ratio × prix moyen.
+    market_adjust: bool = False
+    price_floor_ratio: float = 0.5
 
     @property
     def pass_interval(self) -> timedelta:
@@ -176,4 +190,6 @@ def load_config() -> Config:
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
         api_trace=_bool(os.getenv("API_TRACE"), False),
         actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),
+        market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),
+        price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),
     )

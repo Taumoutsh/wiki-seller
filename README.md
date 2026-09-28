@@ -19,6 +19,7 @@ Met automatiquement aux enchères les cartes de votre collection
 5. pour chaque carte, tant qu'il reste de la place : ouvre la carte dans
    « Collection », clique sur **« Mettre aux enchères »**, attend la **« Moyenne »**,
    saisit une mise de départ de **70 % du prix moyen arrondi à l'entier inférieur**,
+   ajustée d'après les enchères en cours de la même carte (voir `MARKET_ADJUST`),
    choisit **1 h** et clique sur **« Lancer l'enchère »**. Une carte sans prix moyen
    (vide ou 0) est ignorée.
 
@@ -168,6 +169,8 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `20` | Secondes avant la fin d'une enchère pour surenchérir |
+| `MARKET_ADJUST` | `true` | Avant chaque vente, lit les enchères en cours de la même carte (mise actuelle, sinon mise de départ) : si le prix est sous leur moyenne, + un écart type ; au-dessus, - un écart type ; moins de 2 enchères : inchangé |
+| `PRICE_FLOOR_RATIO` | `0.5` | Plancher de l'ajustement : jamais sous cette part du prix moyen |
 | `ACTIONS_VIA` | `api` | `api` : paquets, ventes et mises par requêtes directes ; `page` : clics dans les pages (ancien mode) |
 | `API_TRACE` | *(vide)* | `1` : noter les appels à l'API du site dans `state/api.log` (sans cookies ni en-têtes) ; équivaut à `--trace-api` |
 | `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |

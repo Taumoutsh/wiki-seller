@@ -4,6 +4,7 @@ collection, calcul des prix et ordre de mise en vente."""
 import json
 import math
 import re
+import statistics
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -175,3 +176,40 @@ def build_sale_plan(
     items.sort(key=lambda i: (-i.average, normalize_name(i.title)))
     unknown.sort(key=lambda i: normalize_name(i.title))
     return SalePlan(items=items + unknown, skipped=skipped)
+
+
+@dataclass
+class PriceAdjustment:
+    price: int
+    base: int
+    competitors: int
+    mean: float | None = None
+    stdev: float | None = None
+
+
+def competitor_price(auction: dict) -> int | None:
+    """Prix d'une enchère en cours : la mise actuelle, sinon la mise de départ."""
+    for key in ("current_bid", "base_amount", "effective_bid"):
+        value = auction.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return int(value)
+    return None
+
+
+def adjust_to_market(base: int, average: float, prices: list[int], floor_ratio: float) -> PriceAdjustment:
+    """Ajuste le prix de mise en vente d'après les enchères en cours de la même carte :
+    sous leur moyenne, on ajoute un écart type ; au-dessus, on en retire un. Moins de
+    deux enchères : prix inchangé. Jamais sous floor_ratio × prix moyen."""
+    if len(prices) < 2:
+        return PriceAdjustment(base, base, len(prices))
+    mean = statistics.fmean(prices)
+    stdev = statistics.pstdev(prices)
+    if base < mean:
+        price = base + stdev
+    elif base > mean:
+        price = base - stdev
+    else:
+        price = base
+    floor = math.floor(Decimal(str(average)) * Decimal(str(floor_ratio)))
+    price = max(math.floor(price), floor, 1)
+    return PriceAdjustment(price, base, len(prices), mean, stdev)

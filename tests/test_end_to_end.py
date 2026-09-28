@@ -355,3 +355,24 @@ def test_api_packs_wait_for_rate_limit(tmp_path, caplog):
                 assert wm.open_packs_api(dry_run=False) == 3
     assert site.packs_opened == 3 and site.rate_limited >= 1
     assert "ouverture trop rapide, nouvel essai" in caplog.text
+
+
+def test_sale_price_follows_current_auctions_of_the_card(tmp_path, caplog):
+    rivals = [market_auction("t1", "Tour Eiffel", 3000), market_auction("t2", "Tour Eiffel", 2000, current=4000),
+              market_auction("t3", "Tour Eiffel (homonymie)", 1)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, auctions=rivals) as site:
+        config = make_config(tmp_path, site.url, [], actions_via_api=True, market_adjust=True)
+        with caplog.at_level("INFO"):
+            run_once(config)
+    # 70 % de 5000 = 3500, moyenne des enchères 3500 (3000 et 4000, pas l'homonyme) :
+    # égal, donc inchangé. Avec une enchère de plus à 1000, voir le test suivant.
+    assert site.api_listings[0]["base_amount"] == 3500
+    assert "Tour Eiffel : prix 3500 → 3500 (2 enchère(s) en cours" in caplog.text
+
+
+def test_sale_price_lowered_when_above_current_auctions(tmp_path):
+    rivals = [market_auction("t1", "Tour Eiffel", 3000), market_auction("t2", "Tour Eiffel", 2000)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, auctions=rivals) as site:
+        run_once(make_config(tmp_path, site.url, [], actions_via_api=True, market_adjust=True))
+    # 3500 au-dessus de la moyenne 2500 : moins l'écart type 500.
+    assert site.api_listings[0]["base_amount"] == 3000

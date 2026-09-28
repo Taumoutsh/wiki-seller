@@ -583,12 +583,14 @@ class WikiMasters:
             self.page.keyboard.press("Escape")
 
     def list_card_api(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float,
-                      dry_run: bool) -> ListingResult:
+                      dry_run: bool, adjust=None) -> ListingResult:
         """Mise en vente par l'API : POST /api/marketplace {card_id, base_amount,
         duration_minutes}. Malgré son nom, `card_id` attend l'identifiant de l'exemplaire
         possédé (avec celui de la carte, le site répond 409 « Vous ne possédez pas cette
         carte ») : on essaie les exemplaires, puis la carte en dernier recours."""
         price = sale_price(average, self.config.price_ratio)
+        if adjust and price >= 1:
+            price = adjust(price, average)
         if price < 1:
             return ListingResult(ListingStatus.NO_AVERAGE, average=average, detail="prix calculé nul")
         duration = auction_minutes(self.config.auction_duration_label)
@@ -608,7 +610,8 @@ class WikiMasters:
                 break
         return ListingResult(ListingStatus.FAILED, price, average, f"HTTP {status} : {text[:200]}")
 
-    def list_card(self, title: str, fallback_average: float | None, dry_run: bool) -> ListingResult:
+    def list_card(self, title: str, fallback_average: float | None, dry_run: bool,
+                  adjust=None) -> ListingResult:
         page = self.page
         try:
             self.open_card(title)
@@ -632,6 +635,8 @@ class WikiMasters:
                 return ListingResult(ListingStatus.NO_AVERAGE)
 
             price = sale_price(average, self.config.price_ratio)
+            if adjust and price >= 1:
+                price = adjust(price, average)
             if price < 1:
                 self._cancel()
                 return ListingResult(ListingStatus.NO_AVERAGE, average=average, detail="prix calculé nul")

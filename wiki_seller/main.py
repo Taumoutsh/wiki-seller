@@ -17,13 +17,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.sync_api import sync_playwright
 
-from .buying import WantedCardsError, WantedState, run_bids
+from .buying import WantedCardsError, WantedState, auction_title, run_bids
 from .config import Config, ConfigError, load_config
 from .selection import (
     SafeCardsError,
+    adjust_to_market,
     build_sale_plan,
+    competitor_price,
     copies_available,
     load_safe_cards,
+    normalize_name,
     parse_collection,
 )
 from .site import ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
@@ -145,15 +148,47 @@ def run_snipe(config: Config, dry_run: bool = False, debug: bool = False) -> Non
         run_bids(site, config, dry_run, snipe_only=True)
 
 
-def _list(site: WikiMasters, config: Config, item, dry_run: bool, copy_index: int = 0):
+def market_adjuster(site: WikiMasters, config: Config, title: str, my_auction_ids: set[str]):
+    """Fonction (prix de base, prix moyen) → prix ajusté d'après les enchères en cours de
+    la même carte (hors les vôtres), ou None si l'ajustement est désactivé."""
+    if not config.market_adjust:
+        return None
+
+    def adjust(base: int, average: float) -> int:
+        try:
+            auctions = site.search_auctions(title)
+        except SessionExpired:
+            raise
+        except Exception as exc:
+            log.warning("%s : enchères en cours illisibles (%s), prix non ajusté.", title, exc)
+            return base
+        prices = [p for a in auctions
+                  if normalize_name(auction_title(a)) == normalize_name(title)
+                  and a.get("status", "active") == "active" and a.get("id") not in my_auction_ids
+                  and (p := competitor_price(a))]
+        result = adjust_to_market(base, average, prices, config.price_floor_ratio)
+        if result.mean is None:
+            log.info("%s : %d enchère(s) en cours, prix non ajusté (%d).", title, result.competitors, base)
+        else:
+            log.info("%s : prix %d → %d (%d enchère(s) en cours, moyenne %.0f, écart type %.0f).",
+                     title, base, result.price, result.competitors, result.mean, result.stdev)
+        return result.price
+
+    return adjust
+
+
+def _list(site: WikiMasters, config: Config, item, dry_run: bool, copy_index: int = 0,
+          my_auction_ids: set[str] = frozenset()):
     """Par l'API quand le prix moyen est connu ; sinon par la fenêtre d'enchère, qui
     affiche la « Moyenne ». Le n-ième exemplaire vendu dans la passe part avec le n-ième
     identifiant d'exemplaire (le premier vient d'être mis en vente)."""
     if config.actions_via_api and item.average:
         k = copy_index % len(item.copy_ids) if item.copy_ids else 0
         copies = item.copy_ids[k:] + item.copy_ids[:k]
-        return site.list_card_api(item.card_id, copies, item.title, item.average, dry_run)
-    return site.list_card(item.title, item.average, dry_run)
+        adjust = market_adjuster(site, config, item.title, my_auction_ids)
+        return site.list_card_api(item.card_id, copies, item.title, item.average, dry_run, adjust)
+    adjust = market_adjuster(site, config, item.title, my_auction_ids)
+    return site.list_card(item.title, item.average, dry_run, adjust)
 
 
 def _open_packs(site: WikiMasters, dry_run: bool) -> None:
@@ -232,6 +267,7 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
              ", ".join(f"{i.title} (~{i.average:g})" if i.average else f"{i.title} (prix ?)"
                        for i in plan.items[:free + 5]))
 
+    my_ids = {a.get("id") for a in market.selling if isinstance(a, dict)}
     listed = 0
     last_listing_at = None
     slots_full = False
@@ -241,12 +277,12 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
         for copy_index in range(item.copies_to_sell):
             if listed >= free:
                 break
-            result = _list(site, config, item, dry_run, copy_index)
+            result = _list(site, config, item, dry_run, copy_index, my_ids)
             if result.status is ListingStatus.FAILED:
                 # Souvent passager (« Le chargement de la collection a échoué », fenêtre lente).
                 log.info("%s : échec (%s), nouvel essai.", item.title, result.detail)
                 time.sleep(RETRY_LISTING_AFTER)
-                result = _list(site, config, item, dry_run, copy_index)
+                result = _list(site, config, item, dry_run, copy_index, my_ids)
             if result.status in (ListingStatus.LISTED, ListingStatus.DRY_RUN):
                 listed += 1
                 if result.status is ListingStatus.LISTED:
