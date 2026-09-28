@@ -111,9 +111,11 @@ def test_wanted_cards_file(tmp_path):
 
     path = tmp_path / "wanted.json"
     assert load_wanted_cards(path) == []
-    path.write_text('[{"name": " Tour Eiffel ", "max_price": 500}]')
-    assert [(c.name, c.max_price, c.key) for c in load_wanted_cards(path)] == [("Tour Eiffel", 500, "tour eiffel")]
-    for bad in ('{"name": "x"}', '[{"name": "x", "max_price": "10"}]', '[{"max_price": 10}]', "[,"):
+    path.write_text('[{"name": " Tour Eiffel ", "max_price": 500}, {"name": "Pomme", "max_price": 5, "copies": 3}]')
+    assert [(c.name, c.max_price, c.copies, c.key) for c in load_wanted_cards(path)] == [
+        ("Tour Eiffel", 500, 1, "tour eiffel"), ("Pomme", 5, 3, "pomme")]
+    for bad in ('{"name": "x"}', '[{"name": "x", "max_price": "10"}]', '[{"max_price": 10}]', "[,",
+                '[{"name": "x", "max_price": 10, "copies": 0}]'):
         path.write_text(bad)
         with pytest.raises(WantedCardsError):
             load_wanted_cards(path)

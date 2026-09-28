@@ -38,25 +38,29 @@ simulation (`--dry-run`), aucun paquet n'est ouvert.
 ```json
 [
   {"name": "Tour Eiffel", "max_price": 500},
-  {"name": "Victor Hugo", "max_price": 120}
+  {"name": "Victor Hugo", "max_price": 120, "copies": 2}
 ]
 ```
 
-Pour chaque carte, **un seul exemplaire** est acheté :
+`copies` (facultatif, 1 par défaut) est le nombre d'exemplaires à acheter, l'un après
+l'autre. Pour chaque carte :
 
 - si vous avez déjà une enchère sur cette carte dans « Mes enchères », elle est reprise ;
 - sinon, le script cherche la carte dans « Marché » et choisit l'enchère la moins chère
   dont la mise minimale ne dépasse pas `max_price` ;
 - il clique sur « Miser » avec le montant prérempli par le site (la mise minimale),
   jamais directement votre maximum ;
-- s'il est dépassé, il surenchérit à la passe suivante, tant que la limite le permet ;
+- s'il est dépassé, il **ne surenchérit pas tout de suite** : à chaque passe, il vérifie
+  la vraie mise minimale (champ prérempli) ; si elle reste dans la limite, il attend la
+  fin de l'enchère pour surenchérir ; sinon il abandonne cette enchère et en cherche
+  une autre ;
 - la boucle se réveille aussi **`SNIPE_LEAD` secondes (20 par défaut) avant la fin**
   pour surenchérir si besoin, puis surveille l'enchère jusqu'à sa vraie fin (le site la
   prolonge de 60 s après toute mise dans les 10 dernières secondes) ;
 - **une seule enchère à la fois par carte** : si vous menez déjà une enchère de cette
   carte dans « Mes enchères », le script la suit et ne mise nulle part ailleurs ;
-- une fois la carte gagnée (y compris sur une autre enchère que celle suivie), elle
-  n'est plus recherchée : un seul exemplaire est acheté.
+- chaque enchère gagnée (y compris une autre que celle suivie) compte ; une fois
+  `copies` exemplaires obtenus, la carte n'est plus recherchée.
 
 Le suivi (enchère choisie, heure de fin, carte obtenue) est dans
 `state/wanted_state.json` ; `wanted_cards.json` n'est jamais modifié par le script. Pour

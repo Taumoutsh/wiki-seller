@@ -923,11 +923,8 @@ class WikiMasters:
         auction = data.get("auction") if isinstance(data, dict) else None
         return auction if isinstance(auction, dict) else None
 
-    def place_bid(self, auction_id: str, max_price: int, dry_run: bool) -> tuple[str, int | None]:
-        """Ouvre l'enchère et clique sur « Miser » avec le montant prérempli par le site
-        (la mise minimale), s'il ne dépasse pas max_price.
-
-        Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
+    def read_min_bid(self, auction_id: str) -> int | None:
+        """Mise minimale exacte : le montant prérempli sur la page de l'enchère."""
         page = self.page
         page.goto(self.url(f"/marketplace/{auction_id}"), wait_until="domcontentloaded")
         field = page.locator(BID_INPUT).first
@@ -938,8 +935,16 @@ class WikiMasters:
                 arg=BID_INPUT, timeout=10000)
         except PlaywrightTimeout:
             self.snapshot(f"bid-{auction_id}")
-            return "failed", None
-        amount = parse_int(field.input_value())
+            return None
+        return parse_int(field.input_value())
+
+    def place_bid(self, auction_id: str, max_price: int, dry_run: bool) -> tuple[str, int | None]:
+        """Ouvre l'enchère et mise le montant prérempli par le site (la mise minimale),
+        s'il ne dépasse pas max_price.
+
+        Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
+        page = self.page
+        amount = self.read_min_bid(auction_id)
         if amount is None:
             return "failed", None
         if amount > max_price:

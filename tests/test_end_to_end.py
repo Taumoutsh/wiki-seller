@@ -155,34 +155,65 @@ def eiffel_auctions():
             market_auction("e4", "Gustave Eiffel", 100, seller=ME)]
 
 
-def test_buys_the_cheapest_matching_auction_and_rebids_within_limit(tmp_path):
+def test_bids_once_then_rebids_only_at_the_end_or_moves_on(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
     wanted = [{"name": "gustave eiffel", "max_price": 300}]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=wanted, snipe_lead=timedelta(seconds=25))
+        run_once(config)
+        assert site.bids == [("e2", 150)]  # la moins chère, ni l'homonyme ni la nôtre
+
+        site.outbid("e2", 250)
+        run_once(config)  # dépassé mais dans la limite : pas de surenchère pendant une passe
+        assert len(site.bids) == 1
+        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+        assert state["status"] == "bidding" and state["auction_id"] == "e2"
+
+        # Réveil de fin d'enchère : surenchère, dans la limite.
+        site.auctions["e2"]["end_at"] = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+        run_snipe(config)
+        assert site.bids[-1] == ("e2", 260)
+
+        # Dépassé au-delà de la limite : abandon, et mise sur une autre enchère de la carte.
+        site.auctions["e2"]["end_at"] = "2030-01-01T10:00:00+00:00"
+        site.outbid("e2", 295)
+        run_once(config)
+        assert site.bids[-1] == ("e1", 200)
+        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+        assert state["auction_id"] == "e1"
+
+        site.settle("e1")  # gagnée
+        run_once(config)
+    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+    assert state["status"] == "won" and state["won"] == {"e1": 200}
+
+
+def test_copies_buys_several_one_after_the_other(tmp_path):
+    wanted = [{"name": "Gustave Eiffel", "max_price": 300, "copies": 2}]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted)
         run_once(config)
-        assert site.bids == [("e2", 150)]  # la moins chère, ni l'homonyme ni la nôtre
-        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-        assert state["status"] == "bidding" and state["auction_id"] == "e2" and state["end_at"]
-
-        run_once(config)  # on mène déjà : pas de nouvelle mise
-        assert len(site.bids) == 1
-
-        site.outbid("e2", 250)
-        run_snipe(config)  # la fin est loin : la surenchère attend la passe normale
-        assert len(site.bids) == 1
-        run_once(config)
-        assert site.bids[-1] == ("e2", 260)
-
-        site.outbid("e2", 295)  # prochaine mise 305 > 300 : on s'arrête là
-        run_once(config)
-        assert site.bids[-1] == ("e2", 260)
-
-        # Le rival se retire (enchère annulée de son côté) : on remporte à 260.
-        site.auctions["e2"].update(current_bid=260, current_bidder_id=ME)
+        assert site.bids == [("e2", 150)]
         site.settle("e2")
+        run_once(config)  # 1/2 : on passe à une autre enchère
+        assert site.bids[-1] == ("e1", 200)
+        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
+        assert state["status"] == "bidding" and list(state["won"]) == ["e2"]
+        site.settle("e1")
         run_once(config)
     state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-    assert state["status"] == "won"
+    assert state["status"] == "won" and set(state["won"]) == {"e1", "e2"} and len(site.bids) == 2
+
+
+def test_old_won_state_is_kept(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}])
+        config.wanted_state_file.parent.mkdir(parents=True, exist_ok=True)
+        config.wanted_state_file.write_text(json.dumps({"my_id": ME, "cards": {"gustave eiffel": {
+            "name": "Gustave Eiffel", "status": "won", "auction_id": "old", "price": 1}}}))
+        run_once(config)
+    assert site.bids == []
 
 
 def test_buying_dry_run_places_no_bid(tmp_path):
@@ -313,7 +344,7 @@ def test_card_won_elsewhere_is_not_bought_again(tmp_path):
         run_once(config)
     assert site.bids == []
     state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-    assert state["status"] == "won" and state["price"] == 210
+    assert state["status"] == "won" and state["won"] == {"e1": 210}
 
 
 def test_api_packs_wait_for_rate_limit(tmp_path, caplog):

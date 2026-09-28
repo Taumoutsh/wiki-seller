@@ -1,4 +1,4 @@
 [
   {"name": "Tour Eiffel", "max_price": 500},
-  {"name": "Victor Hugo", "max_price": 120}
+  {"name": "Victor Hugo", "max_price": 120, "copies": 2}
 ]
