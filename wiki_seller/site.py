@@ -5,6 +5,7 @@ le site appelle lui-même, exécutée dans la page connectée. La mise en vente,
 se fait par l'interface : clic sur la carte, « Mettre aux enchères », lecture du
 « Prix moyen », saisie de la mise, durée, « Lancer l'enchère »."""
 
+import dataclasses
 import logging
 import re
 import time
@@ -92,6 +93,8 @@ class ListingResult:
 class MarketState:
     selling: list[dict]
     max_auctions: int
+    history: list = dataclasses.field(default_factory=list)  # vos ventes terminées
+    mine: dict = dataclasses.field(default_factory=dict)  # réponse complète de mine=1
 
     @property
     def free_slots(self) -> int:
@@ -464,7 +467,8 @@ class WikiMasters:
         max_auctions = data.get("maxConcurrentAuctions")
         if not isinstance(max_auctions, int) or max_auctions < 1:
             max_auctions = DEFAULT_MAX_AUCTIONS
-        return MarketState(selling=selling, max_auctions=max_auctions)
+        history = [a for a in data.get("history") or [] if isinstance(a, dict)]
+        return MarketState(selling=selling, max_auctions=max_auctions, history=history, mine=data)
 
     def fetch_average(self, card_id: str, rarity: str | None) -> float | None:
         """Prix moyen de la carte (None si aucune vente connue)."""

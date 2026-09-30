@@ -401,3 +401,26 @@ def test_night_sale_duration(tmp_path):
     with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1) as site:
         run_once(make_config(tmp_path, site.url, [], actions_via_api=True, night_durations=((0, 24, "12 h"),)))
     assert site.api_listings[0]["duration_minutes"] == 720
+
+
+def test_unsold_card_is_set_aside_then_retried(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    unsold = [{"id": f"h{i}", "seller_id": ME, "status": "expired", "winner_id": None, "final_price": None,
+               "card": {"id": "C", "wikipedia_title": "Tour Eiffel"}} for i in range(2)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1) as site:
+        site.history = unsold
+        config = make_config(tmp_path, site.url, [], actions_via_api=True)
+        run_once(config)
+        # Tour Eiffel (la plus chère) est invendue 2 fois : c'est Château de Versailles qui part.
+        assert site.api_listings[0]["card_id"] == "b1"
+        state = json.loads(config.unsold_file.read_text())
+        until = datetime.fromisoformat(state["cards"]["C"]["until"])
+        assert timedelta(days=2, hours=23) < until - datetime.now(timezone.utc) <= timedelta(days=3)
+
+        # Délai écoulé : elle revient dans l'ordre de vente.
+        state["cards"]["C"]["until"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        config.unsold_file.write_text(json.dumps(state))
+        site.selling.clear()
+        run_once(config)
+    assert site.api_listings[-1]["card_id"] == "c1"

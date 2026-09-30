@@ -174,6 +174,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |
+| `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `2` / `3` | Carte invendue (enchère terminée sans acheteur, lue dans l'historique) `UNSOLD_MAX_TRIES` fois : plus mise en vente pendant `UNSOLD_COOLDOWN_DAYS` jours, puis retentée ; une vente réussie remet le compteur à zéro. Suivi dans `state/unsold.json` |
 | `MARKET_ADJUST` | `true` | Avant chaque vente, lit les enchères en cours de la même carte (mise actuelle, sinon mise de départ) : si le prix est sous leur moyenne, + un écart type ; au-dessus, - un écart type ; moins de 2 enchères : inchangé |
 | `PRICE_FLOOR_RATIO` | `0.5` | Plancher de l'ajustement : jamais sous cette part du prix moyen |
 | `ACTIONS_VIA` | `api` | `api` : paquets, ventes et mises par requêtes directes ; `page` : clics dans les pages (ancien mode) |

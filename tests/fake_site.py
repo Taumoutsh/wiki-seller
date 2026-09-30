@@ -197,6 +197,7 @@ class FakeWikiMasters:
         self.last_pack_at = -1e9
         self.rate_limited = 0
         self.pack_refusals = 0
+        self.history = []  # vos ventes terminées (onglet « Historique »)
         self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
         self.api_listings = []  # corps des mises en vente reçues par l'API
         self.packs_opened = 0
@@ -280,6 +281,7 @@ class FakeWikiMasters:
                     selling = [dict(a, seller_id=ME) for a in site.selling]
                     selling += [a for a in site.auctions.values() if a["seller_id"] == ME and a["status"] == "active"]
                     return self._send(200, {"selling": selling, "bidding": bidding, "won": won,
+                                            "history": site.history,
                                             "maxConcurrentAuctions": site.max_auctions})
                 if url.path == "/api/marketplace" and "q" in qs:
                     q = qs["q"][0].lower()

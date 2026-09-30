@@ -109,3 +109,34 @@ def test_adjust_to_market():
     assert competitor_price({"current_bid": 40, "base_amount": 10}) == 40
     assert competitor_price({"current_bid": None, "base_amount": 10}) == 10
     assert competitor_price({}) is None
+
+
+def test_unsold_tracker(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller.unsold import UnsoldTracker
+
+    now = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+
+    def ended(auction_id, card_id, title, winner=None, status="expired"):
+        return {"id": auction_id, "seller_id": "me", "status": status, "winner_id": winner,
+                "final_price": 50 if winner else None, "card": {"id": card_id, "wikipedia_title": title}}
+
+    tracker = UnsoldTracker(tmp_path / "unsold.json", 2, timedelta(days=3))
+    tracker.update([ended("a1", "C", "Tour Eiffel")], "me", now)
+    assert tracker.paused("C", "Tour Eiffel", now) is None  # 1 échec sur 2
+    tracker.update([ended("a1", "C", "Tour Eiffel")], "me", now)  # déjà comptée
+    assert tracker.paused("C", "Tour Eiffel", now) is None
+    tracker.update([ended("a2", "C", "Tour Eiffel", status="settled_unsold"),
+                    ended("x", "C", "Tour Eiffel", status="cancelled"),
+                    dict(ended("y", "C", "Tour Eiffel"), seller_id="autre")], "me", now)
+    assert tracker.paused("C", "Tour Eiffel", now) == now + timedelta(days=3)
+    assert tracker.paused("autre-id", "tour eiffel", now)  # même titre
+    assert tracker.paused("C", "Tour Eiffel", now + timedelta(days=3, minutes=1)) is None
+    tracker.save()
+
+    # Relu depuis le fichier ; une vente réussie remet le compteur à zéro.
+    tracker = UnsoldTracker(tmp_path / "unsold.json", 2, timedelta(days=3))
+    tracker.update([ended("b1", "D", "Victor Hugo"), ended("b2", "D", "Victor Hugo", winner="w")], "me", now)
+    tracker.update([ended("b3", "D", "Victor Hugo")], "me", now)
+    assert tracker.paused("D", "Victor Hugo", now) is None

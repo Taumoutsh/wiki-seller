@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.sync_api import sync_playwright
 
-from .buying import WantedCardsError, WantedState, auction_title, run_bids
+from .buying import WantedCardsError, WantedState, auction_title, my_user_id, run_bids
 from .config import Config, ConfigError, load_config
 from .selection import (
     SafeCardsError,
@@ -31,6 +31,7 @@ from .selection import (
 )
 from .site import ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
 from .trace import install_api_trace
+from .unsold import UnsoldTracker
 
 log = logging.getLogger("wiki_seller")
 
@@ -232,6 +233,20 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
     entries, in_trade = site.fetch_collection(config.sell_rarities)
     groups = parse_collection(entries, excluded_copy_ids=in_trade)
     sellable = [g for g in groups if copies_available(g, safe_names, market.selling) > 0]
+
+    # Cartes qui ne se vendent pas : mises de côté quelques jours (state/unsold.json).
+    unsold = UnsoldTracker(config.unsold_file, config.unsold_max_tries, config.unsold_cooldown)
+    my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
+    unsold.update(market.history, my_id, now_utc())
+    unsold.save()
+    paused = {g.card_id: unsold.paused(g.card_id, g.title, now_utc()) for g in sellable}
+    paused = {k: v for k, v in paused.items() if v}
+    if paused:
+        examples = [f"{g.title} (jusqu'au {paused[g.card_id].astimezone().strftime('%d/%m')})"
+                    for g in sellable if g.card_id in paused]
+        log.info("%d carte(s) invendue(s) mise(s) de côté, ex. : %s", len(paused), ", ".join(examples[:10]))
+        sellable = [g for g in sellable if g.card_id not in paused]
+        groups = [g for g in groups if g.card_id not in paused]
     log.info("%d carte(s) distincte(s), dont %d avec des exemplaires à vendre.", len(groups), len(sellable))
 
     # Prix moyens via l'API pour classer les cartes de la plus chère à la moins chère.
