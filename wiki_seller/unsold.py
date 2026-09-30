@@ -62,8 +62,12 @@ class UnsoldTracker:
         if not my_id:
             return
         seen = set(self.data["seen"])
-        for auction in history or []:
-            if not isinstance(auction, dict) or auction.get("seller_id") != my_id or auction.get("id") in seen:
+        # L'historique arrive du plus récent au plus ancien : on le rejoue dans l'ordre,
+        # pour qu'une vente récente efface les échecs plus anciens.
+        ordered = sorted((a for a in history or [] if isinstance(a, dict)),
+                         key=lambda a: a.get("settled_at") or a.get("end_at") or "")
+        for auction in ordered:
+            if auction.get("seller_id") != my_id or auction.get("id") in seen:
                 continue
             outcome = auction_outcome(auction)
             if outcome is None:

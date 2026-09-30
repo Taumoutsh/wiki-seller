@@ -140,3 +140,20 @@ def test_unsold_tracker(tmp_path):
     tracker.update([ended("b1", "D", "Victor Hugo"), ended("b2", "D", "Victor Hugo", winner="w")], "me", now)
     tracker.update([ended("b3", "D", "Victor Hugo")], "me", now)
     assert tracker.paused("D", "Victor Hugo", now) is None
+
+
+def test_unsold_tracker_replays_history_in_order(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller.unsold import UnsoldTracker
+
+    def ended(i, winner=None):
+        return {"id": f"a{i}", "seller_id": "me", "status": "settled_sold" if winner else "settled_unsold",
+                "winner_id": winner, "final_price": 62 if winner else None,
+                "settled_at": f"2026-09-30T1{i}:00:00+00:00", "card": {"id": "A", "wikipedia_title": "Agen"}}
+
+    now = datetime(2026, 9, 30, 20, tzinfo=timezone.utc)
+    tracker = UnsoldTracker(tmp_path / "u.json", 3, timedelta(days=5))
+    # Comme le site : le plus récent d'abord. 3 invendues, puis vendue.
+    tracker.update([ended(4, winner="w"), ended(3), ended(2), ended(1)], "me", now)
+    assert tracker.paused("A", "Agen", now) is None
