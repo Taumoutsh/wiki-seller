@@ -119,8 +119,8 @@ class Config:
     max_total_bids: int | None = None
     snipe_lead: timedelta = timedelta(seconds=5)
     # Cartes invendues : mises de côté après unsold_max_tries échecs, pendant unsold_cooldown.
-    unsold_max_tries: int = 2
-    unsold_cooldown: timedelta = timedelta(days=3)
+    unsold_max_tries: int = 3
+    unsold_cooldown: timedelta = timedelta(days=5)
     # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
     night_durations: tuple[tuple[int, int, str], ...] = ()
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
@@ -220,8 +220,8 @@ def load_config() -> Config:
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
         snipe_lead=snipe_lead or timedelta(seconds=5),
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
-        unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 2,
-        unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 3),
+        unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
+        unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
         api_trace=_bool(os.getenv("API_TRACE"), False),
         actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),

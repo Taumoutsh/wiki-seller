@@ -407,16 +407,16 @@ def test_unsold_card_is_set_aside_then_retried(tmp_path):
     from datetime import datetime, timedelta, timezone
 
     unsold = [{"id": f"h{i}", "seller_id": ME, "status": "expired", "winner_id": None, "final_price": None,
-               "card": {"id": "C", "wikipedia_title": "Tour Eiffel"}} for i in range(2)]
+               "card": {"id": "C", "wikipedia_title": "Tour Eiffel"}} for i in range(3)]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1) as site:
         site.history = unsold
         config = make_config(tmp_path, site.url, [], actions_via_api=True)
         run_once(config)
-        # Tour Eiffel (la plus chère) est invendue 2 fois : c'est Château de Versailles qui part.
+        # Tour Eiffel (la plus chère) est invendue 3 fois : c'est Château de Versailles qui part.
         assert site.api_listings[0]["card_id"] == "b1"
         state = json.loads(config.unsold_file.read_text())
         until = datetime.fromisoformat(state["cards"]["C"]["until"])
-        assert timedelta(days=2, hours=23) < until - datetime.now(timezone.utc) <= timedelta(days=3)
+        assert timedelta(days=4, hours=23) < until - datetime.now(timezone.utc) <= timedelta(days=5)
 
         # Délai écoulé : elle revient dans l'ordre de vente.
         state["cards"]["C"]["until"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
