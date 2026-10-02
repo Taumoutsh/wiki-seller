@@ -35,6 +35,11 @@ clique sur « Ouvrir », fait défiler les 5 cartes avec la flèche, clique sur 
 et recommence tant qu'il reste des paquets. Le site en stocke 10 au maximum. En
 simulation (`--dry-run`), aucun paquet n'est ouvert.
 
+Si le site exige une **vérification anti-bot** pour ouvrir les paquets (réponse
+`human_verification_required`), le script ne la contourne pas : il le signale dans le
+journal et suspend l'ouverture automatique 12 h (`state/packs_pause.json`). Ouvrez-les
+à la main en attendant ; supprimez ce fichier pour réessayer plus tôt.
+
 ## Achats (wanted_cards.json)
 
 ```json

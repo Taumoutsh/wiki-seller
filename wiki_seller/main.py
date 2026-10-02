@@ -29,7 +29,7 @@ from .selection import (
     normalize_name,
     parse_collection,
 )
-from .site import ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
+from .site import HumanVerificationRequired, ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
 from .trace import install_api_trace
 from .unsold import UnsoldTracker
 
@@ -40,6 +40,7 @@ RETRY_AFTER_ERROR = timedelta(minutes=10)
 PRICE_CACHE_TTL = timedelta(hours=3)
 PRICE_SAVE_EVERY = 50
 RETRY_LISTING_AFTER = 5  # secondes
+PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérification humaine
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 SITE_TIMEZONE = "Europe/Paris"
 
@@ -202,10 +203,25 @@ def sale_duration(config: Config) -> str:
 
 
 def _open_packs(site: WikiMasters, dry_run: bool) -> None:
+    config = site.config
+    pause_file = config.state_dir / "packs_pause.json"
+    until = read_json(pause_file, {}).get("until")
+    if until and datetime.fromisoformat(until) > now_utc():
+        log.info("Paquets : ouverture automatique suspendue jusqu'au %s (vérification humaine demandée "
+                 "par le site).", datetime.fromisoformat(until).astimezone().strftime("%d/%m %H:%M"))
+        return
     try:
-        opened = (site.open_packs_api if site.config.actions_via_api else site.open_packs)(dry_run)
+        opened = (site.open_packs_api if config.actions_via_api else site.open_packs)(dry_run)
         if opened:
             log.info("Paquets : %d ouvert(s).", opened)
+    except HumanVerificationRequired as exc:
+        # Le site exige un humain pour continuer : on ne contourne pas, on arrête de
+        # demander pendant PACKS_VERIFICATION_PAUSE (ouvrez-les à la main en attendant).
+        until = now_utc() + PACKS_VERIFICATION_PAUSE
+        write_json(pause_file, {"until": until.isoformat(), "reason": str(exc)})
+        log.warning("Paquets : %s Ouverture automatique suspendue jusqu'au %s ; ouvrez-les à la main "
+                    "sur le site (la vérification s'y affiche).", exc,
+                    until.astimezone().strftime("%d/%m %H:%M"))
     except SessionExpired:
         raise
     except Exception as exc:  # les ventes passent quand même

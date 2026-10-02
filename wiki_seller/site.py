@@ -69,6 +69,10 @@ class SiteError(Exception):
     pass
 
 
+class HumanVerificationRequired(Exception):
+    """Le site demande une vérification humaine (anti-bot) : on ne la contourne pas."""
+
+
 class PriceApiUnavailable(Exception):
     """L'API des prix a refusé la requête : le prix sera lu dans la fenêtre d'enchère."""
 
@@ -791,6 +795,9 @@ class WikiMasters:
                 waited += wait
                 page.wait_for_timeout(wait * 1000)
                 continue
+            if isinstance(data, dict) and (data.get("human_verification_required")
+                                           or data.get("code") == "human_verification_required"):
+                raise HumanVerificationRequired(str(data.get("error") or "vérification anti-bot requise"))
             if not 200 <= status < 300:
                 if opened or available:
                     log.info("Paquets : plus d'ouverture possible (HTTP %d : %s).", status, text[:200])

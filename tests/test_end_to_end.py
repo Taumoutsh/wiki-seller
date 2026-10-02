@@ -424,3 +424,17 @@ def test_unsold_card_is_set_aside_then_retried(tmp_path):
         site.selling.clear()
         run_once(config)
     assert site.api_listings[-1]["card_id"] == "c1"
+
+
+def test_packs_paused_when_site_requires_human_verification(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
+        site.packs_need_human = True
+        config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24))
+        with caplog.at_level("INFO"):
+            run_once(config)
+            run_once(config)
+    assert site.packs_opened == 0
+    assert site.pack_refusals == 1  # pas de nouvelle demande à la passe suivante
+    assert "Vérification anti-bot requise" in caplog.text
+    assert "ouverture automatique suspendue" in caplog.text.lower()
+    assert (config.state_dir / "packs_pause.json").exists()
