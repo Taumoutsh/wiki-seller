@@ -125,6 +125,10 @@ class Config:
     night_durations: tuple[tuple[int, int, str], ...] = ()
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
     packs_hours: tuple[int, int] | None = (0, 6)
+    # Vérification humaine des paquets : attente qu'une personne la fasse (None = pause directe),
+    # et URL de notification (ntfy) pour la prévenir.
+    packs_verify_wait: timedelta | None = None
+    notify_url: str | None = None
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
     api_trace: bool = False
     # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
@@ -220,6 +224,8 @@ def load_config() -> Config:
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
         snipe_lead=snipe_lead or timedelta(seconds=5),
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
+        packs_verify_wait=(timedelta(minutes=wait) if (wait := _positive_int("PACKS_VERIFY_WAIT")) else None),
+        notify_url=os.getenv("NOTIFY_URL", "").strip() or None,
         unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),

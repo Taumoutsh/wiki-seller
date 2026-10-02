@@ -32,6 +32,7 @@ from .selection import (
 from .site import HumanVerificationRequired, ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
 from .trace import install_api_trace
 from .unsold import UnsoldTracker
+from .verification import notify
 
 log = logging.getLogger("wiki_seller")
 
@@ -215,8 +216,11 @@ def _open_packs(site: WikiMasters, dry_run: bool) -> None:
         if opened:
             log.info("Paquets : %d ouvert(s).", opened)
     except HumanVerificationRequired as exc:
-        # Le site exige un humain pour continuer : on ne contourne pas, on arrête de
-        # demander pendant PACKS_VERIFICATION_PAUSE (ouvrez-les à la main en attendant).
+        # Le site exige un humain pour continuer : on ne contourne pas. Si PACKS_VERIFY_WAIT
+        # est réglé, on prévient et on attend qu'une personne fasse la vérification dans ce
+        # navigateur (écran distant) ; sinon, ou sans réponse, pause de PACKS_VERIFICATION_PAUSE.
+        if config.packs_verify_wait and _human_verification(site, dry_run):
+            return
         until = now_utc() + PACKS_VERIFICATION_PAUSE
         write_json(pause_file, {"until": until.isoformat(), "reason": str(exc)})
         log.warning("Paquets : %s Ouverture automatique suspendue jusqu'au %s ; ouvrez-les à la main "
@@ -226,6 +230,27 @@ def _open_packs(site: WikiMasters, dry_run: bool) -> None:
         raise
     except Exception as exc:  # les ventes passent quand même
         log.warning("Ouverture des paquets interrompue : %s", str(exc).splitlines()[0])
+
+
+def _human_verification(site: WikiMasters, dry_run: bool) -> bool:
+    """Prévient, affiche la vérification et attend qu'une personne la fasse ; puis reprend
+    l'ouverture. Renvoie False si personne ne l'a faite à temps (ou si elle revient aussitôt)."""
+    config = site.config
+    if config.headless:
+        log.warning("Paquets : PACKS_VERIFY_WAIT demande HEADLESS=false (écran Xvfb/noVNC) "
+                    "pour qu'une personne puisse faire la vérification.")
+        return False
+    wait = config.packs_verify_wait.total_seconds()
+    notify(config.notify_url, f"WikiMasters : vérification humaine à faire pour les paquets "
+                              f"(attente {wait / 60:.0f} min).")
+    if not site.await_pack_verification(wait):
+        return False
+    try:
+        opened = (site.open_packs_api if config.actions_via_api else site.open_packs)(dry_run)
+    except HumanVerificationRequired:
+        return False
+    log.info("Paquets : %d ouvert(s) après vérification.", opened)
+    return True
 
 
 def _buy(site: WikiMasters, config: Config, dry_run: bool) -> None:

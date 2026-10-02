@@ -121,10 +121,21 @@ function home() {
   main.innerHTML = `<h1>Ouvrir un paquet</h1>
     <button id="open" ${packs ? '' : 'disabled'}><img alt="Paquet"><span>Ouvrir</span></button>
     <div>${packs} / 10</div><div>paquets disponibles</div>`;
-  document.getElementById('open').onclick = async () => {
-    packs = (await (await fetch('/api/packs/open', {method: 'POST'})).json()).remaining;
-    card = 0; seen = new Set(); reveal();
-  };
+  document.getElementById('open').onclick = openPack;
+}
+// Vérification humaine : la fenêtre reste affichée tant que le serveur refuse (le test
+// simule la personne qui la fait en levant packs_need_human).
+async function openPack() {
+  const r = await fetch('/api/packs/open', {method: 'POST'});
+  const d = await r.json();
+  if (r.status === 403 && d.human_verification_required) {
+    if (!document.getElementById('verif'))
+      document.body.insertAdjacentHTML('beforeend', '<div id="verif" role="dialog"><h2>Vérification rapide</h2></div>');
+    return setTimeout(openPack, 300);
+  }
+  document.getElementById('verif')?.remove();
+  packs = d.remaining;
+  card = 0; seen = new Set(); reveal();
 }
 function reveal(moved = true) {
   if (moved) arrived = Date.now();

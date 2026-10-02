@@ -20,6 +20,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from .config import Config
 from .selection import normalize_name, sale_price
+from .verification import VERIFICATION_MODAL, wait_for_verification
 
 log = logging.getLogger(__name__)
 
@@ -264,6 +265,7 @@ class WikiMasters:
             .first
         )
         self.page.add_locator_handler(antibot, self._solve_antibot)
+        self._antibot = antibot
 
         cookies = (
             self.page.locator("[role=dialog], .fixed, [id*=cookie i], [class*=cookie i]")
@@ -813,6 +815,28 @@ class WikiMasters:
                 break
             page.wait_for_timeout(API_ACTION_PAUSE)
         return opened
+
+    def await_pack_verification(self, timeout_s: float) -> bool:
+        """Affiche la vérification humaine de /pulls (clic sur « Ouvrir ») et attend qu'une
+        personne la fasse dans ce navigateur. Rien n'est coché par le script : la popup
+        automatique est désactivée pendant l'attente."""
+        page = self.page
+        page.goto(self.url("/pulls"), wait_until="domcontentloaded")
+        page.locator(PACK_OPEN_BUTTON).first.click(timeout=30000)
+        modal = page.locator(VERIFICATION_MODAL).first
+        try:
+            modal.wait_for(state="visible", timeout=10000)
+        except PlaywrightTimeout:
+            return True  # pas de fenêtre : le site a ouvert le paquet directement
+        self.step("packs-verification")
+        handler = getattr(self, "_antibot", None)
+        if handler is not None:
+            page.remove_locator_handler(handler)
+        try:
+            return wait_for_verification(page, timeout_s)
+        finally:
+            if handler is not None:
+                page.add_locator_handler(handler, self._solve_antibot)
 
     def open_packs(self, dry_run: bool, limit: int | None = None) -> int:
         """Ouvre les paquets disponibles (tous, ou au plus `limit`) : « Ouvrir », faire

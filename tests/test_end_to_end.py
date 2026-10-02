@@ -438,3 +438,29 @@ def test_packs_paused_when_site_requires_human_verification(tmp_path, caplog):
     assert "Vérification anti-bot requise" in caplog.text
     assert "ouverture automatique suspendue" in caplog.text.lower()
     assert (config.state_dir / "packs_pause.json").exists()
+
+
+def test_await_pack_verification_waits_for_a_person(tmp_path):
+    import threading
+
+    from wiki_seller.main import open_site
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
+        site.packs_need_human = True
+        with open_site(make_config(tmp_path, site.url, []), debug=False) as wm:
+            assert wm.await_pack_verification(timeout_s=2) is False  # personne : délai dépassé
+            # La « personne » fait la vérification au bout d'une seconde.
+            threading.Timer(1, lambda: setattr(site, "packs_need_human", False)).start()
+            assert wm.await_pack_verification(timeout_s=20) is True
+    assert site.packs_opened == 1  # le paquet du clic, une fois la vérification faite
+
+
+def test_human_verification_wait_needs_a_visible_browser(tmp_path, caplog):
+    from datetime import timedelta
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
+        site.packs_need_human = True
+        config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24),
+                             packs_verify_wait=timedelta(minutes=5))
+        with caplog.at_level("INFO"):
+            run_once(config)
+    assert "HEADLESS=false" in caplog.text
+    assert (config.state_dir / "packs_pause.json").exists()  # repli : pause habituelle
