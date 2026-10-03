@@ -9,6 +9,7 @@ import dataclasses
 import logging
 import re
 import time
+import requests
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -60,6 +61,7 @@ LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut �
 API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythme humain
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
+MARKERS = ["captcha", "turnstile", "challenge", "verify you are human"]
 
 
 class SessionExpired(Exception):
@@ -71,7 +73,7 @@ class SiteError(Exception):
 
 
 class HumanVerificationRequired(Exception):
-    """Le site demande une vérification humaine (anti-bot) : on ne la contourne pas."""
+    """Le site demande une vérification humaine (anti-bot)"""
 
 
 class PriceApiUnavailable(Exception):
@@ -784,6 +786,7 @@ class WikiMasters:
         target = min(limit or PACK_GUARD, PACK_GUARD)
         waited = 0.0
         while opened < target:
+            unlock_step = False
             status, data, text = self.api_post("/api/packs/open")
             remaining = data.get("packs_remaining") if isinstance(data, dict) else None
             if status == 429 and isinstance(data, dict) and not data.get("rate_limit_daily") \
@@ -799,12 +802,24 @@ class WikiMasters:
                 continue
             if isinstance(data, dict) and (data.get("human_verification_required")
                                            or data.get("code") == "human_verification_required"):
-                raise HumanVerificationRequired(str(data.get("error") or "vérification anti-bot requise"))
+                cookies = parse_cookies(self.config.session_cookies)
+                r = requests.post("http://localhost:8191/v1", json={
+                    "cmd": "request.get",
+                    "url": self.url("/pulls"),
+                    "maxTimeout": 60000,
+                    "cookies": cookies,
+                })
+                sol = r.json().get("solutions", {})
+                html = (sol.get("response") or "").lower()
+                blocked = any(m in html for m in MARKERS)
+                log.info("FlareSolverr: HTTP %s -> %s", sol.get("status"), "BLOCKED" if blocked else "BYPASSED")
+                unlock_step = True
             if not 200 <= status < 300:
                 if opened or available:
                     log.info("Paquets : plus d'ouverture possible (HTTP %d : %s).", status, text[:200])
                 break
-            opened += 1
+            if not unlock_step:
+                opened += 1
             cards = pack_cards(data)
             left = f"{remaining} restant(s)" if isinstance(remaining, int) else f"n°{opened}"
             log.info("Paquet ouvert (%s) : %s.", left, pack_summary(cards))
