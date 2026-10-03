@@ -785,8 +785,8 @@ class WikiMasters:
         opened = 0
         target = min(limit or PACK_GUARD, PACK_GUARD)
         waited = 0.0
+        solver_tried = False
         while opened < target:
-            unlock_step = False
             status, data, text = self.api_post("/api/packs/open")
             remaining = data.get("packs_remaining") if isinstance(data, dict) else None
             if status == 429 and isinstance(data, dict) and not data.get("rate_limit_daily") \
@@ -801,25 +801,16 @@ class WikiMasters:
                 page.wait_for_timeout(wait * 1000)
                 continue
             if isinstance(data, dict) and (data.get("human_verification_required")
-                                           or data.get("code") == "human_verification_required"):
-                cookies = parse_cookies(self.config.session_cookies)
-                r = requests.post("http://localhost:8191/v1", json={
-                    "cmd": "request.get",
-                    "url": self.url("/pulls"),
-                    "maxTimeout": 60000,
-                    "cookies": cookies,
-                })
-                sol = r.json().get("solutions", {})
-                html = (sol.get("response") or "").lower()
-                blocked = any(m in html for m in MARKERS)
-                log.info("FlareSolverr: HTTP %s -> %s", sol.get("status"), "BLOCKED" if blocked else "BYPASSED")
-                unlock_step = True
+                                           or data.get("code") == "human_verification_required") \
+                    and not solver_tried:
+                solver_tried = True
+                if self.solve_with_flaresolverr():
+                    continue
             if not 200 <= status < 300:
                 if opened or available:
                     log.info("Paquets : plus d'ouverture possible (HTTP %d : %s).", status, text[:200])
                 break
-            if not unlock_step:
-                opened += 1
+            opened += 1
             cards = pack_cards(data)
             left = f"{remaining} restant(s)" if isinstance(remaining, int) else f"n°{opened}"
             log.info("Paquet ouvert (%s) : %s.", left, pack_summary(cards))
@@ -830,6 +821,36 @@ class WikiMasters:
                 break
             page.wait_for_timeout(API_ACTION_PAUSE)
         return opened
+
+    def solve_with_flaresolverr(self) -> bool:
+        """Fait charger /pulls par FlareSolverr (FLARESOLVERR_URL) et reprend ses cookies
+        dans le navigateur. Vrai si la page obtenue ne montre plus de vérification ;
+        faux si FlareSolverr est désactivé, injoignable ou bloqué."""
+        url = self.config.flaresolverr_url
+        if not url:
+            return False
+        cookies = [{"name": name, "value": value} for name, value in parse_cookies(self.config.session_cookies)]
+        try:
+            r = requests.post(url, json={
+                "cmd": "request.get",
+                "url": self.url("/pulls"),
+                "maxTimeout": 60000,
+                "cookies": cookies,
+            }, timeout=70)
+            sol = r.json().get("solution") or {}
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("FlareSolverr injoignable (%s) : %s", url, exc)
+            return False
+        html = (sol.get("response") or "").lower()
+        blocked = sol.get("status") != 200 or any(m in html for m in MARKERS)
+        log.info("FlareSolverr : HTTP %s -> %s", sol.get("status"), "bloqué" if blocked else "passé")
+        if blocked:
+            return False
+        solved = [{key: c[key] for key in ("name", "value", "domain", "path", "expires", "httpOnly", "secure")
+                   if key in c} for c in sol.get("cookies") or [] if c.get("name") and c.get("domain")]
+        if solved:
+            self.page.context.add_cookies(solved)
+        return True
 
     def await_pack_verification(self, timeout_s: float) -> bool:
         """Affiche la vérification humaine de /pulls (clic sur « Ouvrir ») et attend qu'une
