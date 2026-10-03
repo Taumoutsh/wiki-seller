@@ -4,9 +4,10 @@ services:
     restart: unless-stopped
     # MAIL et PASSWORD (et les réglages optionnels) sont lus depuis .env.
     env_file: .env
-    environment:
-      # Service flaresolverr ci-dessous ; mettre FLARESOLVERR_URL= (vide) dans .env pour s'en passer.
-      FLARESOLVERR_URL: ${FLARESOLVERR_URL-http://flaresolverr:8191/v1}
+    # FlareSolverr qui tourne à part sur l'hôte : FLARESOLVERR_URL=http://host.docker.internal:8191/v1
+    # dans .env (« localhost » désignerait ce conteneur-ci).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Ressources maximales : la moitié du serveur (4 cœurs) et 2 Go de RAM par défaut,
     # réglables dans .env avec CPU_LIMIT et MEM_LIMIT.
     cpus: ${CPU_LIMIT:-2}
@@ -19,10 +20,3 @@ services:
       - ./safed_cards.json:/app/safed_cards.json:ro
       - ./wanted_cards.json:/app/wanted_cards.json:ro
       - ./state:/app/state
-
-  # Essayé quand le site demande une vérification humaine pour les paquets.
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    restart: unless-stopped
-    environment:
-      TZ: Europe/Paris

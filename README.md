@@ -178,7 +178,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `OPEN_PACKS_HOURS` | `0-6` | Heures de Paris où les paquets sont ouverts ; vide = jamais |
 | `PACKS_VERIFY_WAIT` | *(vide)* | Minutes d'attente qu'une personne fasse la vérification humaine (exige `HEADLESS=false` et un écran distant) ; vide = pause de 12 h |
 | `NOTIFY_URL` | *(vide)* | Notification (ntfy) quand une vérification attend quelqu'un |
-| `FLARESOLVERR_URL` | *(vide ; `http://flaresolverr:8191/v1` avec Docker Compose)* | FlareSolverr essayé une fois avant la vérification humaine des paquets ; vide = désactivé |
+| `FLARESOLVERR_URL` | *(vide)* | FlareSolverr essayé une fois avant la vérification humaine des paquets (avec Docker : `http://host.docker.internal:8191/v1` pour un FlareSolverr de l'hôte) ; vide = désactivé |
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |
