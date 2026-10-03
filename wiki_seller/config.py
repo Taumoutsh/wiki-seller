@@ -1,0 +1,236 @@
+"""Chargement de la configuration depuis l'environnement (et le fichier .env)."""
+
+import os
+import re
+from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+class ConfigError(Exception):
+    pass
+
+
+def _bool(value: str | None, default: bool) -> bool:
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "oui", "on")
+
+
+# Seules les cartes rares sont analysées : la collection grossit bien plus vite que le
+# nombre de ventes possibles (5 à la fois), et chaque carte coûte une requête de prix.
+DEFAULT_SELL_RARITIES = "L,SR"
+
+
+# En dessous, une nouvelle passe démarrerait avant la fin de la précédente (~4 min).
+MIN_RUN_INTERVAL = timedelta(minutes=5)
+DEFAULT_RUN_INTERVAL = timedelta(hours=1)
+# La nuit, moins d'activité : ventes plus longues pour laisser les enchères monter.
+DEFAULT_NIGHT_DURATIONS = "1-3=12 h;3-6=6 h"
+
+
+def parse_duration(text: str) -> timedelta | None:
+    """« 10 min », « 1 h », « 2 heures », « 1h30 » → durée ; None si illisible."""
+    match = re.fullmatch(
+        r"\s*(?:(\d+)\s*h(?:eures?)?)?\s*(?:(\d+)\s*(?:min(?:utes?)?)?)?\s*", text.lower())
+    if not match or not any(match.groups()):
+        return None
+    hours, minutes = (int(g) if g else 0 for g in match.groups())
+    if not match.group(1) and not re.search(r"min", text.lower()):
+        return None  # « 10 » seul : unité ambiguë
+    duration = timedelta(hours=hours, minutes=minutes)
+    return duration if duration > timedelta(0) else None
+
+
+def _hours(value: str) -> tuple[int, int] | None:
+    """« 0-6 » → (0, 6) ; vide → None (désactivé)."""
+    if not value.strip():
+        return None
+    match = re.fullmatch(r"\s*(\d{1,2})\s*[-–àa]\s*(\d{1,2})\s*h?\s*", value)
+    if not match or not (0 <= int(match.group(1)) <= 23 and 0 <= int(match.group(2)) <= 24):
+        raise ConfigError(f"OPEN_PACKS_HOURS illisible ({value!r}) : écrivez par ex. « 0-6 ».")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _ratio(name: str, default: str) -> float:
+    try:
+        value = float(os.getenv(name, default) or default)
+    except ValueError as exc:
+        raise ConfigError(f"{name} doit être un nombre, ex. {default}") from exc
+    if not 0 < value <= 1:
+        raise ConfigError(f"{name} doit être compris entre 0 et 1.")
+    return value
+
+
+def _actions_via(value: str) -> bool:
+    value = value.strip().lower() or "api"
+    if value not in ("api", "page"):
+        raise ConfigError("ACTIONS_VIA doit valoir « api » (requêtes directes) ou « page » (clics).")
+    return value == "api"
+
+
+def _night_durations(value: str) -> tuple[tuple[int, int, str], ...]:
+    """« 1-3=12 h;3-6=6 h » → ((1, 3, "12 h"), (3, 6, "6 h")) ; vide → ()."""
+    ranges = []
+    for part in filter(None, (p.strip() for p in value.split(";"))):
+        hours, sep, label = part.partition("=")
+        span = _hours(hours) if sep else None
+        label = label.strip()
+        if not span or not parse_duration(label):
+            raise ConfigError(f"NIGHT_DURATIONS illisible ({part!r}) : écrivez par ex. « 1-3=12 h;3-6=6 h ».")
+        ranges.append((span[0], span[1], label))
+    return tuple(ranges)
+
+
+def _positive_int(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) < 1:
+        raise ConfigError(f"{name} doit être un nombre entier positif.")
+    return int(raw)
+
+
+def _rarities(value: str) -> tuple[str, ...]:
+    return tuple(r.strip().upper() for r in value.replace(";", ",").split(",") if r.strip())
+
+
+@dataclass(frozen=True)
+class Config:
+    mail: str
+    password: str
+    base_url: str
+    safe_cards_file: Path
+    state_dir: Path
+    price_ratio: float
+    auction_duration_label: str
+    headless: bool
+    chromium_executable: str | None
+    # Raretés mises en vente (codes du site : L, UR, SR, R, PC, C) ; vide = toutes.
+    sell_rarities: tuple[str, ...] = ()
+    # Cookies d'une session connectée (« nom=valeur; nom2=valeur2 »), voir README.
+    session_cookies: str = ""
+    # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
+    run_interval: timedelta | None = None
+    # Achats : liste des cartes voulues, budget total optionnel, avance avant la fin.
+    wanted_cards_file: Path = Path("wanted_cards.json")
+    max_total_bids: int | None = None
+    snipe_lead: timedelta = timedelta(seconds=5)
+    # Cartes invendues : mises de côté après unsold_max_tries échecs, pendant unsold_cooldown.
+    unsold_max_tries: int = 3
+    unsold_cooldown: timedelta = timedelta(days=5)
+    # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
+    night_durations: tuple[tuple[int, int, str], ...] = ()
+    # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
+    packs_hours: tuple[int, int] | None = (0, 6)
+    # Vérification humaine des paquets : attente qu'une personne la fasse (None = pause directe),
+    # et URL de notification (ntfy) pour la prévenir.
+    packs_verify_wait: timedelta | None = None
+    notify_url: str | None = None
+    # Journal des appels à l'API du site dans state/api.log (--trace-api).
+    api_trace: bool = False
+    # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
+    actions_via_api: bool = False
+    # Prix de vente ajusté d'un écart type d'après les enchères en cours de la même carte,
+    # sans descendre sous price_floor_ratio × prix moyen.
+    market_adjust: bool = False
+    price_floor_ratio: float = 0.5
+
+    def duration_label_at(self, hour: int) -> str:
+        """Libellé de durée des ventes à cette heure : plage de NIGHT_DURATIONS, sinon
+        AUCTION_DURATION_LABEL."""
+        for start, end, label in self.night_durations:
+            if (start <= hour < end) if start < end else (hour >= start or hour < end):
+                return label
+        return self.auction_duration_label
+
+    @property
+    def pass_interval(self) -> timedelta:
+        return self.run_interval or parse_duration(self.auction_duration_label) or DEFAULT_RUN_INTERVAL
+
+    @property
+    def storage_state_file(self) -> Path:
+        return self.state_dir / "storage_state.json"
+
+    @property
+    def run_state_file(self) -> Path:
+        return self.state_dir / "run_state.json"
+
+    @property
+    def wanted_state_file(self) -> Path:
+        return self.state_dir / "wanted_state.json"
+
+    @property
+    def api_trace_file(self) -> Path:
+        return self.state_dir / "api.log"
+
+    @property
+    def unsold_file(self) -> Path:
+        return self.state_dir / "unsold.json"
+
+    @property
+    def debug_dir(self) -> Path:
+        return self.state_dir / "debug"
+
+
+def load_config() -> Config:
+    # Les variables déjà présentes dans l'environnement (ex. Docker) priment sur le .env.
+    load_dotenv(override=False)
+
+    mail = os.getenv("MAIL", "").strip()
+    password = os.getenv("PASSWORD", "")
+    if not mail or not password:
+        raise ConfigError("MAIL et PASSWORD doivent être définis (fichier .env ou environnement).")
+
+    try:
+        price_ratio = float(os.getenv("PRICE_RATIO", "0.70"))
+    except ValueError as exc:
+        raise ConfigError("PRICE_RATIO doit être un nombre, ex. 0.70") from exc
+    if not 0 < price_ratio <= 1:
+        raise ConfigError("PRICE_RATIO doit être compris entre 0 et 1.")
+
+    run_interval = None
+    raw_interval = os.getenv("RUN_INTERVAL", "").strip()
+    if raw_interval:
+        run_interval = parse_duration(raw_interval)
+        if run_interval is None:
+            raise ConfigError(f"RUN_INTERVAL illisible ({raw_interval!r}) : écrivez par ex. « 10 min » ou « 1 h ».")
+        if run_interval < MIN_RUN_INTERVAL:
+            raise ConfigError(f"RUN_INTERVAL doit être d'au moins {MIN_RUN_INTERVAL.seconds // 60} min.")
+
+    snipe_lead = None
+    raw_lead = os.getenv("SNIPE_LEAD", "").strip()
+    if raw_lead:
+        snipe_lead = timedelta(seconds=int(raw_lead)) if raw_lead.isdigit() else None
+        if snipe_lead is None or not timedelta(seconds=2) <= snipe_lead <= timedelta(minutes=5):
+            raise ConfigError("SNIPE_LEAD doit être un nombre de secondes entre 2 et 300.")
+
+    return Config(
+        mail=mail,
+        password=password,
+        base_url=os.getenv("BASE_URL", "https://www.wiki-masters.com").rstrip("/"),
+        safe_cards_file=Path(os.getenv("SAFE_CARDS_FILE", "safed_cards.json")),
+        state_dir=Path(os.getenv("STATE_DIR", "state")),
+        price_ratio=price_ratio,
+        auction_duration_label=os.getenv("AUCTION_DURATION_LABEL", "1 h"),
+        headless=_bool(os.getenv("HEADLESS"), True),
+        chromium_executable=os.getenv("CHROMIUM_EXECUTABLE") or None,
+        sell_rarities=_rarities(os.getenv("SELL_RARITIES", DEFAULT_SELL_RARITIES)),
+        session_cookies=os.getenv("SESSION_COOKIES", "").strip(),
+        run_interval=run_interval,
+        wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
+        max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
+        snipe_lead=snipe_lead or timedelta(seconds=5),
+        packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
+        packs_verify_wait=(timedelta(minutes=wait) if (wait := _positive_int("PACKS_VERIFY_WAIT")) else None),
+        notify_url=os.getenv("NOTIFY_URL", "").strip() or None,
+        unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
+        unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
+        night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
+        api_trace=_bool(os.getenv("API_TRACE"), False),
+        actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),
+        market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),
+        price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),
+    )
