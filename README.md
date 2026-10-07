@@ -38,7 +38,11 @@ simulation (`--dry-run`), aucun paquet n'est ouvert.
 Si le site exige une **vérification anti-bot** pour ouvrir les paquets (réponse
 `human_verification_required`), le script ne la contourne pas : il le signale dans le
 journal et suspend l'ouverture automatique 12 h (`state/packs_pause.json`). Ouvrez-les
-à la main en attendant ; supprimez ce fichier pour réessayer plus tôt.
+à la main en attendant ; supprimez ce fichier pour réessayer plus tôt. Si
+`FLARESOLVERR_URL` est réglé, FlareSolverr est essayé d'abord, mais il ne résout que
+les challenges Cloudflare : la vérification propre au site (fenêtre avec case à
+cocher) ne peut être faite que par une personne (`PACKS_VERIFY_WAIT` avec un écran
+distant, ou à la main).
 
 ## Achats (wanted_cards.json)
 

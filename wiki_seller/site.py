@@ -822,6 +822,7 @@ class WikiMasters:
         target = min(limit or PACK_GUARD, PACK_GUARD)
         waited = 0.0
         solver_tried = False
+        solver_solved = False
         while opened < target:
             status, data, text = self.api_post("/api/packs/open")
             remaining = data.get("packs_remaining") if isinstance(data, dict) else None
@@ -840,9 +841,14 @@ class WikiMasters:
                                            or data.get("code") == "human_verification_required"):
                 if not solver_tried:
                     solver_tried = True
-                    if self.solve_with_flaresolverr():
+                    solver_solved = self.solve_with_flaresolverr()
+                    if solver_solved:
                         page = self.page  # le contexte a pu être recréé
                         continue
+                if solver_solved:
+                    log.warning("Le site demande toujours la vérification malgré FlareSolverr : "
+                                "c'est la vérification du site lui-même (pas un challenge "
+                                "Cloudflare) ; seule une personne peut la faire.")
                 raise HumanVerificationRequired(
                     str(data.get("error") or "vérification anti-bot requise"))
             if not 200 <= status < 300:
@@ -951,7 +957,8 @@ class WikiMasters:
             context.add_cookies(cookies)
         self.page.goto(self.url("/pulls"), wait_until="domcontentloaded")
         ok = not self._challenge_in(self.page.content())
-        log.info("Playwright avec les cookies FlareSolverr → %s", "passé" if ok else "bloqué")
+        log.info("Playwright avec les cookies FlareSolverr : /pulls %s",
+                 "se charge sans challenge Cloudflare" if ok else "toujours bloqué")
         if not ok:
             self.snapshot("flaresolverr-reblocked")
         return ok
