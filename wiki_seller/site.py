@@ -62,6 +62,22 @@ API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythm
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 MARKERS = ["captcha", "turnstile", "challenge", "verify you are human"]
+FLARESOLVERR_TRIES = 2  # tentatives (une erreur de réseau ou un challenge lent sont souvent passagers)
+FLARESOLVERR_RETRY_WAIT = 5  # secondes entre deux tentatives
+SITE_TIMEZONE = "Europe/Paris"
+
+
+def new_context(browser, config: Config, user_agent: str | None = None, storage_state=None):
+    """Contexte navigateur aux réglages du site. `storage_state` : session à charger
+    (chemin ou dict) ; par défaut, celui enregistré dans state/ s'il existe."""
+    if storage_state is None and config.storage_state_file.exists():
+        storage_state = str(config.storage_state_file)
+    context = browser.new_context(
+        storage_state=storage_state, locale="fr-FR", timezone_id=SITE_TIMEZONE,
+        viewport={"width": 1440, "height": 900}, user_agent=user_agent,
+    )
+    context.set_default_timeout(20000)
+    return context
 
 
 class SessionExpired(Exception):
@@ -233,6 +249,26 @@ class WikiMasters:
         self.config = config
         self.debug = debug
         self._install_popup_handlers()
+
+    @classmethod
+    def open(cls, browser, config: Config, debug: bool = False) -> "WikiMasters":
+        """Crée le contexte (session de state/ si présente) et la page, et installe
+        le suivi API s'il est demandé."""
+        context = new_context(browser, config)
+        site = cls(context.new_page(), config, debug=debug)
+        site._install_trace(context)
+        return site
+
+    def _install_trace(self, context) -> None:
+        if self.config.api_trace:
+            from .trace import install_api_trace
+
+            install_api_trace(context, self.config.base_url, self.config.api_trace_file)
+
+    def save_storage_state(self) -> None:
+        """Enregistre la session du contexte courant (il peut avoir été recréé
+        par FlareSolverr) dans state/storage_state.json."""
+        self.page.context.storage_state(path=str(self.config.storage_state_file))
 
     # ─────────────────────────── Utilitaires ───────────────────────────
 
@@ -801,11 +837,14 @@ class WikiMasters:
                 page.wait_for_timeout(wait * 1000)
                 continue
             if isinstance(data, dict) and (data.get("human_verification_required")
-                                           or data.get("code") == "human_verification_required") \
-                    and not solver_tried:
-                solver_tried = True
-                if self.solve_with_flaresolverr():
-                    continue
+                                           or data.get("code") == "human_verification_required"):
+                if not solver_tried:
+                    solver_tried = True
+                    if self.solve_with_flaresolverr():
+                        page = self.page  # le contexte a pu être recréé
+                        continue
+                raise HumanVerificationRequired(
+                    str(data.get("error") or "vérification anti-bot requise"))
             if not 200 <= status < 300:
                 if opened or available:
                     log.info("Paquets : plus d'ouverture possible (HTTP %d : %s).", status, text[:200])
@@ -822,14 +861,41 @@ class WikiMasters:
             page.wait_for_timeout(API_ACTION_PAUSE)
         return opened
 
+    # ─────────────────────────── FlareSolverr ───────────────────────────
+
+    @staticmethod
+    def _challenge_in(html: str) -> bool:
+        return any(marker in (html or "").lower() for marker in MARKERS)
+
     def solve_with_flaresolverr(self) -> bool:
-        """Fait charger /pulls par FlareSolverr (FLARESOLVERR_URL) et reprend ses cookies
-        dans le navigateur. Vrai si la page obtenue ne montre plus de vérification ;
-        faux si FlareSolverr est désactivé, injoignable ou bloqué."""
+        """Fait charger /pulls par FlareSolverr (FLARESOLVERR_URL), puis reprend son
+        cookie d'autorisation et son User-Agent dans un nouveau contexte navigateur
+        (la session connectée est conservée). Vrai si la vérification ne s'affiche
+        plus ; faux si FlareSolverr est désactivé, injoignable ou bloqué après
+        FLARESOLVERR_TRIES tentatives. Un échec n'est pas bloquant : l'appelant
+        repasse par la vérification humaine ou la pause habituelle."""
         url = self.config.flaresolverr_url
         if not url:
             return False
-        cookies = [{"name": name, "value": value} for name, value in parse_cookies(self.config.session_cookies)]
+        for attempt in range(1, FLARESOLVERR_TRIES + 1):
+            log.info("FlareSolverr (%s) : tentative %d/%d…", url, attempt, FLARESOLVERR_TRIES)
+            solution = self._flaresolverr_solve(url)
+            if solution and self._apply_flaresolverr_solution(*solution):
+                return True
+            if attempt < FLARESOLVERR_TRIES:
+                time.sleep(FLARESOLVERR_RETRY_WAIT)
+        log.warning("FlareSolverr : vérification non passée automatiquement.")
+        return False
+
+    def _flaresolverr_solve(self, url: str) -> tuple[list[dict], str | None] | None:
+        """GET /pulls via FlareSolverr, avec les cookies du navigateur (session de
+        state/) complétés par SESSION_COOKIES. Renvoie (cookies, user_agent), ou None
+        si FlareSolverr est injoignable, en échec ou toujours bloqué."""
+        cookies = [{"name": c["name"], "value": c["value"]}
+                   for c in self.page.context.cookies(self.config.base_url)]
+        for name, value in parse_cookies(self.config.session_cookies or ""):
+            if not any(c["name"] == name for c in cookies):
+                cookies.append({"name": name, "value": value})
         try:
             r = requests.post(url, json={
                 "cmd": "request.get",
@@ -837,20 +903,68 @@ class WikiMasters:
                 "maxTimeout": 60000,
                 "cookies": cookies,
             }, timeout=70)
-            sol = r.json().get("solution") or {}
+            payload = r.json()
         except (requests.RequestException, ValueError) as exc:
             log.warning("FlareSolverr injoignable (%s) : %s", url, exc)
-            return False
-        html = (sol.get("response") or "").lower()
-        blocked = sol.get("status") != 200 or any(m in html for m in MARKERS)
-        log.info("FlareSolverr : HTTP %s -> %s", sol.get("status"), "bloqué" if blocked else "passé")
+            return None
+
+        sol = payload.get("solution") or {}
+        if payload.get("status") != "ok":
+            log.warning("FlareSolverr en échec : %s", payload.get("message") or payload.get("status"))
+        html = sol.get("response") or ""
+        blocked = sol.get("status") != 200 or self._challenge_in(html)
+        log.info("FlareSolverr : HTTP %s, %d cookie(s) reçu(s) → %s", sol.get("status"),
+                 len(sol.get("cookies") or []), "bloqué" if blocked else "passé")
         if blocked:
-            return False
-        solved = [{key: c[key] for key in ("name", "value", "domain", "path", "expires", "httpOnly", "secure")
-                   if key in c} for c in sol.get("cookies") or [] if c.get("name") and c.get("domain")]
-        if solved:
-            self.page.context.add_cookies(solved)
-        return True
+            if html:
+                self._dump_html("flaresolverr-blocked", html)
+            return None
+
+        # Format Playwright : name/value + domain/path (ou url) ; sameSite omis
+        # (FlareSolverr renvoie des valeurs que Playwright refuse).
+        solved = [
+            {**{k: c[k] for k in ("name", "value", "domain", "expires", "httpOnly", "secure") if k in c},
+             "path": c.get("path") or "/"}
+            for c in sol.get("cookies") or []
+            if c.get("name") and c.get("domain")
+        ]
+        names = ", ".join(sorted(c["name"] for c in solved)) or "aucun"
+        log.info("FlareSolverr : cookies repris : %s%s", names,
+                 "" if any(c["name"] == "cf_clearance" for c in solved)
+                 else " (pas de cf_clearance : pas de challenge Cloudflare résolu)")
+        return solved, sol.get("userAgent")
+
+    def _apply_flaresolverr_solution(self, cookies: list[dict], user_agent: str | None) -> bool:
+        """Recrée le contexte navigateur avec l'User-Agent de FlareSolverr (cf_clearance
+        n'est valable que pour l'User-Agent qui l'a obtenu ; l'User-Agent d'un contexte
+        ne se change pas après création). Session, données du site, popups et suivi API
+        sont reportés dans le nouveau contexte. Vrai si /pulls s'affiche sans challenge."""
+        old = self.page.context
+        browser = old.browser
+        state = old.storage_state()  # cookies de session (sb-…) et stockage local
+        old.close()
+        context = new_context(browser, self.config, user_agent=user_agent, storage_state=state)
+        self._install_trace(context)
+        self.page = context.new_page()
+        self._install_popup_handlers()
+        if cookies:
+            context.add_cookies(cookies)
+        self.page.goto(self.url("/pulls"), wait_until="domcontentloaded")
+        ok = not self._challenge_in(self.page.content())
+        log.info("Playwright avec les cookies FlareSolverr → %s", "passé" if ok else "bloqué")
+        if not ok:
+            self.snapshot("flaresolverr-reblocked")
+        return ok
+
+    def _dump_html(self, name: str, html: str) -> None:
+        """Enregistre une réponse HTML dans state/debug/ pour diagnostiquer un blocage."""
+        try:
+            self.config.debug_dir.mkdir(parents=True, exist_ok=True)
+            path = self.config.debug_dir / f"{datetime.now():%Y%m%d-%H%M%S}-{name}.html"
+            path.write_text(html, encoding="utf-8")
+            log.info("FlareSolverr : réponse enregistrée dans %s", path)
+        except OSError as exc:
+            log.warning("FlareSolverr : réponse non enregistrée (%s)", exc)
 
     def await_pack_verification(self, timeout_s: float) -> bool:
         """Affiche la vérification humaine de /pulls (clic sur « Ouvrir ») et attend qu'une

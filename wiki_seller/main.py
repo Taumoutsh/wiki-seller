@@ -29,8 +29,14 @@ from .selection import (
     normalize_name,
     parse_collection,
 )
-from .site import HumanVerificationRequired, ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
-from .trace import install_api_trace
+from .site import (
+    SITE_TIMEZONE,
+    HumanVerificationRequired,
+    ListingStatus,
+    PriceApiUnavailable,
+    SessionExpired,
+    WikiMasters,
+)
 from .unsold import UnsoldTracker
 from .verification import notify
 
@@ -43,7 +49,6 @@ PRICE_SAVE_EVERY = 50
 RETRY_LISTING_AFTER = 5  # secondes
 PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérification humaine
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
-SITE_TIMEZONE = "Europe/Paris"
 
 
 @dataclass
@@ -108,22 +113,16 @@ def open_site(config: Config, debug: bool):
     config.state_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=config.headless, executable_path=config.chromium_executable)
-        storage = str(config.storage_state_file) if config.storage_state_file.exists() else None
-        context = browser.new_context(
-            storage_state=storage, locale="fr-FR", timezone_id=SITE_TIMEZONE,
-            viewport={"width": 1440, "height": 900},
-        )
-        context.set_default_timeout(20000)
-        if config.api_trace:
-            install_api_trace(context, config.base_url, config.api_trace_file)
-        site = WikiMasters(context.new_page(), config, debug=debug)
+        site = WikiMasters.open(browser, config, debug=debug)
         try:
             site.ensure_logged_in()
-            context.storage_state(path=str(config.storage_state_file))
+            site.save_storage_state()
             yield site
         finally:
             try:
-                context.storage_state(path=str(config.storage_state_file))
+                # Le contexte a pu être recréé en cours de passe (FlareSolverr) :
+                # c'est celui de la page courante qu'il faut enregistrer.
+                site.save_storage_state()
             except Exception:
                 pass
             browser.close()
@@ -216,9 +215,11 @@ def _open_packs(site: WikiMasters, dry_run: bool) -> None:
         if opened:
             log.info("Paquets : %d ouvert(s).", opened)
     except HumanVerificationRequired as exc:
-        # Le site exige un humain pour continuer : on ne contourne pas. Si PACKS_VERIFY_WAIT
-        # est réglé, on prévient et on attend qu'une personne fasse la vérification dans ce
-        # navigateur (écran distant) ; sinon, ou sans réponse, pause de PACKS_VERIFICATION_PAUSE.
+        # Le site exige un humain pour continuer (FlareSolverr, s'il est configuré,
+        # vient d'être essayé sans succès dans open_packs*). Si PACKS_VERIFY_WAIT est
+        # réglé, on prévient et on attend qu'une personne fasse la vérification dans
+        # ce navigateur (écran distant) ; sinon, ou sans réponse, pause de
+        # PACKS_VERIFICATION_PAUSE.
         if config.packs_verify_wait and _human_verification(site, dry_run):
             return
         until = now_utc() + PACKS_VERIFICATION_PAUSE
