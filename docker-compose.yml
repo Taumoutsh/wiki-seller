@@ -4,10 +4,6 @@ services:
     restart: unless-stopped
     # MAIL et PASSWORD (et les réglages optionnels) sont lus depuis .env.
     env_file: .env
-    # FlareSolverr qui tourne à part sur l'hôte : FLARESOLVERR_URL=http://host.docker.internal:8191/v1
-    # dans .env (« localhost » désignerait ce conteneur-ci).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     # Ressources maximales : la moitié du serveur (4 cœurs) et 2 Go de RAM par défaut,
     # réglables dans .env avec CPU_LIMIT et MEM_LIMIT.
     cpus: ${CPU_LIMIT:-2}

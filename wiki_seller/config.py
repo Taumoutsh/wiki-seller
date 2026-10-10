@@ -131,9 +131,6 @@ class Config:
     # et URL de notification (ntfy) pour la prévenir.
     packs_verify_wait: timedelta | None = None
     notify_url: str | None = None
-    # FlareSolverr (« http://flaresolverr:8191/v1 ») essayé avant la vérification humaine ;
-    # None = désactivé.
-    flaresolverr_url: str | None = None
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
     api_trace: bool = False
     # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
@@ -231,7 +228,6 @@ def load_config() -> Config:
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "")),
         packs_verify_wait=(timedelta(minutes=wait) if (wait := _positive_int("PACKS_VERIFY_WAIT")) else None),
         notify_url=os.getenv("NOTIFY_URL", "").strip() or None,
-        flaresolverr_url=os.getenv("FLARESOLVERR_URL", "").strip() or None,
         unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         price_cache_ttl=timedelta(hours=_positive_int("PRICE_CACHE_HOURS") or 24),

@@ -39,11 +39,7 @@ simulation (`--dry-run`), aucun paquet n'est ouvert.
 Si le site exige une **vérification anti-bot** pour ouvrir les paquets (réponse
 `human_verification_required`), le script ne la contourne pas : il le signale dans le
 journal et suspend l'ouverture automatique 12 h (`state/packs_pause.json`). Ouvrez-les
-à la main en attendant ; supprimez ce fichier pour réessayer plus tôt. Si
-`FLARESOLVERR_URL` est réglé, FlareSolverr est essayé d'abord, mais il ne résout que
-les challenges Cloudflare : la vérification propre au site (fenêtre avec case à
-cocher) ne peut être faite que par une personne (`PACKS_VERIFY_WAIT` avec un écran
-distant, ou à la main).
+à la main en attendant ; supprimez ce fichier pour réessayer plus tôt.
 
 ## Achats (wanted_cards.json)
 
@@ -183,7 +179,6 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `OPEN_PACKS_HOURS` | *(vide)* | Heures de Paris où les paquets sont ouverts ; vide = jamais |
 | `PACKS_VERIFY_WAIT` | *(vide)* | Minutes d'attente qu'une personne fasse la vérification humaine (exige `HEADLESS=false` et un écran distant) ; vide = pause de 12 h |
 | `NOTIFY_URL` | *(vide)* | Notification (ntfy) quand une vérification attend quelqu'un |
-| `FLARESOLVERR_URL` | *(vide)* | FlareSolverr essayé avant la vérification humaine des paquets : 2 tentatives, cookies et User-Agent repris dans le navigateur, session conservée (avec Docker : `http://host.docker.internal:8191/v1` pour un FlareSolverr de l'hôte). En cas d'échec, sa réponse est enregistrée dans `state/debug/` pour diagnostic ; vide = désactivé |
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |
