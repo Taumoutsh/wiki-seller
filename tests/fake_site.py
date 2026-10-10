@@ -209,7 +209,7 @@ class FakeWikiMasters:
         self.rate_limited = 0
         self.pack_refusals = 0
         self.history = []  # vos ventes terminées (onglet « Historique »)
-        self.packs_need_human = False  # le site exige une vérification anti-bot pour les paquets
+        self.packs_need_human = False  # vérification anti-bot exigée (True) ou pour N demandes (int)
         self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
         self.api_listings = []  # corps des mises en vente reçues par l'API
         self.packs_opened = 0
@@ -317,6 +317,8 @@ class FakeWikiMasters:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 if self.path == "/api/packs/open" and self._authed() and site.packs_need_human:
                     site.pack_refusals += 1
+                    if type(site.packs_need_human) is int:  # nombre de refus avant de laisser passer
+                        site.packs_need_human -= 1
                     return self._send(403, {"error": "Vérification anti-bot requise pour continuer à ouvrir des paquets.",
                                             "human_verification_required": True, "code": "human_verification_required"})
                 if self.path == "/api/packs/open" and self._authed() and site.packs > 0 and site.pack_cooldown:

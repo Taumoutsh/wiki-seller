@@ -58,6 +58,7 @@ PACK_COUNTER_SETTLE = 8  # secondes pour que le compteur de /pulls quitte son 0 
 PACK_RATE_LIMIT_BUDGET = 600  # secondes d'attente cumulée au plus pour la limite de cadence
 LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut être en vente ou en échange)
 API_ACTION_PAUSE = 1500  # ms entre deux actions par l'API, pour garder un rythme humain
+VERIFICATION_RETRY_WAIT = 5  # s après rechargement de /pulls, avant de retenter une ouverture refusée
 PACK_GUARD = 20  # au plus 10 paquets stockés sur le site ; marge pour ceux qui arrivent
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 
@@ -783,6 +784,7 @@ class WikiMasters:
         opened = 0
         target = min(limit or PACK_GUARD, PACK_GUARD)
         waited = 0.0
+        reloaded = False
         while opened < target:
             status, data, text = self.api_post("/api/packs/open")
             remaining = data.get("packs_remaining") if isinstance(data, dict) else None
@@ -799,6 +801,15 @@ class WikiMasters:
                 continue
             if isinstance(data, dict) and (data.get("human_verification_required")
                                            or data.get("code") == "human_verification_required"):
+                if not reloaded:
+                    # Une seule fois : recharger /pulls (comme un F5) et retenter. Si le site
+                    # exige vraiment la vérification, il la redemande et on s'arrête là.
+                    reloaded = True
+                    log.info("Paquets : vérification humaine demandée ; rechargement de la page "
+                             "et nouvel essai dans %d s.", VERIFICATION_RETRY_WAIT)
+                    page.goto(self.url("/pulls"), wait_until="domcontentloaded")
+                    page.wait_for_timeout(VERIFICATION_RETRY_WAIT * 1000)
+                    continue
                 raise HumanVerificationRequired(str(data.get("error") or "vérification anti-bot requise"))
             if not 200 <= status < 300:
                 if opened or available:

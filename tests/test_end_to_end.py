@@ -426,7 +426,8 @@ def test_unsold_card_is_set_aside_then_retried(tmp_path):
     assert site.api_listings[-1]["card_id"] == "c1"
 
 
-def test_packs_paused_when_site_requires_human_verification(tmp_path, caplog):
+def test_packs_paused_when_site_requires_human_verification(tmp_path, caplog, monkeypatch):
+    monkeypatch.setattr("wiki_seller.site.VERIFICATION_RETRY_WAIT", 0)
     with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
         site.packs_need_human = True
         config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24))
@@ -434,10 +435,23 @@ def test_packs_paused_when_site_requires_human_verification(tmp_path, caplog):
             run_once(config)
             run_once(config)
     assert site.packs_opened == 0
-    assert site.pack_refusals == 1  # pas de nouvelle demande à la passe suivante
+    # Un seul nouvel essai après rechargement, puis pas de nouvelle demande à la passe suivante.
+    assert site.pack_refusals == 2
+    assert "rechargement de la page" in caplog.text
     assert "Vérification anti-bot requise" in caplog.text
     assert "ouverture automatique suspendue" in caplog.text.lower()
     assert (config.state_dir / "packs_pause.json").exists()
+
+
+def test_packs_retry_once_after_reload_when_verification_goes_away(tmp_path, monkeypatch):
+    monkeypatch.setattr("wiki_seller.site.VERIFICATION_RETRY_WAIT", 0)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=2, max_auctions=0) as site:
+        site.packs_need_human = 1  # demandée une seule fois
+        config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24))
+        run_once(config)
+    assert site.pack_refusals == 1
+    assert site.packs_opened == 2
+    assert not (config.state_dir / "packs_pause.json").exists()
 
 
 def test_await_pack_verification_waits_for_a_person(tmp_path):
