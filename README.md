@@ -30,7 +30,8 @@ prises, elle démarre dès la fin de la première enchère en cours, et au plus 
 
 ## Paquets
 
-Dans la plage `OPEN_PACKS_HOURS` (par défaut `0-6`), chaque passe va dans « Paquets »,
+**Désactivé par défaut** : le site exige désormais une vérification humaine pour ouvrir
+les paquets, ouvrez-les à la main. Si `OPEN_PACKS_HOURS` est réglé (par ex. `0-6`), chaque passe va dans « Paquets »,
 clique sur « Ouvrir », fait défiler les 5 cartes avec la flèche, clique sur « Continuer »
 et recommence tant qu'il reste des paquets. Le site en stocke 10 au maximum. En
 simulation (`--dry-run`), aucun paquet n'est ouvert.
@@ -179,7 +180,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `HEADLESS` | `true` | `false` pour voir le navigateur |
 | `CHROMIUM_EXECUTABLE` | *(vide)* | Chromium déjà installé à utiliser |
 | `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir plus haut) |
-| `OPEN_PACKS_HOURS` | `0-6` | Heures de Paris où les paquets sont ouverts ; vide = jamais |
+| `OPEN_PACKS_HOURS` | *(vide)* | Heures de Paris où les paquets sont ouverts ; vide = jamais |
 | `PACKS_VERIFY_WAIT` | *(vide)* | Minutes d'attente qu'une personne fasse la vérification humaine (exige `HEADLESS=false` et un écran distant) ; vide = pause de 12 h |
 | `NOTIFY_URL` | *(vide)* | Notification (ntfy) quand une vérification attend quelqu'un |
 | `FLARESOLVERR_URL` | *(vide)* | FlareSolverr essayé avant la vérification humaine des paquets : 2 tentatives, cookies et User-Agent repris dans le navigateur, session conservée (avec Docker : `http://host.docker.internal:8191/v1` pour un FlareSolverr de l'hôte). En cas d'échec, sa réponse est enregistrée dans `state/debug/` pour diagnostic ; vide = désactivé |

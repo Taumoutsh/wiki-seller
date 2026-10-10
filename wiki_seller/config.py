@@ -124,7 +124,7 @@ class Config:
     # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
     night_durations: tuple[tuple[int, int, str], ...] = ()
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
-    packs_hours: tuple[int, int] | None = (0, 6)
+    packs_hours: tuple[int, int] | None = None
     # Vérification humaine des paquets : attente qu'une personne la fasse (None = pause directe),
     # et URL de notification (ntfy) pour la prévenir.
     packs_verify_wait: timedelta | None = None
@@ -226,7 +226,7 @@ def load_config() -> Config:
         wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
         snipe_lead=snipe_lead or timedelta(seconds=5),
-        packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "0-6")),
+        packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "")),
         packs_verify_wait=(timedelta(minutes=wait) if (wait := _positive_int("PACKS_VERIFY_WAIT")) else None),
         notify_url=os.getenv("NOTIFY_URL", "").strip() or None,
         flaresolverr_url=os.getenv("FLARESOLVERR_URL", "").strip() or None,

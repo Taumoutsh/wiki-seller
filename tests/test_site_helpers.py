@@ -92,7 +92,9 @@ def test_packs_window_and_next_wake(tmp_path):
 
     from wiki_seller.main import in_packs_window, next_wake
 
-    night = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    default = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    assert not in_packs_window(default, datetime(2026, 1, 1, 1, 0))  # désactivé par défaut
+    night = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None, packs_hours=(0, 6))
     assert in_packs_window(night, datetime(2026, 1, 1, 0, 0)) and in_packs_window(night, datetime(2026, 1, 1, 5, 59))
     assert not in_packs_window(night, datetime(2026, 1, 1, 6, 0))
     wrap = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None, packs_hours=(22, 2))
