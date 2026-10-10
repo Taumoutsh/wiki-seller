@@ -121,6 +121,8 @@ class Config:
     # Cartes invendues : mises de côté après unsold_max_tries échecs, pendant unsold_cooldown.
     unsold_max_tries: int = 3
     unsold_cooldown: timedelta = timedelta(days=5)
+    # Durée de validité des prix moyens en cache (state/price_cache.json).
+    price_cache_ttl: timedelta = timedelta(hours=24)
     # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
     night_durations: tuple[tuple[int, int, str], ...] = ()
     # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
@@ -232,6 +234,7 @@ def load_config() -> Config:
         flaresolverr_url=os.getenv("FLARESOLVERR_URL", "").strip() or None,
         unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
+        price_cache_ttl=timedelta(hours=_positive_int("PRICE_CACHE_HOURS") or 24),
         night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
         api_trace=_bool(os.getenv("API_TRACE"), False),
         actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),

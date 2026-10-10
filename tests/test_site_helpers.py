@@ -194,3 +194,12 @@ def test_full_slots_wait_is_capped_by_run_interval(tmp_path):
     now = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
     full = RunResult(0, None, True, now + timedelta(hours=11))  # ventes de nuit de 12 h
     assert next_run_at(full, config, now) == now + timedelta(hours=1)
+
+
+def test_price_cache_ttl_from_env(monkeypatch):
+    monkeypatch.setenv("MAIL", "m")
+    monkeypatch.setenv("PASSWORD", "p")
+    monkeypatch.delenv("PRICE_CACHE_HOURS", raising=False)
+    assert load_config().price_cache_ttl == timedelta(hours=24)
+    monkeypatch.setenv("PRICE_CACHE_HOURS", "6")
+    assert load_config().price_cache_ttl == timedelta(hours=6)

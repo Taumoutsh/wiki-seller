@@ -44,7 +44,6 @@ log = logging.getLogger("wiki_seller")
 
 RESTART_MARGIN = timedelta(minutes=1)
 RETRY_AFTER_ERROR = timedelta(minutes=10)
-PRICE_CACHE_TTL = timedelta(hours=3)
 PRICE_SAVE_EVERY = 50
 RETRY_LISTING_AFTER = 5  # secondes
 PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérification humaine
@@ -96,7 +95,7 @@ def write_json(path, data) -> None:
 
 def load_price_cache(config: Config) -> dict:
     cache = read_json(config.state_dir / "price_cache.json", {})
-    limit = (now_utc() - PRICE_CACHE_TTL).isoformat()
+    limit = (now_utc() - config.price_cache_ttl).isoformat()
     return {k: v for k, v in cache.items() if isinstance(v, dict) and v.get("at", "") > limit}
 
 
