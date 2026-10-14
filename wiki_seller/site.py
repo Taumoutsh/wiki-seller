@@ -468,7 +468,8 @@ class WikiMasters:
                  f" de rareté {', '.join(rarities)}" if rarities else "")
         return entries, in_trade
 
-    def scan_collection(self, scan: "CollectionScan", should_stop=lambda: False, log_done: bool = True) -> bool:
+    def scan_collection(self, scan: "CollectionScan", should_stop=lambda: False, log_done: bool = True,
+                        on_page=lambda scan: None) -> bool:
         """Lit la collection page par page à partir de scan.next_page. S'arrête entre deux
         pages si should_stop() : un nouvel appel reprend là où la lecture s'était arrêtée.
         Renvoie True quand toute la collection est lue."""
@@ -493,6 +494,7 @@ class WikiMasters:
                 new += 1
                 scan.entries.append(item)
             scan.next_page += 1
+            on_page(scan)
             if not new:
                 scan.done = True
             else:

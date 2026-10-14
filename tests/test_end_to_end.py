@@ -599,3 +599,38 @@ def test_finished_discard_is_not_restarted_right_away(tmp_path):
         run_once(config)  # seuil non dépassé il y a moins d'une heure : pas de relecture
         DISCARDER.join(120)
     assert pages_read(site, 1) == 1
+
+
+def test_discard_resumes_from_saved_progress_after_restart(tmp_path):
+    from datetime import datetime, timezone
+
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        # Redémarrage au milieu du plan : un « Caillou » sur deux déjà défaussé.
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        (config.state_dir / "discard_progress.json").write_text(json.dumps({
+            "started_at": datetime.now(timezone.utc).isoformat(), "position": 0, "copies_done": 1,
+            "done": 1, "total": 3,
+            "plan": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2},
+                     {"card_id": "B", "title": "Feuille", "rarity": "PC", "average": None, "copies": 1}],
+        }), encoding="utf-8")
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == ["Caillou", "Feuille"]
+    assert pages_read(site, 1) == 0  # plan repris tel quel, collection non relue
+    saved = json.loads((config.state_dir / "discard_progress.json").read_text(encoding="utf-8"))
+    assert saved["finished_at"] and saved["done"] == 3 and "plan" not in saved
+
+
+def test_discard_progress_saves_and_reloads_partial_scan(tmp_path):
+    from wiki_seller.main import DiscardProgress
+    from wiki_seller.site import CollectionScan
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", [])
+    progress = DiscardProgress(scan=CollectionScan(entries=[{"id": "x"}], seen={"x"}, next_page=1))
+    progress.save(config)
+    again = DiscardProgress.load(config)
+    assert again.scan.entries == [{"id": "x"}] and again.scan.seen == {"x"} and again.scan.next_page == 1
+    assert again.plan is None and again.started_at == progress.started_at

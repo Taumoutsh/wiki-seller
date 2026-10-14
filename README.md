@@ -53,6 +53,9 @@ Si une défausse tourne déjà, aucune autre n'est lancée.
   après la page de collection, le prix ou la carte en cours, puis reprend là où elle
   s'était arrêtée une fois la passe terminée : la collection n'est lue qu'une fois, et
   les prix déjà lus restent dans `state/price_cache.json`.
+- **Reprise après un redémarrage :** l'avancement (collection lue, plan, carte en cours)
+  est sauvegardé dans `state/discard_progress.json`, puis repris au réveil suivant s'il
+  date de moins de 24 h. Supprimez ce fichier pour repartir de zéro.
 - **Simulation :** en `--dry-run`, la fiche est ouverte et le bouton trouvé, mais
   rien n'est défaussé.
 - **Passe unique :** sans `--loop`, le script attend la fin de la défausse avant de
