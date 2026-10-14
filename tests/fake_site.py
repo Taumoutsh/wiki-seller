@@ -75,8 +75,20 @@ function render() {
 document.getElementById('q').oninput = render;
 function openCard(id) {
   const c = cards.find(x => x.card.id === id);
-  show(`<div role="dialog"><h2>${c.card.wikipedia_title}</h2><button id="sell">🔨 Mettre aux enchères</button><button>Défausser</button></div>`);
+  show(`<div role="dialog"><h2>${c.card.wikipedia_title}</h2><button id="sell">🔨 Mettre aux enchères</button><button id="discard">🗑️ Défausser <span>⊙+1</span></button></div>`);
   document.getElementById('sell').onclick = () => openAuction(c);
+  document.getElementById('discard').onclick = () => {
+    const copies = cards.filter(x => x.card.id === id);
+    if (copies.length > 1) return discard(copies[0]);
+    // Dernier exemplaire : confirmation, avec un second bouton « Défausser ».
+    document.getElementById('detail').insertAdjacentHTML('beforeend',
+      `<div role="alertdialog"><p>C'est votre dernier exemplaire.</p><button id="no">Annuler</button><button id="yes">Défausser</button></div>`);
+    document.getElementById('yes').onclick = () => discard(copies[0]);
+  };
+}
+async function discard(copy) {
+  const r = await fetch('/api/collection/discard', {method: 'POST', body: JSON.stringify({user_card_id: copy.id})});
+  if (r.ok) { show(''); await load(); }
 }
 async function openAuction(c) {
   const mine = await (await fetch('/api/marketplace?page=1&limit=50&sort=recent&mine=1')).json();
@@ -218,6 +230,7 @@ class FakeWikiMasters:
         self.logins = 0
         self.signups = 0
         self.collection_requests = []
+        self.discarded = []  # titres des exemplaires défaussés, dans l'ordre
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -315,6 +328,13 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path == "/api/collection/discard" and self._authed():
+                    copy = next((c for c in site.collection if c["id"] == body.get("user_card_id")), None)
+                    if copy is None:
+                        return self._send(404, {"error": "not found"})
+                    site.collection.remove(copy)
+                    site.discarded.append(copy["card"]["wikipedia_title"])
+                    return self._send(200, {"ok": True, "wikibidous": 1})
                 if self.path == "/api/packs/open" and self._authed() and site.packs_need_human:
                     site.pack_refusals += 1
                     if type(site.packs_need_human) is int:  # nombre de refus avant de laisser passer

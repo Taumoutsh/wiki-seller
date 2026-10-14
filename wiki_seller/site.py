@@ -47,6 +47,11 @@ PACKS_AVAILABLE = re.compile(r"(\d+)\s*/\s*(\d+)\s*paquets?\s+disponibles?", re.
 PACK_OPEN_BUTTON = 'button:has(span:text-is("Ouvrir"))'
 PACK_MORE_CARDS = re.compile(r"Encore\s+\d+\s+cartes?", re.I)
 PACK_CONTINUE = re.compile(r"^\s*Continuer\s*$", re.I)
+# « 🗑️ Défausser ⊙+1 » : icône et badge autour du libellé.
+DISCARD_BUTTON = re.compile(r"D[ée]fausser", re.I)
+DISCARD_CONFIRM = re.compile(r"D[ée]fausser|confirmer|^\s*oui\b", re.I)
+DISCARD_CONFIRM_WAIT = 3  # s pour qu'une confirmation (dernier exemplaire) apparaisse
+DISCARD_RESPONSE_WAIT = 10  # s pour que le site réponde à la défausse
 BID_INPUT = 'input[aria-label="Montant de la mise"]'
 BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
 SLOTS_FULL_TEXT = re.compile(r"maximum|limite|trop d.ench|max.*ench|concurrent", re.I)
@@ -77,6 +82,12 @@ class HumanVerificationRequired(Exception):
 
 class PriceApiUnavailable(Exception):
     """L'API des prix a refusé la requête : le prix sera lu dans la fenêtre d'enchère."""
+
+
+class DiscardStatus(Enum):
+    DISCARDED = "défaussée"
+    DRY_RUN = "défausse simulée (non validée)"
+    FAILED = "échec de la défausse"
 
 
 class ListingStatus(Enum):
@@ -681,6 +692,68 @@ class WikiMasters:
             except Exception:
                 pass
             return ListingResult(ListingStatus.FAILED, detail=str(exc).splitlines()[0])
+
+    # ─────────────────────────── Défausse (UI) ───────────────────────────
+
+    def discard_card(self, title: str, dry_run: bool) -> tuple[DiscardStatus, str]:
+        """Défausse un exemplaire : fiche de la carte depuis « Collection », bouton
+        « Défausser », puis la confirmation si le site en affiche une (dernier exemplaire).
+        Réussi seulement si le site a répondu OK à la requête envoyée par la page."""
+        page = self.page
+        responses = []
+
+        def on_response(response) -> None:
+            if response.request.method != "GET" and "/api/" in response.url:
+                responses.append(response)
+
+        try:
+            self.open_card(title)
+            button = page.get_by_role("button", name=DISCARD_BUTTON).first
+            button.wait_for(state="visible", timeout=15000)
+            self.step(f"discard-{title}")
+            if dry_run:
+                self._cancel()
+                return DiscardStatus.DRY_RUN, ""
+            page.on("response", on_response)
+            try:
+                before = page.get_by_role("button", name=DISCARD_CONFIRM).count()
+                button.click()
+                self._confirm_discard(before)
+                deadline = time.monotonic() + DISCARD_RESPONSE_WAIT
+                while not responses and time.monotonic() < deadline:
+                    page.wait_for_timeout(200)
+            finally:
+                page.remove_listener("response", on_response)
+            if not responses:
+                self.snapshot(f"discard-noresponse-{title}")
+                return DiscardStatus.FAILED, "le site n'a envoyé aucune requête de défausse"
+            last = responses[-1]
+            detail = f"{last.request.method} {last.url.split('?')[0].removeprefix(self.config.base_url)}"
+            if not last.ok:
+                self.snapshot(f"discard-refused-{title}")
+                return DiscardStatus.FAILED, f"{detail} → HTTP {last.status}"
+            return DiscardStatus.DISCARDED, detail
+        except SessionExpired:
+            raise
+        except Exception as exc:
+            self.snapshot(f"discard-error-{title}")
+            try:
+                self._cancel()
+            except Exception:
+                pass
+            return DiscardStatus.FAILED, str(exc).splitlines()[0]
+
+    def _confirm_discard(self, buttons_before: int) -> None:
+        """Le dernier exemplaire d'une carte demande une confirmation : un nouveau bouton
+        « Défausser » (ou « Confirmer ») apparaît, généralement dans une fenêtre."""
+        page = self.page
+        candidates = page.get_by_role("button", name=DISCARD_CONFIRM)
+        deadline = time.monotonic() + DISCARD_CONFIRM_WAIT
+        while time.monotonic() < deadline:
+            if candidates.count() > buttons_before:
+                candidates.last.click()  # le bouton de confirmation est ajouté après la fiche
+                return
+            page.wait_for_timeout(200)
 
     # ─────────────────────────── Marché : rafraîchissement ───────────────────────────
 

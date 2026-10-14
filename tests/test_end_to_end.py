@@ -478,3 +478,85 @@ def test_human_verification_wait_needs_a_visible_browser(tmp_path, caplog):
             run_once(config)
     assert "HEADLESS=false" in caplog.text
     assert (config.state_dir / "packs_pause.json").exists()  # repli : pause habituelle
+
+
+# ─────────────────────────── Défausse ───────────────────────────
+
+DISCARD_COLLECTION = [
+    entry("a1", "A", "Caillou", "C"), entry("a2", "A", "Caillou", "C"),
+    entry("b1", "B", "Feuille", "PC"),
+    entry("c1", "C", "Rare sans prix", "R"),
+    entry("d1", "D", "Presque", "R"),
+    entry("e1", "E", "Pile quinze", "R"),
+    entry("f1", "F", "Tour Eiffel", "C"),
+    entry("g1", "G", "Victor Hugo", "C"),
+]
+DISCARD_AVERAGES = {"A": 5, "D": 14, "E": 15, "F": 2, "G": 3}
+FULL_SLOTS = [{"id": f"x{i}", "card_id": "zz", "status": "active", "end_at": "2030-01-01T10:00:00Z"}
+              for i in range(5)]
+
+
+def discard_site(**kwargs):
+    site = FakeWikiMasters(list(DISCARD_COLLECTION), DISCARD_AVERAGES, {}, max_auctions=5, **kwargs)
+    site.selling = list(FULL_SLOTS)  # aucune vente : on ne teste que la défausse
+    return site
+
+
+def test_discard_runs_in_background_above_trigger(tmp_path):
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, ["tour eiffel"], wanted=[{"name": "Victor Hugo", "max_price": 1}],
+                             discard_below=15, discard_trigger=7)
+        run_once(config)
+        DISCARDER.join(120)
+    assert not DISCARDER.running()
+    # Sans prix (PC) d'abord, puis les moins chères ; le dernier « Caillou » passe par la
+    # confirmation ; ni la carte protégée, ni la carte voulue, ni « Pile quinze ».
+    assert site.discarded == ["Feuille", "Caillou", "Caillou", "Presque"]
+    assert sorted(c["card"]["wikipedia_title"] for c in site.collection) == [
+        "Pile quinze", "Rare sans prix", "Tour Eiffel", "Victor Hugo"]
+
+
+def test_no_discard_at_or_below_trigger(tmp_path):
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=8)
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == []
+
+
+def test_discard_dry_run_clicks_nothing(tmp_path):
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        run_once(config, dry_run=True)
+        DISCARDER.join(120)
+    assert site.discarded == [] and len(site.collection) == len(DISCARD_COLLECTION)
+
+
+def test_pass_interrupts_discard_which_then_resumes(tmp_path, caplog):
+    import logging
+    import time
+
+    from wiki_seller.main import DISCARDER
+
+    cheap = [entry(f"p{i}", f"P{i}", f"Galet {i}", "C") for i in range(6)]
+    with FakeWikiMasters(list(cheap), {f"P{i}": 2 for i in range(6)}, {}, max_auctions=5) as site:
+        site.selling = list(FULL_SLOTS)
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1000)
+        caplog.set_level(logging.INFO)
+        DISCARDER.start(config, False, False)
+        deadline = time.monotonic() + 120
+        while not site.discarded and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert site.discarded, "la défausse n'a pas démarré"
+        run_once(config)  # attend que la défausse cède la session, puis passe
+        paused_at = len(site.discarded)
+        DISCARDER.join(180)
+    assert paused_at < 6
+    assert sorted(site.discarded) == sorted(f"Galet {i}" for i in range(6))
+    assert "Défausse en pause" in caplog.text

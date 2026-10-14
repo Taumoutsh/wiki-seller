@@ -8,6 +8,7 @@ import json
 import logging
 import random
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -17,8 +18,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.sync_api import sync_playwright
 
-from .buying import WantedCardsError, WantedState, auction_title, my_user_id, run_bids
+from .buying import WantedCardsError, WantedState, auction_title, load_wanted_cards, my_user_id, run_bids
 from .config import Config, ConfigError, load_config
+from .discard import SessionGate, build_discard_plan, total_copies
 from .selection import (
     SafeCardsError,
     adjust_to_market,
@@ -29,7 +31,14 @@ from .selection import (
     normalize_name,
     parse_collection,
 )
-from .site import HumanVerificationRequired, ListingStatus, PriceApiUnavailable, SessionExpired, WikiMasters
+from .site import (
+    DiscardStatus,
+    HumanVerificationRequired,
+    ListingStatus,
+    PriceApiUnavailable,
+    SessionExpired,
+    WikiMasters,
+)
 from .trace import install_api_trace
 from .unsold import UnsoldTracker
 from .verification import notify
@@ -43,6 +52,10 @@ RETRY_LISTING_AFTER = 5  # secondes
 PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérification humaine
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 SITE_TIMEZONE = "Europe/Paris"
+DISCARD_PAUSE = (1.0, 3.0)  # secondes entre deux défausses, pour garder un rythme humain
+
+# Un seul navigateur à la fois sur la session (voir discard.SessionGate).
+GATE = SessionGate()
 
 
 @dataclass
@@ -102,10 +115,11 @@ def save_price_cache(config: Config, cache: dict) -> None:
 
 
 @contextmanager
-def open_site(config: Config, debug: bool):
-    """Navigateur connecté au site ; la session est enregistrée à la sortie."""
+def open_site(config: Config, debug: bool, background: bool = False):
+    """Navigateur connecté au site ; la session est enregistrée à la sortie. Un seul à la
+    fois : la défausse (background) attend et cède la place aux passes."""
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    with sync_playwright() as pw:
+    with GATE.background() if background else GATE.priority(), sync_playwright() as pw:
         browser = pw.chromium.launch(headless=config.headless, executable_path=config.chromium_executable)
         storage = str(config.storage_state_file) if config.storage_state_file.exists() else None
         context = browser.new_context(
@@ -142,13 +156,16 @@ def run_once(config: Config, dry_run: bool = False, debug: bool = False) -> RunR
             log.info("Paquets : il est %s, hors de la plage %s h.", now.strftime("%H:%M"),
                      "-".join(map(str, config.packs_hours)))
         _buy(site, config, dry_run)
-        return _sell(site, config, safe_names, dry_run)
+        result = _sell(site, config, safe_names, dry_run)
+        check_discard(site, config, dry_run, debug)
+        return result
 
 
 def run_snipe(config: Config, dry_run: bool = False, debug: bool = False) -> None:
     """Réveil juste avant la fin d'une enchère suivie : surenchérir si besoin."""
     with open_site(config, debug) as site:
         run_bids(site, config, dry_run, snipe_only=True)
+        check_discard(site, config, dry_run, debug)
 
 
 def market_adjuster(site: WikiMasters, config: Config, title: str, my_auction_ids: set[str]):
@@ -263,6 +280,43 @@ def _buy(site: WikiMasters, config: Config, dry_run: bool) -> None:
         log.warning("Achats interrompus : %s", str(exc).splitlines()[0])
 
 
+def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda: False):
+    """Prix moyens (cache state/price_cache.json, sinon l'API). Renvoie (prix par carte,
+    cartes dont l'API a refusé le prix, True si tout a été lu sans interruption)."""
+    cache = load_price_cache(config)
+    averages: dict[str, float | None] = {}
+    unknown: set[str] = set()
+    price_api_ok = True
+    fetched = 0
+    try:
+        for group in groups:
+            key = f"{group.card_id}:{group.rarity}"
+            if key in cache:
+                averages[group.card_id] = cache[key]["average"]
+                continue
+            if not price_api_ok:
+                unknown.add(group.card_id)
+                continue
+            if should_stop():
+                return averages, unknown, False
+            try:
+                averages[group.card_id] = site.fetch_average(group.card_id, group.rarity)
+            except PriceApiUnavailable as exc:
+                log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
+                            "sans classement pour les cartes concernées.", exc)
+                price_api_ok = False
+                unknown.add(group.card_id)
+                continue
+            cache[key] = {"average": averages[group.card_id], "at": now_utc().isoformat()}
+            fetched += 1
+            if fetched % PRICE_SAVE_EVERY == 0:
+                save_price_cache(config, cache)  # une passe interrompue ne perd pas les prix déjà lus
+            time.sleep(0.3)
+    finally:
+        save_price_cache(config, cache)
+    return averages, unknown, True
+
+
 def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool) -> RunResult:
     market = site.fetch_market_state()
     log.info("Enchères en cours : %d/%d.", len(market.selling), market.max_auctions)
@@ -290,33 +344,7 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
     log.info("%d carte(s) distincte(s), dont %d avec des exemplaires à vendre.", len(groups), len(sellable))
 
     # Prix moyens via l'API pour classer les cartes de la plus chère à la moins chère.
-    cache = load_price_cache(config)
-    averages: dict[str, float | None] = {}
-    unknown: set[str] = set()
-    price_api_ok = True
-    fetched = 0
-    for group in sellable:
-        key = f"{group.card_id}:{group.rarity}"
-        if key in cache:
-            averages[group.card_id] = cache[key]["average"]
-            continue
-        if not price_api_ok:
-            unknown.add(group.card_id)
-            continue
-        try:
-            averages[group.card_id] = site.fetch_average(group.card_id, group.rarity)
-        except PriceApiUnavailable as exc:
-            log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
-                        "sans classement pour les cartes concernées.", exc)
-            price_api_ok = False
-            unknown.add(group.card_id)
-            continue
-        cache[key] = {"average": averages[group.card_id], "at": now_utc().isoformat()}
-        fetched += 1
-        if fetched % PRICE_SAVE_EVERY == 0:
-            save_price_cache(config, cache)  # une passe interrompue ne perd pas les prix déjà lus
-        time.sleep(0.3)
-    save_price_cache(config, cache)
+    averages, unknown, _ = fetch_averages(site, config, sellable)
 
     plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown)
     if plan.skipped:
@@ -373,6 +401,118 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
         except Exception:
             pass
     return RunResult(listed, last_listing_at, slots_full or listed >= free, earliest)
+
+
+# ─────────────────────────── Défausse en arrière-plan ───────────────────────────
+
+
+class DiscardWorker:
+    """Thread de défausse : un seul à la fois."""
+
+    def __init__(self):
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, config: Config, dry_run: bool, debug: bool) -> bool:
+        with self._lock:
+            if self.running():
+                return False
+            self._thread = threading.Thread(
+                target=run_discard, args=(config, dry_run, debug), name="defausse", daemon=True)
+            self._thread.start()
+            return True
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+
+DISCARDER = DiscardWorker()
+
+
+def protected_names(config: Config) -> set[str]:
+    """Cartes jamais défaussées : celles de safed_cards.json et de wanted_cards.json."""
+    names = set(load_safe_cards(config.safe_cards_file))
+    try:
+        names |= {normalize_name(c.name) for c in load_wanted_cards(config.wanted_cards_file)}
+    except WantedCardsError as exc:
+        log.warning("Défausse : %s ; les cartes voulues ne sont pas protégées.", exc)
+    return names
+
+
+def check_discard(site: WikiMasters, config: Config, dry_run: bool, debug: bool) -> None:
+    """À chaque réveil : au-delà de DISCARD_TRIGGER exemplaires dans la collection, lance la
+    défausse en arrière-plan (sauf si elle tourne déjà)."""
+    if not config.discard_below:
+        return
+    if DISCARDER.running():
+        log.info("Défausse déjà en cours en arrière-plan.")
+        return
+    try:
+        entries, _ = site.fetch_collection()
+    except SessionExpired:
+        raise
+    except Exception as exc:
+        log.warning("Défausse : collection illisible (%s).", str(exc).splitlines()[0])
+        return
+    count = total_copies(parse_collection(entries))
+    if count <= config.discard_trigger:
+        log.info("Collection : %d exemplaire(s), seuil de défausse %d non dépassé.", count, config.discard_trigger)
+        return
+    log.info("Collection : %d exemplaire(s) > %d : défausse des cartes à moins de %d lancée en arrière-plan.",
+             count, config.discard_trigger, config.discard_below)
+    DISCARDER.start(config, dry_run, debug)
+
+
+def run_discard(config: Config, dry_run: bool, debug: bool) -> None:
+    """Corps du thread : défausse toutes les cartes à moins de DISCARD_BELOW, une à une.
+    Cède la session à chaque passe qui attend, puis reprend avec une collection relue."""
+    try:
+        while not _discard_round(config, dry_run, debug):
+            log.info("Défausse en pause : une passe a besoin de la session ; reprise ensuite.")
+    except SessionExpired as exc:
+        log.warning("Défausse interrompue : session expirée (%s).", exc)
+    except Exception:
+        log.exception("Défausse interrompue par une erreur ; nouvel essai au prochain réveil.")
+
+
+def _discard_round(config: Config, dry_run: bool, debug: bool) -> bool:
+    """Une période avec la session. Renvoie True quand la défausse est finie, False si
+    elle a cédé la place à une passe."""
+    protected = protected_names(config)
+    with open_site(config, debug, background=True) as site:
+        market = site.fetch_market_state()
+        entries, in_trade = site.fetch_collection()
+        groups = [g for g in parse_collection(entries, excluded_copy_ids=in_trade)
+                  if normalize_name(g.title) not in protected]
+        averages, unknown, complete = fetch_averages(site, config, groups, GATE.should_yield)
+        if not complete:
+            return False
+        plan = build_discard_plan(groups, averages, config.discard_below, protected, market.selling, unknown)
+        total = sum(i.copies for i in plan)
+        log.info("Défausse : %d exemplaire(s) de %d carte(s) à moins de %d%s.", total, len(plan),
+                 config.discard_below, f", ex. : {', '.join(i.title for i in plan[:10])}" if plan else "")
+        done = 0
+        for item in plan:
+            for _ in range(item.copies):
+                if GATE.should_yield():
+                    log.info("Défausse : %d/%d faite(s) avant la pause.", done, total)
+                    return False
+                status, detail = site.discard_card(item.title, dry_run)
+                price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
+                if status is DiscardStatus.FAILED:
+                    log.warning("Défausse : %s : %s (%s) ; carte suivante.", item.title, status.value, detail)
+                    break
+                done += 1
+                log.info("Défausse : %s (%s, %s) : %s%s.", item.title, item.rarity or "?", price,
+                         status.value, f" via {detail}" if detail else "")
+                time.sleep(random.uniform(*DISCARD_PAUSE))
+        log.info("Défausse terminée : %d/%d exemplaire(s) %s.", done, total,
+                 "simulé(s)" if dry_run else "défaussé(s)")
+        return True
 
 
 # ─────────────────────────── Boucle ───────────────────────────
@@ -466,17 +606,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.trace_api:
         config = dataclasses.replace(config, api_trace=True)
     setup_logging(config)
-    log.info("Démarrage%s (actions par %s) : raretés %s, paquets %s, enchères « %s », passe toutes les %s, achats %s.",
+    log.info("Démarrage%s (actions par %s) : raretés %s, paquets %s, enchères « %s », passe toutes les %s, achats %s, "
+             "défausse %s.",
              " (simulation)" if args.dry_run else "", "l'API" if config.actions_via_api else "la page",
              ",".join(config.sell_rarities) or "toutes",
              "-".join(map(str, config.packs_hours)) + " h" if config.packs_hours else "désactivés",
-             config.auction_duration_label, config.pass_interval, config.wanted_cards_file)
+             config.auction_duration_label, config.pass_interval, config.wanted_cards_file,
+             f"des cartes à moins de {config.discard_below} au-delà de {config.discard_trigger} exemplaires"
+             if config.discard_below else "désactivée")
 
     try:
         if args.loop:
             loop(config, args.dry_run, args.debug)
         else:
             run_once(config, dry_run=args.dry_run, debug=args.debug)
+            DISCARDER.join()  # une passe unique attend la fin de la défausse lancée
     except SafeCardsError as exc:
         log.error("%s", exc)
         return 2

@@ -93,6 +93,15 @@ def _positive_int(name: str) -> int | None:
     return int(raw)
 
 
+def _non_negative_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    if not raw.isdigit():
+        raise ConfigError(f"{name} doit être un nombre entier (0 pour désactiver).")
+    return int(raw)
+
+
 def _rarities(value: str) -> tuple[str, ...]:
     return tuple(r.strip().upper() for r in value.replace(";", ",").split(",") if r.strip())
 
@@ -139,6 +148,10 @@ class Config:
     # sans descendre sous price_floor_ratio × prix moyen.
     market_adjust: bool = False
     price_floor_ratio: float = 0.5
+    # Défausse en arrière-plan des cartes valant moins de discard_below (0 = désactivée),
+    # lancée quand la collection dépasse discard_trigger exemplaires.
+    discard_below: int = 0
+    discard_trigger: int = 150
 
     def duration_label_at(self, hour: int) -> str:
         """Libellé de durée des ventes à cette heure : plage de NIGHT_DURATIONS, sinon
@@ -236,4 +249,6 @@ def load_config() -> Config:
         actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),
         market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),
         price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),
+        discard_below=_non_negative_int("DISCARD_BELOW", 15),
+        discard_trigger=_non_negative_int("DISCARD_TRIGGER", 150),
     )

@@ -10,7 +10,7 @@ Met automatiquement aux enchères les cartes de votre collection
 1. réutilise la session enregistrée dans `state/`, sinon celle de `SESSION_COOKIES`,
    sinon se connecte avec `MAIL` / `PASSWORD` sur `/login` (voir « Première connexion »).
 2. compte les enchères en cours. Le site en autorise 5 à la fois : s'il n'y a plus
-   de place, le script s'arrête là.
+   de place, la vente s'arrête là.
 3. lit la collection, **limitée aux raretés de `SELL_RARITIES`** (par défaut
    légendaires `L` et super rares `SR`), et retire les cartes protégées. Pour une carte protégée,
    **un exemplaire est conservé** et les doublons sont vendus.
@@ -22,11 +22,41 @@ Met automatiquement aux enchères les cartes de votre collection
    ajustée d'après les enchères en cours de la même carte (voir `MARKET_ADJUST`),
    choisit **1 h** et clique sur **« Lancer l'enchère »**. Une carte sans prix moyen
    (vide ou 0) est ignorée.
+6. au-delà de 150 exemplaires dans la collection, lance en arrière-plan la défausse des
+   cartes valant moins de 15 (voir « Défausse automatique »).
 
 En mode `--loop`, la passe suivante démarre **`RUN_INTERVAL` après la dernière mise en
 vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient déjà
 prises, elle démarre dès la fin de la première enchère en cours, et au plus tard
 `RUN_INTERVAL` plus tard (les ventes de nuit durent jusqu'à 12 h).
+
+## Défausse automatique (arrière-plan)
+
+À chaque réveil (passe ou surenchère), le script compte les exemplaires de la
+collection, toutes raretés et doublons compris. Au-delà de **`DISCARD_TRIGGER` (150)**,
+il lance dans un **thread à part** la défausse de toutes les cartes qui valent **moins
+de `DISCARD_BELOW` (15)** sur le marché, un exemplaire à la fois. Il ouvre la carte depuis
+« Collection », clique sur **« Défausser »** dans sa fiche, et confirme si le site le
+demande (dernier exemplaire). Si une défausse tourne déjà, aucune autre n'est lancée.
+
+- **Cartes défaussées :** prix moyen connu strictement inférieur à 15, ou aucune vente
+  connue pour une commune (`C`) ou peu commune (`PC`). Tous les exemplaires partent,
+  y compris le dernier.
+- **Cartes jamais défaussées :** celles de `safed_cards.json` et de
+  `wanted_cards.json`, les exemplaires en vente ou engagés dans un échange, les cartes
+  rares sans prix connu, et celles dont le prix n'a pas pu être lu.
+- **Une seule session à la fois :** la défausse et les passes partagent la même
+  session du site. Pour ne pas la faire annuler, un seul navigateur est ouvert à la
+  fois. Quand une passe ou une surenchère se réveille, la défausse se met en pause
+  après la carte en cours, puis reprend (avec la collection relue) une fois la passe
+  terminée.
+- **Simulation :** en `--dry-run`, la fiche est ouverte et le bouton trouvé, mais
+  rien n'est défaussé.
+- **Passe unique :** sans `--loop`, le script attend la fin de la défausse avant de
+  s'arrêter.
+
+Chaque défausse est notée dans le journal (`Défausse : …`), avec la requête envoyée
+par la page. `DISCARD_BELOW=0` désactive la défausse.
 
 ## Paquets
 
@@ -190,6 +220,8 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `ACTIONS_VIA` | `api` | `api` : paquets, ventes et mises par requêtes directes ; `page` : clics dans les pages (ancien mode) |
 | `API_TRACE` | *(vide)* | `1` : noter les appels à l'API du site dans `state/api.log` (sans cookies ni en-têtes) ; équivaut à `--trace-api` |
 | `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
+| `DISCARD_BELOW` | `15` | Défausse en arrière-plan des cartes valant moins que ce prix moyen (voir « Défausse automatique ») ; `0` = désactivée |
+| `DISCARD_TRIGGER` | `150` | Nombre d'exemplaires dans la collection au-delà duquel la défausse est lancée |
 | `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
 
 ## Docker (serveur)
@@ -231,7 +263,8 @@ dans `state/`.
   libellé est absent.
 - Les libellés utilisés sont regroupés en haut de `wiki_seller/site.py`, pour les
   ajuster si le site change : « Mettre aux enchères », « Moyenne »,
-  « Mise de départ », « 1 h », « Lancer l'enchère », « Enchères actives : X/5 ».
+  « Mise de départ », « 1 h », « Lancer l'enchère », « Enchères actives : X/5 »,
+  « Défausser ».
 
 ## Tests
 
