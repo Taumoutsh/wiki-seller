@@ -36,8 +36,9 @@ prises, elle démarre dès la fin de la première enchère en cours, et au plus 
 collection, toutes raretés et doublons compris. Au-delà de **`DISCARD_TRIGGER` (150)**,
 il lance dans un **thread à part** la défausse de toutes les cartes qui valent **moins
 de `DISCARD_BELOW` (15)** sur le marché, un exemplaire à la fois. Il ouvre la carte depuis
-« Collection », clique sur **« Défausser »** dans sa fiche, et confirme si le site le
-demande (dernier exemplaire). Si une défausse tourne déjà, aucune autre n'est lancée.
+« Collection », clique sur **« Défausser »** dans sa fiche, puis valide la fenêtre
+« Défausser cette carte ? » (le site la montre à chaque fois ; la carte rapporte 1 wikibidou).
+Si une défausse tourne déjà, aucune autre n'est lancée.
 
 - **Cartes défaussées :** prix moyen connu strictement inférieur à 15, ou aucune vente
   connue pour une commune (`C`) ou peu commune (`PC`). Tous les exemplaires partent,

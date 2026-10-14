@@ -50,7 +50,7 @@ PACK_CONTINUE = re.compile(r"^\s*Continuer\s*$", re.I)
 # « 🗑️ Défausser ⊙+1 » : icône et badge autour du libellé.
 DISCARD_BUTTON = re.compile(r"D[ée]fausser", re.I)
 DISCARD_CONFIRM = re.compile(r"D[ée]fausser|confirmer|^\s*oui\b", re.I)
-DISCARD_CONFIRM_WAIT = 3  # s pour qu'une confirmation (dernier exemplaire) apparaisse
+DISCARD_CONFIRM_WAIT = 3  # s pour que la confirmation « Défausser cette carte ? » apparaisse
 DISCARD_RESPONSE_WAIT = 10  # s pour que le site réponde à la défausse
 BID_INPUT = 'input[aria-label="Montant de la mise"]'
 BID_BUTTON = re.compile(r"^\s*Miser\s*$", re.I)
@@ -697,7 +697,8 @@ class WikiMasters:
 
     def discard_card(self, title: str, dry_run: bool) -> tuple[DiscardStatus, str]:
         """Défausse un exemplaire : fiche de la carte depuis « Collection », bouton
-        « Défausser », puis la confirmation si le site en affiche une (dernier exemplaire).
+        « Défausser », puis la confirmation « Défausser cette carte ? » (POST
+        /api/user-cards/{id}/discard).
         Réussi seulement si le site a répondu OK à la requête envoyée par la page."""
         page = self.page
         responses = []
@@ -744,8 +745,8 @@ class WikiMasters:
             return DiscardStatus.FAILED, str(exc).splitlines()[0]
 
     def _confirm_discard(self, buttons_before: int) -> None:
-        """Le dernier exemplaire d'une carte demande une confirmation : un nouveau bouton
-        « Défausser » (ou « Confirmer ») apparaît, généralement dans une fenêtre."""
+        """Chaque défausse demande une confirmation (« Défausser cette carte ? ») : un
+        second bouton « Défausser » apparaît dans une fenêtre, après celui de la fiche."""
         page = self.page
         candidates = page.get_by_role("button", name=DISCARD_CONFIRM)
         deadline = time.monotonic() + DISCARD_CONFIRM_WAIT

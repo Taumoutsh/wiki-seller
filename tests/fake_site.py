@@ -5,6 +5,7 @@ une vérification anti-bot, popup anti-bot avec case à cocher, API JSON, page /
 recherche, tuiles, fenêtre « Mettre aux enchères » et « Prix moyen » chargé en différé."""
 
 import json
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -79,15 +80,16 @@ function openCard(id) {
   document.getElementById('sell').onclick = () => openAuction(c);
   document.getElementById('discard').onclick = () => {
     const copies = cards.filter(x => x.card.id === id);
-    if (copies.length > 1) return discard(copies[0]);
-    // Dernier exemplaire : confirmation, avec un second bouton « Défausser ».
+    // Comme le site : une confirmation à chaque fois, avec un second bouton « Défausser ».
+    const text = copies.length > 1 ? `Vous en avez ${copies.length}. Un exemplaire sera retiré définitivement.`
+      : "C'est votre dernière copie — elle sera retirée définitivement.";
     document.getElementById('detail').insertAdjacentHTML('beforeend',
-      `<div role="alertdialog"><p>C'est votre dernier exemplaire.</p><button id="no">Annuler</button><button id="yes">Défausser</button></div>`);
+      `<div><h3>Défausser cette carte ?</h3><p>${text}</p><button id="no">Annuler</button><button id="yes">Défausser</button></div>`);
     document.getElementById('yes').onclick = () => discard(copies[0]);
   };
 }
 async function discard(copy) {
-  const r = await fetch('/api/collection/discard', {method: 'POST', body: JSON.stringify({user_card_id: copy.id})});
+  const r = await fetch(`/api/user-cards/${copy.id}/discard`, {method: 'POST'});
   if (r.ok) { show(''); await load(); }
 }
 async function openAuction(c) {
@@ -328,8 +330,9 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                if self.path == "/api/collection/discard" and self._authed():
-                    copy = next((c for c in site.collection if c["id"] == body.get("user_card_id")), None)
+                discard = re.fullmatch(r"/api/user-cards/([^/]+)/discard", self.path)
+                if discard and self._authed():
+                    copy = next((c for c in site.collection if c["id"] == discard.group(1)), None)
                     if copy is None:
                         return self._send(404, {"error": "not found"})
                     site.collection.remove(copy)
