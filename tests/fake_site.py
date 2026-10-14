@@ -206,8 +206,9 @@ class FakeWikiMasters:
     def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
                  mail="me@example.com", password="secret", sales_forbidden=False,
                  challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="copy",
-                 pack_cooldown=0.0):
+                 pack_cooldown=0.0, page_size=None):
         self.collection = collection
+        self.page_size = page_size  # None : toute la collection sur la page 0
         self.averages = averages  # card_id -> moyenne API
         self.ui_averages = ui_averages if ui_averages is not None else {}
         self.selling = list(selling or [])
@@ -300,7 +301,11 @@ class FakeWikiMasters:
                     rarity = qs.get("rarity", [None])[0]
                     items = [c for c in site.collection if not rarity or c["card"]["rarity"] == rarity]
                     site.collection_requests.append(url.query)
-                    return self._send(200, {"collection": items if page == 0 else []})
+                    if site.page_size:
+                        items = items[page * site.page_size:(page + 1) * site.page_size]
+                    elif page:
+                        items = []
+                    return self._send(200, {"collection": items})
                 if url.path == "/api/marketplace" and qs.get("mine") == ["1"]:
                     mine = {a for a, _ in site.bids}
                     bidding = [a for i, a in site.auctions.items() if i in mine and a["status"] == "active"]

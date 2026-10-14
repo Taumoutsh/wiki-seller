@@ -32,9 +32,10 @@ prises, elle démarre dès la fin de la première enchère en cours, et au plus 
 
 ## Défausse automatique (arrière-plan)
 
-À chaque réveil (passe ou surenchère), le script compte les exemplaires de la
-collection, toutes raretés et doublons compris. Au-delà de **`DISCARD_TRIGGER` (150)**,
-il lance dans un **thread à part** la défausse de toutes les cartes qui valent **moins
+À chaque réveil (passe ou surenchère), le script lance la défausse dans un **thread à
+part** (sauf si elle tourne déjà, ou s'est terminée il y a moins d'une heure). Ce thread
+lit toute la collection et compte les exemplaires, toutes raretés et doublons compris.
+Au-delà de **`DISCARD_TRIGGER` (150)**, il défausse toutes les cartes qui valent **moins
 de `DISCARD_BELOW` (15)** sur le marché, un exemplaire à la fois. Il ouvre la carte depuis
 « Collection », clique sur **« Défausser »** dans sa fiche, puis valide la fenêtre
 « Défausser cette carte ? » (le site la montre à chaque fois ; la carte rapporte 1 wikibidou).
@@ -49,8 +50,9 @@ Si une défausse tourne déjà, aucune autre n'est lancée.
 - **Une seule session à la fois :** la défausse et les passes partagent la même
   session du site. Pour ne pas la faire annuler, un seul navigateur est ouvert à la
   fois. Quand une passe ou une surenchère se réveille, la défausse se met en pause
-  après la carte en cours, puis reprend (avec la collection relue) une fois la passe
-  terminée.
+  après la page de collection, le prix ou la carte en cours, puis reprend là où elle
+  s'était arrêtée une fois la passe terminée : la collection n'est lue qu'une fois, et
+  les prix déjà lus restent dans `state/price_cache.json`.
 - **Simulation :** en `--dry-run`, la fiche est ouverte et le bouton trouvé, mais
   rien n'est défaussé.
 - **Passe unique :** sans `--loop`, le script attend la fin de la défausse avant de

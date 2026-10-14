@@ -129,6 +129,17 @@ class MarketState:
         return min(ends) if ends else None
 
 
+@dataclass
+class CollectionScan:
+    """Lecture de la collection en cours, reprise page par page après une pause."""
+    rarity: str | None = None
+    entries: list[dict] = dataclasses.field(default_factory=list)
+    seen: set[str] = dataclasses.field(default_factory=set)
+    in_trade: set[str] = dataclasses.field(default_factory=set)
+    next_page: int = 0
+    done: bool = False
+
+
 def parse_int(text: str) -> int | None:
     """Les prix du site sont des entiers : on ne garde que les chiffres (espaces
     et séparateurs de milliers ignorés)."""
@@ -446,31 +457,49 @@ class WikiMasters:
         """Entrées de la collection (limitées aux raretés demandées, filtrées par le site
         lui-même) + les exemplaires engagés dans un échange."""
         entries: list[dict] = []
-        seen: set[str] = set()
         in_trade: set[str] = set()
+        seen: set[str] = set()
         for rarity in rarities or (None,):
-            query = f"&rarity={rarity}" if rarity else ""
-            for page_index in range(COLLECTION_PAGE_GUARD):
-                data = self.api_get_ok(f"/api/my-collection?sort=rarity&page={page_index}&stats=0{query}")
-                items = data.get("collection") if isinstance(data, dict) else None
-                if not isinstance(items, list):
-                    raise SiteError("Réponse inattendue de /api/my-collection")
-                in_trade.update(str(i) for i in (data.get("pendingTradeCardIds") or []))
-                new = 0
-                for item in items:
-                    key = str(item.get("id") or id(item))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    new += 1
-                    if not rarities or entry_rarity(item) in rarities:
-                        entries.append(item)
-                if not new:
-                    break
-                time.sleep(0.2)
+            scan = CollectionScan(rarity=rarity, seen=seen)
+            self.scan_collection(scan, log_done=False)
+            entries += [e for e in scan.entries if not rarities or entry_rarity(e) in rarities]
+            in_trade |= scan.in_trade
         log.info("Collection chargée : %d entrée(s)%s.", len(entries),
                  f" de rareté {', '.join(rarities)}" if rarities else "")
         return entries, in_trade
+
+    def scan_collection(self, scan: "CollectionScan", should_stop=lambda: False, log_done: bool = True) -> bool:
+        """Lit la collection page par page à partir de scan.next_page. S'arrête entre deux
+        pages si should_stop() : un nouvel appel reprend là où la lecture s'était arrêtée.
+        Renvoie True quand toute la collection est lue."""
+        query = f"&rarity={scan.rarity}" if scan.rarity else ""
+        while not scan.done:
+            if scan.next_page >= COLLECTION_PAGE_GUARD:
+                scan.done = True
+                break
+            if should_stop():
+                return False
+            data = self.api_get_ok(f"/api/my-collection?sort=rarity&page={scan.next_page}&stats=0{query}")
+            items = data.get("collection") if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                raise SiteError("Réponse inattendue de /api/my-collection")
+            scan.in_trade.update(str(i) for i in (data.get("pendingTradeCardIds") or []))
+            new = 0
+            for item in items:
+                key = str(item.get("id") or id(item))
+                if key in scan.seen:
+                    continue
+                scan.seen.add(key)
+                new += 1
+                scan.entries.append(item)
+            scan.next_page += 1
+            if not new:
+                scan.done = True
+            else:
+                time.sleep(0.2)
+        if log_done:
+            log.info("Collection chargée : %d entrée(s).", len(scan.entries))
+        return True
 
     def fetch_mine(self) -> dict:
         """Onglets « Mes ventes » (selling), « Mes enchères » (bidding) et « Gagnées » (won)."""

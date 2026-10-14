@@ -496,6 +496,11 @@ FULL_SLOTS = [{"id": f"x{i}", "card_id": "zz", "status": "active", "end_at": "20
               for i in range(5)]
 
 
+def pages_read(site, page):
+    """Lectures de /api/my-collection pour une page donnée."""
+    return sum(f"page={page}&" in q for q in site.collection_requests)
+
+
 def discard_site(**kwargs):
     site = FakeWikiMasters(list(DISCARD_COLLECTION), DISCARD_AVERAGES, {}, max_auctions=5, **kwargs)
     site.selling = list(FULL_SLOTS)  # aucune vente : on ne teste que la défausse
@@ -547,7 +552,7 @@ def test_pass_interrupts_discard_which_then_resumes(tmp_path, caplog):
     cheap = [entry(f"p{i}", f"P{i}", f"Galet {i}", "C") for i in range(6)]
     with FakeWikiMasters(list(cheap), {f"P{i}": 2 for i in range(6)}, {}, max_auctions=5) as site:
         site.selling = list(FULL_SLOTS)
-        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1000)
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
         caplog.set_level(logging.INFO)
         DISCARDER.start(config, False, False)
         deadline = time.monotonic() + 120
@@ -560,3 +565,37 @@ def test_pass_interrupts_discard_which_then_resumes(tmp_path, caplog):
     assert paused_at < 6
     assert sorted(site.discarded) == sorted(f"Galet {i}" for i in range(6))
     assert "Défausse en pause" in caplog.text
+    # La reprise continue le plan : la collection n'est lue qu'une fois (la page vide qui
+    # marque sa fin n'est demandée qu'une fois ; la page 0 l'est aussi par la page Collection).
+    assert pages_read(site, 1) == 1
+
+
+def test_collection_scan_pauses_between_pages_and_resumes(tmp_path):
+    from wiki_seller.main import open_site
+    from wiki_seller.site import CollectionScan
+
+    cards = [entry(f"s{i}", f"S{i}", f"Sable {i}", "C") for i in range(5)]
+    with FakeWikiMasters(list(cards), {}, {}, page_size=2) as site:
+        config = make_config(tmp_path, site.url, [])
+        scan = CollectionScan()
+        with open_site(config, False) as wm:
+            calls = iter([False, True])  # une page, puis une passe attend
+            assert not wm.scan_collection(scan, lambda: next(calls, True))
+            assert len(scan.entries) == 2 and scan.next_page == 1
+        with open_site(config, False) as wm:  # nouvelle session : reprise à la page 1
+            assert wm.scan_collection(scan, lambda: False)
+    assert [e["id"] for e in scan.entries] == [f"s{i}" for i in range(5)]
+    assert [pages_read(site, p) for p in (1, 2, 3)] == [1, 1, 1]
+
+
+def test_finished_discard_is_not_restarted_right_away(tmp_path):
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=8)
+        run_once(config)
+        DISCARDER.join(120)
+        assert pages_read(site, 1) == 1
+        run_once(config)  # seuil non dépassé il y a moins d'une heure : pas de relecture
+        DISCARDER.join(120)
+    assert pages_read(site, 1) == 1

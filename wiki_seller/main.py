@@ -32,6 +32,7 @@ from .selection import (
     parse_collection,
 )
 from .site import (
+    CollectionScan,
     DiscardStatus,
     HumanVerificationRequired,
     ListingStatus,
@@ -53,6 +54,7 @@ PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérific
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 SITE_TIMEZONE = "Europe/Paris"
 DISCARD_PAUSE = (1.0, 3.0)  # secondes entre deux défausses, pour garder un rythme humain
+DISCARD_RECHECK = timedelta(hours=1)  # délai avant de relancer une défausse terminée
 
 # Un seul navigateur à la fois sur la session (voir discard.SessionGate).
 GATE = SessionGate()
@@ -407,23 +409,33 @@ def _sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool
 
 
 class DiscardWorker:
-    """Thread de défausse : un seul à la fois."""
+    """Thread de défausse : un seul à la fois, relancé au plus tôt DISCARD_RECHECK après
+    la fin du précédent (par dossier state/)."""
 
     def __init__(self):
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._finished_at: dict[str, datetime] = {}
 
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def recently_finished(self, config: Config) -> bool:
+        finished = self._finished_at.get(str(config.state_dir))
+        return finished is not None and now_utc() - finished < DISCARD_RECHECK
 
     def start(self, config: Config, dry_run: bool, debug: bool) -> bool:
         with self._lock:
             if self.running():
                 return False
             self._thread = threading.Thread(
-                target=run_discard, args=(config, dry_run, debug), name="defausse", daemon=True)
+                target=self._run, args=(config, dry_run, debug), name="defausse", daemon=True)
             self._thread.start()
             return True
+
+    def _run(self, config: Config, dry_run: bool, debug: bool) -> None:
+        if run_discard(config, dry_run, debug):
+            self._finished_at[str(config.state_dir)] = now_utc()
 
     def join(self, timeout: float | None = None) -> None:
         if self._thread is not None:
@@ -444,75 +456,106 @@ def protected_names(config: Config) -> set[str]:
 
 
 def check_discard(site: WikiMasters, config: Config, dry_run: bool, debug: bool) -> None:
-    """À chaque réveil : au-delà de DISCARD_TRIGGER exemplaires dans la collection, lance la
-    défausse en arrière-plan (sauf si elle tourne déjà)."""
+    """À chaque réveil : lance la défausse en arrière-plan (sauf si elle tourne déjà ou
+    vient de finir). Le thread lit lui-même la collection et vérifie DISCARD_TRIGGER :
+    la passe ne garde pas la session pendant cette longue lecture."""
     if not config.discard_below:
         return
     if DISCARDER.running():
         log.info("Défausse déjà en cours en arrière-plan.")
         return
-    try:
-        entries, _ = site.fetch_collection()
-    except SessionExpired:
-        raise
-    except Exception as exc:
-        log.warning("Défausse : collection illisible (%s).", str(exc).splitlines()[0])
+    if DISCARDER.recently_finished(config):
         return
-    count = total_copies(parse_collection(entries))
-    if count <= config.discard_trigger:
-        log.info("Collection : %d exemplaire(s), seuil de défausse %d non dépassé.", count, config.discard_trigger)
-        return
-    log.info("Collection : %d exemplaire(s) > %d : défausse des cartes à moins de %d lancée en arrière-plan.",
-             count, config.discard_trigger, config.discard_below)
+    log.info("Défausse lancée en arrière-plan (cartes à moins de %d au-delà de %d exemplaires).",
+             config.discard_below, config.discard_trigger)
     DISCARDER.start(config, dry_run, debug)
 
 
-def run_discard(config: Config, dry_run: bool, debug: bool) -> None:
+@dataclass
+class DiscardProgress:
+    """Avancement d'une défausse, conservé d'une pause à l'autre : la collection n'est
+    lue qu'une fois, puis le plan est repris là où il s'était arrêté."""
+    scan: CollectionScan = dataclasses.field(default_factory=CollectionScan)
+    plan: list | None = None
+    position: int = 0  # carte du plan en cours
+    copies_done: int = 0  # exemplaires déjà traités de cette carte
+    done: int = 0
+    total: int = 0
+
+
+def run_discard(config: Config, dry_run: bool, debug: bool) -> bool:
     """Corps du thread : défausse toutes les cartes à moins de DISCARD_BELOW, une à une.
-    Cède la session à chaque passe qui attend, puis reprend avec une collection relue."""
+    Cède la session à chaque passe qui attend, puis reprend où elle en était.
+    Renvoie True si la défausse est allée au bout (False après une erreur)."""
+    progress = DiscardProgress()
     try:
-        while not _discard_round(config, dry_run, debug):
+        while not _discard_round(config, dry_run, debug, progress):
             log.info("Défausse en pause : une passe a besoin de la session ; reprise ensuite.")
+        return True
     except SessionExpired as exc:
         log.warning("Défausse interrompue : session expirée (%s).", exc)
     except Exception:
         log.exception("Défausse interrompue par une erreur ; nouvel essai au prochain réveil.")
+    return False
 
 
-def _discard_round(config: Config, dry_run: bool, debug: bool) -> bool:
+def _discard_round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress) -> bool:
     """Une période avec la session. Renvoie True quand la défausse est finie, False si
     elle a cédé la place à une passe."""
-    protected = protected_names(config)
     with open_site(config, debug, background=True) as site:
-        market = site.fetch_market_state()
-        entries, in_trade = site.fetch_collection()
-        groups = [g for g in parse_collection(entries, excluded_copy_ids=in_trade)
-                  if normalize_name(g.title) not in protected]
-        averages, unknown, complete = fetch_averages(site, config, groups, GATE.should_yield)
-        if not complete:
+        if progress.plan is None and not _build_discard_plan(site, config, progress):
             return False
-        plan = build_discard_plan(groups, averages, config.discard_below, protected, market.selling, unknown)
-        total = sum(i.copies for i in plan)
-        log.info("Défausse : %d exemplaire(s) de %d carte(s) à moins de %d%s.", total, len(plan),
-                 config.discard_below, f", ex. : {', '.join(i.title for i in plan[:10])}" if plan else "")
-        done = 0
-        for item in plan:
-            for _ in range(item.copies):
+        if progress.plan is None:
+            return True  # seuil non dépassé
+        plan = progress.plan
+        while progress.position < len(plan):
+            item = plan[progress.position]
+            while progress.copies_done < item.copies:
                 if GATE.should_yield():
-                    log.info("Défausse : %d/%d faite(s) avant la pause.", done, total)
+                    log.info("Défausse : %d/%d faite(s) avant la pause.", progress.done, progress.total)
                     return False
                 status, detail = site.discard_card(item.title, dry_run)
                 price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
                 if status is DiscardStatus.FAILED:
                     log.warning("Défausse : %s : %s (%s) ; carte suivante.", item.title, status.value, detail)
                     break
-                done += 1
+                progress.copies_done += 1
+                progress.done += 1
                 log.info("Défausse : %s (%s, %s) : %s%s.", item.title, item.rarity or "?", price,
                          status.value, f" via {detail}" if detail else "")
                 time.sleep(random.uniform(*DISCARD_PAUSE))
-        log.info("Défausse terminée : %d/%d exemplaire(s) %s.", done, total,
+            progress.position += 1
+            progress.copies_done = 0
+        log.info("Défausse terminée : %d/%d exemplaire(s) %s.", progress.done, progress.total,
                  "simulé(s)" if dry_run else "défaussé(s)")
         return True
+
+
+def _build_discard_plan(site: WikiMasters, config: Config, progress: DiscardProgress) -> bool:
+    """Lit la collection (reprise page par page) et les prix, puis établit le plan.
+    Renvoie False si une passe attend la session avant la fin ; laisse progress.plan à
+    None si la collection ne dépasse pas DISCARD_TRIGGER."""
+    if not site.scan_collection(progress.scan, GATE.should_yield):
+        log.info("Défausse : %d entrée(s) de la collection lues avant la pause.", len(progress.scan.entries))
+        return False
+    all_groups = parse_collection(progress.scan.entries, excluded_copy_ids=progress.scan.in_trade)
+    count = total_copies(parse_collection(progress.scan.entries))
+    if count <= config.discard_trigger:
+        log.info("Collection : %d exemplaire(s), seuil de défausse %d non dépassé.", count, config.discard_trigger)
+        return True
+    protected = protected_names(config)
+    groups = [g for g in all_groups if normalize_name(g.title) not in protected]
+    averages, unknown, complete = fetch_averages(site, config, groups, GATE.should_yield)
+    if not complete:
+        log.info("Défausse : prix en cours de lecture, reprise après la passe.")
+        return False
+    market = site.fetch_market_state()
+    plan = build_discard_plan(groups, averages, config.discard_below, protected, market.selling, unknown)
+    progress.plan, progress.total = plan, sum(i.copies for i in plan)
+    log.info("Collection : %d exemplaire(s) > %d. Défausse : %d exemplaire(s) de %d carte(s) à moins de %d%s.",
+             count, config.discard_trigger, progress.total, len(plan), config.discard_below,
+             f", ex. : {', '.join(i.title for i in plan[:10])}" if plan else "")
+    return True
 
 
 # ─────────────────────────── Boucle ───────────────────────────
