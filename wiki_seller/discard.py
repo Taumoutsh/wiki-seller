@@ -130,8 +130,11 @@ class DiscardProgress:
             progress = cls(started_at=data["started_at"], position=data["position"],
                            copies_done=data["copies_done"], done=data["done"], unpriced=data.get("unpriced", 0))
             if data.get("cards") is not None:
-                if any("copy_ids" not in i for i in data["cards"]):
-                    return cls()  # ancien format (défausse par la page) : on recommence
+                if not any(i.get("copy_ids") for i in data["cards"]):
+                    # Cartes listées par une ancienne version, sans identifiant d'exemplaire :
+                    # impossibles à défausser par l'API, on relit la collection.
+                    log.info("Défausse : avancement d'une ancienne version ; la collection va être relue.")
+                    return cls()
                 progress.cards = [DiscardItem(**i) for i in data["cards"]]
             elif data.get("scan"):
                 raw = data["scan"]

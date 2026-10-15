@@ -552,3 +552,23 @@ def test_telegram_report_with_sales_discards_and_balance(tmp_path):
     assert len(tg.sent) == 1
     assert "Ventes : 1 carte(s), +40" in tg.sent[0] and "Défausses : 3 exemplaire(s), +3" in tg.sent[0]
     assert "Total gagné : +43" in tg.sent[0] and "Solde actuel : 100 wikibidous" in tg.sent[0]
+
+
+def test_progress_without_copy_ids_is_discarded_and_the_collection_reread(tmp_path):
+    from datetime import datetime, timezone
+
+    from wiki_seller.discard import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        # Avancement d'une ancienne version : identifiants d'exemplaire vides.
+        (config.state_dir / "discard_progress.json").write_text(json.dumps({
+            "started_at": datetime.now(timezone.utc).isoformat(), "position": 0, "copies_done": 0, "done": 0,
+            "cards": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2,
+                       "copy_ids": []}],
+        }), encoding="utf-8")
+        run_once(config)
+        DISCARDER.join(120)
+    assert pages_read(site, 1) == 1  # collection relue
+    assert site.discarded == ["Caillou", "Caillou", "Tour Eiffel", "Victor Hugo", "Feuille", "Presque"]
