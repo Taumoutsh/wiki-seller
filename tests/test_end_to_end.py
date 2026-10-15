@@ -400,6 +400,7 @@ def test_discard_dry_run_sends_nothing(tmp_path):
         run_once(config, dry_run=True)
         DISCARDER.join(120)
     assert site.discarded == [] and len(site.collection) == len(DISCARD_COLLECTION)
+    assert not (config.state_dir / "discard_progress.json").exists()  # simulation : rien d'enregistré
 
 
 def test_pass_interrupts_discard_which_then_resumes(tmp_path, caplog):

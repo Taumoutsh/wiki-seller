@@ -104,8 +104,11 @@ class DiscardProgress:
     copies_done: int = 0  # exemplaires déjà défaussés de cette carte
     done: int = 0  # exemplaires défaussés en tout
     unpriced: int = 0  # cartes dont le prix n'a pas pu être lu : relance plus tôt
+    persist: bool = True  # False en simulation : rien n'est enregistré
 
     def save(self, config: Config, finished: bool = False) -> None:
+        if not self.persist:
+            return
         data = {"started_at": self.started_at, "position": self.position,
                 "copies_done": self.copies_done, "done": self.done, "unpriced": self.unpriced}
         if finished:
@@ -213,7 +216,9 @@ def check_discard(config: Config, dry_run: bool, debug: bool) -> None:
 def run_discard(config: Config, dry_run: bool, debug: bool) -> bool:
     """Corps du thread. Renvoie True si la défausse est allée au bout (False après une
     erreur : elle reprendra au réveil suivant, là où elle s'était arrêtée)."""
-    progress = DiscardProgress.load(config)
+    # Une simulation ne reprend ni n'enregistre l'avancement : la vraie défausse ne
+    # sauterait pas les cartes « simulées », et ne serait pas retardée par sa fin.
+    progress = DiscardProgress(persist=False) if dry_run else DiscardProgress.load(config)
     try:
         try:
             while not _round(config, dry_run, debug, progress):
