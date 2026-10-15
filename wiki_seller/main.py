@@ -40,8 +40,8 @@ from .site import (
     SessionExpired,
     WikiMasters,
 )
-from .report import maybe_send_report, record_discard
-from .telegram import telegram_bot
+from .report import maybe_send_report, record_discard, send_report_now
+from .telegram import CommandListener, telegram_bot
 from .trace import install_api_trace
 from .unsold import UnsoldTracker
 from .verification import notify
@@ -57,6 +57,7 @@ RETRY_LISTING_AFTER = 5  # secondes
 PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérification humaine
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 SITE_TIMEZONE = "Europe/Paris"
+REPORT_GUARD_SECONDS = 90  # pas de bilan demandé juste avant un réveil
 DISCARD_PAUSE = (1.0, 3.0)  # secondes entre deux défausses, pour garder un rythme humain
 DISCARD_RECHECK = timedelta(hours=1)  # délai avant de relancer une défausse terminée
 DISCARD_RECHECK_UNPRICED = timedelta(minutes=15)  # idem s'il restait des prix à lire
@@ -67,6 +68,8 @@ DISCARD_LOG_EVERY = 100  # cartes examinées entre deux lignes de progression
 
 # Un seul navigateur à la fois sur la session (voir discard.SessionGate).
 GATE = SessionGate()
+# Bilan demandé par /update sur Telegram : réveille la boucle.
+REPORT_REQUEST = threading.Event()
 
 
 @dataclass
@@ -179,6 +182,36 @@ def run_snipe(config: Config, dry_run: bool = False, debug: bool = False) -> Non
         run_bids(site, config, dry_run, snipe_only=True)
         check_discard(site, config, dry_run, debug)
         _report(site, config, dry_run)
+
+
+def report_now(config: Config, debug: bool) -> None:
+    """Bilan demandé par /update : ouvre la session (une passe en cours passe avant)."""
+    bot = telegram_bot(config)
+    if bot is None:
+        return
+    try:
+        with open_site(config, debug) as site:
+            market = site.fetch_market_state()
+            my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
+            send_report_now(site, config, bot, market.history, my_id)
+    except Exception as exc:
+        log.warning("Bilan demandé non envoyé : %s", str(exc).splitlines()[0])
+        bot.send(f"❌ Bilan impossible pour l'instant : {str(exc).splitlines()[0][:200]}")
+
+
+def sleep_until(wake: datetime, config: Config, debug: bool) -> None:
+    """Attend le prochain réveil ; un /update reçu entre-temps envoie le bilan aussitôt,
+    sauf juste avant le réveil (une surenchère ne doit pas attendre) : il part après."""
+    while True:
+        remaining = (wake - now_utc()).total_seconds()
+        if remaining <= 0:
+            return
+        if remaining <= REPORT_GUARD_SECONDS:
+            time.sleep(remaining)
+            return
+        if REPORT_REQUEST.wait(remaining - REPORT_GUARD_SECONDS):
+            REPORT_REQUEST.clear()
+            report_now(config, debug)
 
 
 def _report(site: WikiMasters, config: Config, dry_run: bool) -> None:
@@ -763,6 +796,9 @@ def next_wake(next_pass: datetime, config: Config, now: datetime) -> tuple[datet
 def loop(config: Config, dry_run: bool, debug: bool) -> None:
     next_pass = now_utc()
     snipe = False
+    bot = telegram_bot(config)
+    if bot is not None:
+        CommandListener(bot, REPORT_REQUEST.set).start()
     while True:
         try:
             if snipe:
@@ -783,7 +819,7 @@ def loop(config: Config, dry_run: bool, debug: bool) -> None:
         wake, snipe = next_wake(next_pass, config, now_utc())
         log.info("Prochain réveil à %s%s.", wake.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
                  " (surenchère avant la fin d'une enchère)" if snipe else "")
-        time.sleep(max(0.0, (wake - now_utc()).total_seconds()))
+        sleep_until(wake, config, debug)
 
 
 def setup_logging(config: Config) -> None:

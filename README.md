@@ -231,6 +231,12 @@ Les ventes sont les prix finaux de vos enchères conclues (historique du site) ;
 exemplaire défaussé rapporte 1 wikibidou. Le bilan part au premier réveil après
 l'échéance (pas en `--dry-run`) ; le compteur est gardé dans `state/report.json`.
 
+**Bilan à la demande :** envoyez **`/update`** (ou `/bilan`) au bot, en mode `--loop` :
+il répond « ⏳ Bilan en préparation… » puis envoie le bilan depuis le dernier bilan
+automatique, sans changer le rythme des 2 h. S'il arrive juste avant un réveil (moins de
+90 s), il part juste après. Pendant une demande de session, le bot rappelle d'abord
+d'envoyer les cookies. Tout autre message reçoit la liste des commandes.
+
 ## Utilisation
 
 ```bash

@@ -60,3 +60,57 @@ def test_no_new_reminder_before_three_hours_and_timeout(tmp_path):
         assert not telegram.request_session("https://site", lambda c: True, timedelta(seconds=1))
         assert not telegram.request_session("https://site", lambda c: True, timedelta(seconds=1))
     assert len(fake.sent) == 1  # une seule demande, la seconde attente reprend la même
+
+
+def wait_for(condition, seconds=10):
+    import time
+
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return condition()
+
+
+def test_update_command_asks_for_a_report(tmp_path):
+    from wiki_seller.telegram import CommandListener
+
+    requested = []
+    with FakeTelegram() as fake:
+        listener = CommandListener(bot(tmp_path, fake), lambda: requested.append(1)).start()
+        try:
+            assert wait_for(lambda: (tmp_path / "telegram.json").exists())  # écoute prête
+            fake.say("/update")
+            assert wait_for(lambda: requested)
+            fake.say("salut")
+            assert wait_for(lambda: len(fake.sent) == 2)
+            message_id = fake.say(COOKIES)  # aucune session demandée : supprimé
+            assert wait_for(lambda: message_id in fake.deleted)
+        finally:
+            listener.stop()
+    assert fake.sent[0].startswith("⏳") and "/update" in fake.sent[1]
+    assert "aucune n'est demandée" in fake.sent[-1]
+
+
+def test_session_reply_reaches_the_request_while_commands_are_listened(tmp_path):
+    import threading
+
+    from wiki_seller.telegram import CommandListener
+
+    tried = []
+    with FakeTelegram() as fake:
+        telegram = bot(tmp_path, fake)
+        listener = CommandListener(telegram, lambda: None).start()
+        try:
+            assert wait_for(lambda: (tmp_path / "telegram.json").exists())
+
+            def answer():
+                assert wait_for(lambda: fake.sent)
+                fake.say("/update")  # pendant une demande de session : rappel, pas de bilan
+                fake.say(COOKIES)
+
+            threading.Thread(target=answer, daemon=True).start()
+            assert telegram.request_session("https://site", lambda c: tried.append(c) or True, timedelta(seconds=15))
+        finally:
+            listener.stop()
+    assert len(tried) == 1 and len(fake.deleted) == 1
+    assert any("envoyez d'abord" in t for t in fake.sent) and fake.sent[-1].startswith("✅")

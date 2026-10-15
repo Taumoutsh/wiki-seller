@@ -7,6 +7,7 @@ est supprimé dès qu'il est lu. API HTTP de Telegram, sans dépendance."""
 
 import json
 import logging
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,10 @@ from pathlib import Path
 log = logging.getLogger("wiki_seller")
 
 POLL_SECONDS = 50  # attente maximale d'une requête getUpdates (long polling)
+LISTEN_SECONDS = 20  # idem pour l'écoute des commandes : laisse vite la place à une demande de session
+_POLL_LOCK = threading.Lock()  # un seul lecteur des messages à la fois
+_SESSION_WAITING = threading.Event()  # une demande de session attend la réponse
+_HANDOFF: list[dict] = []  # cookies reçus par l'écoute des commandes, pour la demande en cours
 REMIND_AFTER = timedelta(hours=3)  # pas de nouveau message avant ce délai, on attend la réponse
 
 ASK_TEXT = """🔑 WikiMasters : la session a expiré, le script est à l'arrêt.
@@ -75,12 +80,51 @@ class TelegramBot:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(json.dumps(state), encoding="utf-8")
 
+    # ─────────────────────────── Lecture des messages ───────────────────────────
+
+    def poll(self, wait: int) -> list[dict]:
+        """Messages reçus de TELEGRAM_CHAT_ID (attente jusqu'à `wait` s). Un seul lecteur
+        à la fois : la demande de session et l'écoute des commandes se partagent le fil."""
+        with _POLL_LOCK:
+            state = self._state()
+            if "offset" not in state:  # premier lancement : ignore les anciens messages
+                state["offset"] = self._next_offset()
+                self._save_state(state)
+            updates = self.call("getUpdates", http_timeout=wait + 15, offset=state["offset"],
+                                timeout=wait, allowed_updates=["message"])
+            messages = []
+            for update in updates or []:
+                state = self._state()
+                state["offset"] = update["update_id"] + 1
+                self._save_state(state)
+                message = update.get("message") or {}
+                chat = str((message.get("chat") or {}).get("id", ""))
+                if chat == self.chat_id:
+                    messages.append(message)
+                elif chat:
+                    log.info("Telegram : message ignoré d'une autre conversation (id %s).", chat)
+            return messages
+
+    def _next_offset(self) -> int:
+        try:
+            updates = self.call("getUpdates", offset=-1, timeout=0)
+            return updates[-1]["update_id"] + 1 if updates else 0
+        except Exception:
+            return 0
+
     # ─────────────────────────── Demande de session ───────────────────────────
 
     def request_session(self, site_url: str, try_cookies, wait: timedelta) -> bool:
         """Demande les cookies de session dans la conversation et attend la réponse
         pendant `wait`. `try_cookies(cookies)` les essaie sur le site (True : connecté).
         Renvoie True dès qu'une session envoyée fonctionne."""
+        _SESSION_WAITING.set()  # avant la demande : l'écoute des commandes laisse les réponses ici
+        try:
+            return self._request_session(site_url, try_cookies, wait)
+        finally:
+            _SESSION_WAITING.clear()
+
+    def _request_session(self, site_url: str, try_cookies, wait: timedelta) -> bool:
         state = self._state()
         now = datetime.now(timezone.utc)
         asked = state.get("asked_at")
@@ -98,36 +142,29 @@ class TelegramBot:
 
         deadline = time.monotonic() + wait.total_seconds()
         while time.monotonic() < deadline:
-            poll = max(1, min(POLL_SECONDS, int(deadline - time.monotonic())))
-            try:
-                updates = self.call("getUpdates", http_timeout=poll + 15, offset=state.get("offset", 0),
-                                    timeout=poll, allowed_updates=["message"])
-            except Exception as exc:
-                log.warning("Telegram : lecture des messages impossible (%s) ; nouvel essai dans 30 s.", exc)
-                time.sleep(30)
-                continue
-            for update in updates or []:
-                state["offset"] = update["update_id"] + 1
-                self._save_state(state)
-                if self._handle(update.get("message") or {}, try_cookies):
+            with _POLL_LOCK:
+                messages = _HANDOFF[:]
+                _HANDOFF.clear()
+            if not messages:
+                try:
+                    messages = self.poll(max(1, min(POLL_SECONDS, int(deadline - time.monotonic()))))
+                except Exception as exc:
+                    log.warning("Telegram : lecture des messages impossible (%s) ; nouvel essai dans 30 s.", exc)
+                    time.sleep(30)
+                    continue
+            for message in messages:
+                if self._handle(message, try_cookies):
+                    state = self._state()
                     state.pop("asked_at", None)
                     self._save_state(state)
                     return True
         return False
 
-    def _next_offset(self) -> int:
-        try:
-            updates = self.call("getUpdates", offset=-1, timeout=0)
-            return updates[-1]["update_id"] + 1 if updates else 0
-        except Exception:
-            return 0
-
     def _handle(self, message: dict, try_cookies) -> bool:
-        chat = str((message.get("chat") or {}).get("id", ""))
         text = message.get("text") or ""
-        if chat != self.chat_id:
-            if chat:
-                log.info("Telegram : message ignoré d'une autre conversation (id %s).", chat)
+        if text.startswith("/"):
+            self.send("🔑 La session a expiré : envoyez d'abord la ligne de cookies, "
+                      "le script reprendra ensuite.")
             return False
         names = session_cookie_names(text)
         if not names:
@@ -143,6 +180,63 @@ class TelegramBot:
             return True
         self.send("❌ Le site refuse cette session (expirée ?). Reconnectez-vous puis renvoyez la ligne.")
         return False
+
+
+HELP_TEXT = "Commandes :\n/update : bilan maintenant (ventes, défausses, solde)"
+REPORT_COMMANDS = ("/update", "/bilan")
+
+
+class CommandListener:
+    """Écoute les commandes envoyées au bot (en mode --loop) : /update demande un bilan
+    tout de suite. Thread à part ; la demande de session reste prioritaire (même fil)."""
+
+    def __init__(self, bot: TelegramBot, on_report):
+        self.bot, self.on_report = bot, on_report
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="telegram", daemon=True)
+
+    def start(self) -> "CommandListener":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(POLL_SECONDS + 20)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            if _SESSION_WAITING.is_set():  # la demande de session lit elle-même les messages
+                self._stop.wait(1)
+                continue
+            try:
+                messages = self.bot.poll(LISTEN_SECONDS)
+            except Exception as exc:
+                log.warning("Telegram : lecture des commandes impossible (%s) ; nouvel essai dans 60 s.", exc)
+                self._stop.wait(60)
+                continue
+            for message in messages:
+                text = message.get("text") or ""
+                command = text.strip().split("@")[0].split(" ")[0].lower()
+                if session_cookie_names(text):
+                    self._cookies(message)
+                elif command in REPORT_COMMANDS:
+                    self.bot.send("⏳ Bilan en préparation…")
+                    self.on_report()
+                else:
+                    self.bot.send(HELP_TEXT)
+
+    def _cookies(self, message: dict) -> None:
+        """Cookies reçus pendant l'écoute : pour la demande de session en cours, sinon
+        supprimés (aucune session n'est demandée)."""
+        if _SESSION_WAITING.is_set():
+            with _POLL_LOCK:
+                _HANDOFF.append(message)
+            return
+        try:
+            self.bot.call("deleteMessage", chat_id=self.bot.chat_id, message_id=message.get("message_id"))
+        except Exception:
+            pass
+        self.bot.send("La session actuelle fonctionne, aucune n'est demandée : message supprimé.")
 
 
 def telegram_bot(config) -> TelegramBot | None:

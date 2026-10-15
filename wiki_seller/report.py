@@ -112,3 +112,20 @@ def maybe_send_report(site, config, bot, history: list, my_id: str | None) -> bo
         _write(config, {"since": now.isoformat(), "discarded": 0})
     log.info("Bilan envoyé sur Telegram.")
     return True
+
+
+def send_report_now(site, config, bot, history: list, my_id: str | None) -> None:
+    """Bilan demandé par /update : depuis le dernier bilan automatique, sans remettre
+    le compteur à zéro (le rythme de REPORT_HOURS ne change pas)."""
+    with _LOCK:
+        data = _read(config)
+        now = _now()
+        since = _parse_time(data.get("since"))
+        if since is None:
+            data["since"] = now.isoformat()
+            _write(config, data)
+            since = now
+        text = report_text(since, now, sales_between(history, my_id, since, now), data.get("discarded", 0),
+                           site.fetch_balance())
+    bot.send(text)
+    log.info("Bilan demandé envoyé sur Telegram.")
