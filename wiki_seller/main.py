@@ -444,11 +444,19 @@ class DiscardWorker:
         return self._thread is not None and self._thread.is_alive()
 
     @staticmethod
-    def recently_finished(config: Config) -> bool:
+    def next_start(config: Config) -> datetime | None:
+        """Heure à partir de laquelle la défausse peut être relancée (None : tout de suite)."""
         data = read_json(discard_progress_file(config), {})
-        finished = data.get("finished_at")
+        try:
+            finished = datetime.fromisoformat(data["finished_at"])
+        except (KeyError, TypeError, ValueError):
+            return None
         delay = DISCARD_RECHECK_UNPRICED if data.get("unpriced") else DISCARD_RECHECK
-        return bool(finished) and now_utc() - datetime.fromisoformat(finished) < delay
+        return finished + delay if now_utc() < finished + delay else None
+
+    @classmethod
+    def recently_finished(cls, config: Config) -> bool:
+        return cls.next_start(config) is not None
 
     def start(self, config: Config, dry_run: bool, debug: bool) -> bool:
         with self._lock:
@@ -486,7 +494,10 @@ def check_discard(site: WikiMasters, config: Config, dry_run: bool, debug: bool)
     if DISCARDER.running():
         log.info("Défausse déjà en cours en arrière-plan.")
         return
-    if DISCARDER.recently_finished(config):
+    next_start = DISCARDER.next_start(config)
+    if next_start:
+        log.info("Défausse terminée récemment : prochaine au plus tôt à %s.",
+                 next_start.astimezone().strftime("%H:%M"))
         return
     log.info("Défausse lancée en arrière-plan (cartes à moins de %d au-delà de %d exemplaires).",
              config.discard_below, config.discard_trigger)
