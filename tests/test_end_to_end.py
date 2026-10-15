@@ -516,9 +516,9 @@ def test_discard_runs_in_background_above_trigger(tmp_path):
         run_once(config)
         DISCARDER.join(120)
     assert not DISCARDER.running()
-    # Sans prix (PC) d'abord, puis les moins chères ; le dernier « Caillou » passe par la
-    # confirmation ; ni la carte protégée, ni la carte voulue, ni « Pile quinze ».
-    assert site.discarded == ["Feuille", "Caillou", "Caillou", "Presque"]
+    # Les plus communes d'abord (C, PC, puis R), chacune dès son prix lu ; ni la carte
+    # protégée, ni la carte voulue, ni « Pile quinze » (15), ni la rare sans prix.
+    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Presque"]
     assert sorted(c["card"]["wikipedia_title"] for c in site.collection) == [
         "Pile quinze", "Rare sans prix", "Tour Eiffel", "Victor Hugo"]
 
@@ -612,16 +612,16 @@ def test_discard_resumes_from_saved_progress_after_restart(tmp_path):
         config.state_dir.mkdir(parents=True, exist_ok=True)
         (config.state_dir / "discard_progress.json").write_text(json.dumps({
             "started_at": datetime.now(timezone.utc).isoformat(), "position": 0, "copies_done": 1,
-            "done": 1, "total": 3,
-            "plan": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2},
-                     {"card_id": "B", "title": "Feuille", "rarity": "PC", "average": None, "copies": 1}],
+            "done": 1,
+            "cards": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2},
+                      {"card_id": "B", "title": "Feuille", "rarity": "PC", "average": None, "copies": 1}],
         }), encoding="utf-8")
         run_once(config)
         DISCARDER.join(120)
     assert site.discarded == ["Caillou", "Feuille"]
-    assert pages_read(site, 1) == 0  # plan repris tel quel, collection non relue
+    assert pages_read(site, 1) == 0  # examen repris tel quel, collection non relue
     saved = json.loads((config.state_dir / "discard_progress.json").read_text(encoding="utf-8"))
-    assert saved["finished_at"] and saved["done"] == 3 and "plan" not in saved
+    assert saved["finished_at"] and saved["done"] == 3 and "cards" not in saved
 
 
 def test_discard_progress_saves_and_reloads_partial_scan(tmp_path):
@@ -633,4 +633,16 @@ def test_discard_progress_saves_and_reloads_partial_scan(tmp_path):
     progress.save(config)
     again = DiscardProgress.load(config)
     assert again.scan.entries == [{"id": "x"}] and again.scan.seen == {"x"} and again.scan.next_page == 1
-    assert again.plan is None and again.started_at == progress.started_at
+    assert again.cards is None and again.started_at == progress.started_at
+
+
+def test_each_card_is_discarded_as_soon_as_its_price_is_read(tmp_path):
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        run_once(config)
+        DISCARDER.join(120)
+    # Prix du « Caillou » (C), ses deux défausses aussitôt, avant de lire le prix suivant.
+    assert site.events[:3] == [("prix", "A"), ("défausse", "Caillou"), ("défausse", "Caillou")]
+    assert site.events.index(("défausse", "Caillou")) < site.events.index(("prix", "F"))

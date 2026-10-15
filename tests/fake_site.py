@@ -234,6 +234,7 @@ class FakeWikiMasters:
         self.signups = 0
         self.collection_requests = []
         self.discarded = []  # titres des exemplaires défaussés, dans l'ordre
+        self.events = []  # ("prix", carte) et ("défausse", titre), dans l'ordre
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -327,6 +328,7 @@ class FakeWikiMasters:
                     if site.sales_forbidden:
                         return self._send(403, {"error": "forbidden"})
                     card_id = url.path.split("/")[4]
+                    site.events.append(("prix", card_id))
                     avg = site.averages.get(card_id)
                     card = next(c["card"] for c in site.collection if c["card"]["id"] == card_id)
                     summary = {card["rarity"]: {"average": avg, "count": 5}} if avg else {}
@@ -342,6 +344,7 @@ class FakeWikiMasters:
                         return self._send(404, {"error": "not found"})
                     site.collection.remove(copy)
                     site.discarded.append(copy["card"]["wikipedia_title"])
+                    site.events.append(("défausse", copy["card"]["wikipedia_title"]))
                     return self._send(200, {"ok": True, "wikibidous": 1})
                 if self.path == "/api/packs/open" and self._authed() and site.packs_need_human:
                     site.pack_refusals += 1

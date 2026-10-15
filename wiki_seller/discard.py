@@ -77,31 +77,29 @@ class DiscardItem:
     copies: int
 
 
-def build_discard_plan(
-    groups: list[CardGroup],
-    averages: dict[str, float | None],
-    below: int,
-    protected_names: set[str],
-    selling: list[dict],
-    unknown_prices: set[str] = frozenset(),
-) -> list[DiscardItem]:
-    """Cartes à défausser, les moins chères d'abord : prix moyen connu inférieur à
-    `below`, ou aucune vente connue pour une C/PC. Toutes les copies sont défaussées,
-    sauf celles en vente. Jamais les cartes protégées (`protected_names` : cartes à
-    garder et cartes voulues), ni celles dont le prix n'a pas pu être lu."""
+# Ordre d'examen : les plus communes d'abord (les plus susceptibles de valoir peu).
+RARITY_ORDER = ("C", "PC", "R", "SR", "UR", "L")
+
+
+def discard_candidates(groups: list[CardGroup], protected_names: set[str], selling: list[dict]) -> list[DiscardItem]:
+    """Cartes à examiner pour la défausse, les plus communes d'abord. Jamais les cartes
+    protégées (`protected_names` : cartes à garder et cartes voulues), ni les
+    exemplaires en vente. Le prix (`average`) est lu ensuite, carte par carte."""
     items = []
     for group in groups:
-        if normalize_name(group.title) in protected_names or group.card_id in unknown_prices:
+        if normalize_name(group.title) in protected_names:
             continue
         copies = group.count - count_listed(group, selling)
-        if copies <= 0:
-            continue
-        average = averages.get(group.card_id)
-        if average:
-            if average >= below:
-                continue
-        elif (group.rarity or "") not in DISCARD_WITHOUT_PRICE:
-            continue
-        items.append(DiscardItem(group.card_id, group.title, group.rarity, average or None, copies))
-    items.sort(key=lambda i: (i.average or 0, normalize_name(i.title)))
+        if copies > 0:
+            items.append(DiscardItem(group.card_id, group.title, group.rarity, None, copies))
+    rank = {r: i for i, r in enumerate(RARITY_ORDER)}
+    items.sort(key=lambda i: (rank.get(i.rarity or "", len(rank)), normalize_name(i.title)))
     return items
+
+
+def should_discard(rarity: str | None, average: float | None, below: int) -> bool:
+    """Prix moyen connu inférieur à `below`, ou aucune vente connue pour une C/PC.
+    (Une carte dont le prix n'a pas pu être lu n'arrive pas jusqu'ici.)"""
+    if average:
+        return average < below
+    return (rarity or "") in DISCARD_WITHOUT_PRICE

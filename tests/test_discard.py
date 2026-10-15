@@ -1,7 +1,7 @@
 import threading
 import time
 
-from wiki_seller.discard import SessionGate, build_discard_plan, total_copies
+from wiki_seller.discard import SessionGate, discard_candidates, should_discard, total_copies
 from wiki_seller.selection import parse_collection
 
 
@@ -26,15 +26,23 @@ def test_total_copies():
     assert total_copies(GROUPS) == 10
 
 
-def test_plan_discards_cheap_cards_and_unpriced_commons():
+def test_candidates_are_examined_commons_first():
     selling = [{"card_id": "g1", "status": "active"}]
-    plan = build_discard_plan(GROUPS, AVERAGES, 15, {"tour eiffel"}, selling, unknown_prices={"H"})
-    assert [(i.title, i.copies, i.average) for i in plan] == [
-        ("Feuille", 1, None),   # sans prix d'abord
-        ("En vente", 1, 3),     # un exemplaire en vente : l'autre seulement
-        ("Caillou", 2, 5),      # tous les exemplaires, y compris le dernier
-        ("Presque", 1, 14),
-    ]
+    cards = discard_candidates(GROUPS, {"tour eiffel"}, selling)
+    assert [(i.title, i.rarity, i.copies) for i in cards] == [
+        ("Caillou", "C", 2),      # tous les exemplaires, y compris le dernier
+        ("En vente", "C", 1),     # un exemplaire en vente : l'autre seulement
+        ("Prix refusé", "C", 1),
+        ("Feuille", "PC", 1),
+        ("Pile quinze", "R", 1), ("Presque", "R", 1), ("Rare sans prix", "R", 1),
+    ]                             # jamais la carte protégée
+
+
+def test_discard_decision():
+    assert should_discard("C", 5, 15) and should_discard("R", 14, 15)
+    assert not should_discard("R", 15, 15)                        # strictement moins de 15
+    assert should_discard("C", None, 15) and should_discard("PC", None, 15)  # aucune vente connue
+    assert not should_discard("R", None, 15) and not should_discard("L", None, 15)
 
 
 def test_gate_lets_priority_pass_before_background():

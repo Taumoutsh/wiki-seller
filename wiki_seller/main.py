@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 from .buying import WantedCardsError, WantedState, auction_title, load_wanted_cards, my_user_id, run_bids
 from .config import Config, ConfigError, load_config
-from .discard import DiscardItem, SessionGate, build_discard_plan, total_copies
+from .discard import DiscardItem, SessionGate, discard_candidates, should_discard, total_copies
 from .selection import (
     SafeCardsError,
     adjust_to_market,
@@ -60,6 +60,8 @@ DISCARD_RECHECK = timedelta(hours=1)  # délai avant de relancer une défausse t
 DISCARD_RECHECK_UNPRICED = timedelta(minutes=15)  # idem s'il restait des prix à lire
 DISCARD_PROGRESS_MAX_AGE = timedelta(hours=24)  # au-delà, la collection lue est trop ancienne
 DISCARD_SAVE_EVERY_PAGES = 20  # pages de collection lues entre deux sauvegardes
+DISCARD_SAVE_EVERY_CARDS = 20  # cartes examinées entre deux sauvegardes
+DISCARD_LOG_EVERY = 100  # cartes examinées entre deux lignes de progression
 
 # Un seul navigateur à la fois sur la session (voir discard.SessionGate).
 GATE = SessionGate()
@@ -297,49 +299,74 @@ def _pause(seconds: float, should_stop) -> bool:
     return True
 
 
+class PriceReader:
+    """Prix moyens carte par carte : cache state/price_cache.json, sinon l'API. Un refus
+    passager (trop de requêtes, panne) ne fait laisser de côté que la carte concernée ;
+    l'API n'est abandonnée qu'après PRICE_FAILURES_BEFORE_GIVING_UP refus de suite, ou
+    dès un accès interdit."""
+
+    OK, UNKNOWN, STOPPED = "ok", "unknown", "stopped"
+
+    def __init__(self, site: WikiMasters, config: Config):
+        self.site, self.config = site, config
+        self.cache = load_price_cache(config)
+        self.api_ok = True
+        self.fetched = 0
+        self.failures = 0  # refus passagers de suite
+
+    def read(self, group, should_stop=lambda: False) -> tuple[str, float | None]:
+        """(OK, prix ou None si aucune vente connue), (UNKNOWN, None) si le prix n'a pas
+        pu être lu, ou (STOPPED, None) si une passe attend la session."""
+        key = f"{group.card_id}:{group.rarity}"
+        if key in self.cache:
+            return self.OK, self.cache[key]["average"]
+        if not self.api_ok:
+            return self.UNKNOWN, None
+        if should_stop():
+            return self.STOPPED, None
+        try:
+            average = self.site.fetch_average(group.card_id, group.rarity)
+        except PriceApiUnavailable as exc:  # pas mis en cache : redemandé la prochaine fois
+            self.failures += 1
+            if exc.transient and self.failures < PRICE_FAILURES_BEFORE_GIVING_UP:
+                log.info("Prix de « %s » non lu (%s) : carte laissée de côté, pause de %d s.",
+                         group.title, exc, PRICE_RETRY_PAUSE)
+                if not _pause(PRICE_RETRY_PAUSE, should_stop):
+                    return self.STOPPED, None
+                return self.UNKNOWN, None
+            log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
+                        "sans classement pour les cartes concernées.", exc)
+            self.api_ok = False
+            return self.UNKNOWN, None
+        self.failures = 0
+        self.cache[key] = {"average": average, "at": now_utc().isoformat()}
+        self.fetched += 1
+        if self.fetched % PRICE_SAVE_EVERY == 0:
+            self.save()  # une passe interrompue ne perd pas les prix déjà lus
+        time.sleep(0.3)
+        return self.OK, average
+
+    def save(self) -> None:
+        save_price_cache(self.config, self.cache)
+
+
 def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda: False):
     """Prix moyens (cache state/price_cache.json, sinon l'API). Renvoie (prix par carte,
     cartes dont l'API a refusé le prix, True si tout a été lu sans interruption)."""
-    cache = load_price_cache(config)
+    reader = PriceReader(site, config)
     averages: dict[str, float | None] = {}
     unknown: set[str] = set()
-    price_api_ok = True
-    fetched = 0
-    failures = 0  # refus passagers de suite
     try:
         for group in groups:
-            key = f"{group.card_id}:{group.rarity}"
-            if key in cache:
-                averages[group.card_id] = cache[key]["average"]
-                continue
-            if not price_api_ok:
-                unknown.add(group.card_id)
-                continue
-            if should_stop():
+            status, average = reader.read(group, should_stop)
+            if status == reader.STOPPED:
                 return averages, unknown, False
-            try:
-                averages[group.card_id] = site.fetch_average(group.card_id, group.rarity)
-            except PriceApiUnavailable as exc:
-                unknown.add(group.card_id)  # pas mis en cache : redemandé la prochaine fois
-                failures += 1
-                if exc.transient and failures < PRICE_FAILURES_BEFORE_GIVING_UP:
-                    log.info("Prix de « %s » non lu (%s) : carte laissée de côté, pause de %d s.",
-                             group.title, exc, PRICE_RETRY_PAUSE)
-                    if not _pause(PRICE_RETRY_PAUSE, should_stop):
-                        return averages, unknown, False
-                    continue
-                log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
-                            "sans classement pour les cartes concernées.", exc)
-                price_api_ok = False
-                continue
-            failures = 0
-            cache[key] = {"average": averages[group.card_id], "at": now_utc().isoformat()}
-            fetched += 1
-            if fetched % PRICE_SAVE_EVERY == 0:
-                save_price_cache(config, cache)  # une passe interrompue ne perd pas les prix déjà lus
-            time.sleep(0.3)
+            if status == reader.UNKNOWN:
+                unknown.add(group.card_id)
+            else:
+                averages[group.card_id] = average
     finally:
-        save_price_cache(config, cache)
+        reader.save()
     return averages, unknown, True
 
 
@@ -511,25 +538,23 @@ def discard_progress_file(config: Config):
 @dataclass
 class DiscardProgress:
     """Avancement d'une défausse, gardé dans state/discard_progress.json : la collection
-    n'est lue qu'une fois, puis le plan est repris là où il s'était arrêté, même après
-    un redémarrage."""
+    n'est lue qu'une fois, puis les cartes sont examinées une à une et reprises là où
+    l'examen s'était arrêté, même après un redémarrage."""
     started_at: str = dataclasses.field(default_factory=lambda: now_utc().isoformat())
     scan: CollectionScan = dataclasses.field(default_factory=CollectionScan)
-    plan: list[DiscardItem] | None = None
-    position: int = 0  # carte du plan en cours
-    copies_done: int = 0  # exemplaires déjà traités de cette carte
-    done: int = 0
-    total: int = 0
+    cards: list[DiscardItem] | None = None  # cartes à examiner, les plus communes d'abord
+    position: int = 0  # carte en cours d'examen
+    copies_done: int = 0  # exemplaires déjà défaussés de cette carte
+    done: int = 0  # exemplaires défaussés en tout
     unpriced: int = 0  # cartes dont le prix n'a pas pu être lu : relance plus tôt
 
     def save(self, config: Config, finished: bool = False) -> None:
         data = {"started_at": self.started_at, "position": self.position,
-                "copies_done": self.copies_done, "done": self.done, "total": self.total,
-                "unpriced": self.unpriced}
+                "copies_done": self.copies_done, "done": self.done, "unpriced": self.unpriced}
         if finished:
             data["finished_at"] = now_utc().isoformat()
-        elif self.plan is not None:  # la collection lue ne sert plus une fois le plan établi
-            data["plan"] = [dataclasses.asdict(i) for i in self.plan]
+        elif self.cards is not None:  # la collection lue ne sert plus une fois les cartes listées
+            data["cards"] = [dataclasses.asdict(i) for i in self.cards]
         else:
             scan = self.scan
             data["scan"] = {"rarity": scan.rarity, "entries": scan.entries, "seen": sorted(scan.seen),
@@ -546,19 +571,22 @@ class DiscardProgress:
             if data.get("finished_at") or now_utc() - started > DISCARD_PROGRESS_MAX_AGE:
                 return cls()
             progress = cls(started_at=data["started_at"], position=data["position"],
-                           copies_done=data["copies_done"], done=data["done"], total=data["total"],
+                           copies_done=data["copies_done"], done=data["done"],
                            unpriced=data.get("unpriced", 0))
-            if data.get("plan") is not None:
-                progress.plan = [DiscardItem(**i) for i in data["plan"]]
+            if data.get("cards") is not None:
+                progress.cards = [DiscardItem(**i) for i in data["cards"]]
             elif data.get("scan"):
                 raw = data["scan"]
                 progress.scan = CollectionScan(rarity=raw["rarity"], entries=raw["entries"], seen=set(raw["seen"]),
                                                in_trade=set(raw["in_trade"]), next_page=raw["next_page"],
                                                done=raw["done"])
+            else:
+                return cls()  # ancien format : on recommence (les prix restent en cache)
         except (KeyError, TypeError, ValueError):
             return cls()
-        if progress.plan is not None:
-            log.info("Défausse reprise : %d/%d exemplaire(s) déjà traité(s).", progress.done, progress.total)
+        if progress.cards is not None:
+            log.info("Défausse reprise : %d/%d carte(s) examinée(s), %d exemplaire(s) défaussé(s).",
+                     progress.position, len(progress.cards), progress.done)
         else:
             log.info("Défausse reprise : %d entrée(s) de la collection déjà lues.", len(progress.scan.entries))
         return progress
@@ -588,42 +616,70 @@ def run_discard(config: Config, dry_run: bool, debug: bool) -> bool:
 
 def _discard_round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress) -> bool:
     """Une période avec la session. Renvoie True quand la défausse est finie, False si
-    elle a cédé la place à une passe."""
+    elle a cédé la place à une passe. Au fil de l'eau : le prix de chaque carte est lu,
+    puis la carte est défaussée aussitôt si elle vaut moins de DISCARD_BELOW."""
     with open_site(config, debug, background=True) as site:
-        if progress.plan is None and not _build_discard_plan(site, config, progress):
+        if progress.cards is None and not _list_discard_cards(site, config, progress):
             return False
-        if progress.plan is None:
+        if progress.cards is None:
             return True  # seuil non dépassé
-        plan = progress.plan
-        while progress.position < len(plan):
-            item = plan[progress.position]
-            while progress.copies_done < item.copies:
-                if GATE.should_yield():
-                    log.info("Défausse : %d/%d faite(s) avant la pause.", progress.done, progress.total)
-                    return False
-                status, detail = site.discard_card(item.title, dry_run)
-                price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
-                if status is DiscardStatus.FAILED:
-                    log.warning("Défausse : %s : %s (%s) ; carte suivante.", item.title, status.value, detail)
-                    break
-                progress.copies_done += 1
-                progress.done += 1
-                progress.save(config)
-                log.info("Défausse : %s (%s, %s) : %s%s.", item.title, item.rarity or "?", price,
-                         status.value, f" via {detail}" if detail else "")
-                time.sleep(random.uniform(*DISCARD_PAUSE))
-            progress.position += 1
-            progress.copies_done = 0
-            progress.save(config)
-        log.info("Défausse terminée : %d/%d exemplaire(s) %s.", progress.done, progress.total,
-                 "simulé(s)" if dry_run else "défaussé(s)")
+        cards = progress.cards
+        reader = PriceReader(site, config)
+        try:
+            while progress.position < len(cards):
+                item = cards[progress.position]
+                if progress.copies_done == 0:  # sinon : prix déjà lu, défausse en cours
+                    if GATE.should_yield():
+                        return False
+                    status, average = reader.read(item, GATE.should_yield)
+                    if status == reader.STOPPED:
+                        return False
+                    if status == reader.UNKNOWN:
+                        progress.unpriced += 1
+                        _next_discard_card(config, progress)
+                        continue
+                    item.average = average
+                    if not should_discard(item.rarity, average, config.discard_below):
+                        _next_discard_card(config, progress)
+                        continue
+                while progress.copies_done < item.copies:
+                    if GATE.should_yield():
+                        return False
+                    status, detail = site.discard_card(item.title, dry_run)
+                    price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
+                    if status is DiscardStatus.FAILED:
+                        log.warning("Défausse : %s : %s (%s) ; carte suivante.", item.title, status.value, detail)
+                        break
+                    progress.copies_done += 1
+                    progress.done += 1
+                    progress.save(config)
+                    log.info("Défausse : %s (%s, %s) : %s%s.", item.title, item.rarity or "?", price,
+                             status.value, f" via {detail}" if detail else "")
+                    time.sleep(random.uniform(*DISCARD_PAUSE))
+                _next_discard_card(config, progress)
+        finally:
+            reader.save()
+        log.info("Défausse terminée : %d exemplaire(s) %s, %d carte(s) examinée(s)%s.", progress.done,
+                 "simulé(s)" if dry_run else "défaussé(s)", len(cards),
+                 f", {progress.unpriced} sans prix lu (redemandées dans {DISCARD_RECHECK_UNPRICED.seconds // 60} min)"
+                 if progress.unpriced else "")
         return True
 
 
-def _build_discard_plan(site: WikiMasters, config: Config, progress: DiscardProgress) -> bool:
-    """Lit la collection (reprise page par page) et les prix, puis établit le plan.
-    Renvoie False si une passe attend la session avant la fin ; laisse progress.plan à
-    None si la collection ne dépasse pas DISCARD_TRIGGER."""
+def _next_discard_card(config: Config, progress: DiscardProgress) -> None:
+    progress.position += 1
+    progress.copies_done = 0
+    if progress.position % DISCARD_LOG_EVERY == 0:
+        log.info("Défausse : %d/%d carte(s) examinée(s), %d exemplaire(s) défaussé(s).",
+                 progress.position, len(progress.cards), progress.done)
+    if progress.position % DISCARD_SAVE_EVERY_CARDS == 0:
+        progress.save(config)
+
+
+def _list_discard_cards(site: WikiMasters, config: Config, progress: DiscardProgress) -> bool:
+    """Lit la collection (reprise page par page) et liste les cartes à examiner.
+    Renvoie False si une passe attend la session avant la fin ; laisse progress.cards
+    à None si la collection ne dépasse pas DISCARD_TRIGGER."""
     def save_now_and_then(scan: CollectionScan) -> None:
         if scan.next_page % DISCARD_SAVE_EVERY_PAGES == 0:
             progress.save(config)
@@ -631,28 +687,17 @@ def _build_discard_plan(site: WikiMasters, config: Config, progress: DiscardProg
     if not site.scan_collection(progress.scan, GATE.should_yield, on_page=save_now_and_then):
         log.info("Défausse : %d entrée(s) de la collection lues avant la pause.", len(progress.scan.entries))
         return False
-    all_groups = parse_collection(progress.scan.entries, excluded_copy_ids=progress.scan.in_trade)
     count = total_copies(parse_collection(progress.scan.entries))
     if count <= config.discard_trigger:
         log.info("Collection : %d exemplaire(s), seuil de défausse %d non dépassé.", count, config.discard_trigger)
         return True
-    protected = protected_names(config)
-    groups = [g for g in all_groups if normalize_name(g.title) not in protected]
-    averages, unknown, complete = fetch_averages(site, config, groups, GATE.should_yield)
-    if not complete:
-        log.info("Défausse : prix en cours de lecture, reprise après la passe.")
-        return False
+    groups = parse_collection(progress.scan.entries, excluded_copy_ids=progress.scan.in_trade)
     market = site.fetch_market_state()
-    plan = build_discard_plan(groups, averages, config.discard_below, protected, market.selling, unknown)
-    progress.plan, progress.total = plan, sum(i.copies for i in plan)
-    progress.unpriced = len(unknown)
+    progress.cards = discard_candidates(groups, protected_names(config), market.selling)
     progress.save(config)
-    log.info("Collection : %d exemplaire(s) > %d. Défausse : %d exemplaire(s) de %d carte(s) à moins de %d%s.",
-             count, config.discard_trigger, progress.total, len(plan), config.discard_below,
-             f", ex. : {', '.join(i.title for i in plan[:10])}" if plan else "")
-    if unknown:
-        log.info("Défausse : %d carte(s) sans prix lu, redemandée(s) à la prochaine défausse (dans %d min).",
-                 len(unknown), DISCARD_RECHECK_UNPRICED.seconds // 60)
+    log.info("Collection : %d exemplaire(s) > %d. Défausse au fil de l'eau de %d carte(s), les plus "
+             "communes d'abord, à moins de %d.", count, config.discard_trigger, len(progress.cards),
+             config.discard_below)
     return True
 
 
