@@ -162,9 +162,16 @@ Total gagné : +207
 Ventes : prix finaux de vos enchères conclues (historique du site) ; défausses : 1
 wikibidou par exemplaire (compteur dans `state/report.json`). Pas de bilan en `--dry-run`.
 
-**`/update`** (ou `/bilan`), en mode `--loop` : bilan immédiat depuis le dernier bilan
-automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il
-part juste après. Tout autre message reçoit la liste des commandes.
+**Commandes** (en mode `--loop`) :
+
+| Commande | Effet |
+|---|---|
+| `/update` (ou `/bilan`) | Bilan immédiat depuis le dernier bilan automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il part juste après |
+| `/safe Tour Eiffel` | Ajoute la carte à `safed_cards.json` : jamais défaussée, et toujours un exemplaire gardé. Une défausse en cours la respecte aussitôt |
+| `/want Tour Eiffel 500` | Ajoute la carte à `wanted_cards.json` avec son prix maximum, ou met à jour ce prix si elle y est déjà ; `/want Victor Hugo 120 2` pour 2 exemplaires. Prise en compte à la prochaine passe |
+
+Les noms sont comparés sans majuscules, accents ni espaces en trop : écrivez-les comme
+sur le site. Tout autre message reçoit la liste des commandes.
 
 ## Utilisation
 
@@ -221,7 +228,8 @@ docker compose logs -f
 
 Créez `safed_cards.json` et `wanted_cards.json` **avant** le premier `up`, sinon Docker
 crée des dossiers à leur place. Le conteneur tourne en `--loop` et redémarre tout seul.
-Ces deux fichiers sont montés depuis le serveur et relus à chaque passe. Le `.env` n'est
+Ces deux fichiers sont montés depuis le serveur, modifiables à la main ou par le bot
+(`/safe`, `/want`), et relus à chaque passe. Le `.env` n'est
 lu qu'à la création du conteneur : après l'avoir modifié, lancez `docker compose up -d`
 (et non `restart`). Session, caches et suivis sont conservés dans `state/`.
 

@@ -1,11 +1,14 @@
 """Fichiers d'état (dossier state/) et horloge : lecture tolérante, écriture atomique."""
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SITE_TIMEZONE = "Europe/Paris"
+# safed_cards.json et wanted_cards.json : modifiés par le bot Telegram, lus par les passes.
+LISTS_LOCK = threading.RLock()
 
 
 def now_utc() -> datetime:

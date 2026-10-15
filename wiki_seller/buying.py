@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .config import Config
 from .selection import normalize_name
-from .state import parse_time, read_json, write_json
+from .state import LISTS_LOCK, parse_time, read_json, write_json
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +51,8 @@ def load_wanted_cards(path: Path) -> list[WantedCard]:
     if path.is_dir():  # Docker crée un dossier si le fichier monté n'existe pas
         raise WantedCardsError(f"{path} est un dossier : créez le fichier (voir wanted_cards.example.json).")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with LISTS_LOCK:
+            data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise WantedCardsError(f"{path} n'est pas un JSON valide : {exc}") from exc
     if not isinstance(data, list):

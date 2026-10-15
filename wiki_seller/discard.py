@@ -278,6 +278,9 @@ def _discard_copies(site: WikiMasters, config: Config, item: DiscardItem, progre
                     dry_run: bool) -> bool:
     """Défausse les exemplaires de la carte. False si une passe attend la session."""
     price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
+    if normalize_name(item.title) in protected_names(config):  # protégée entre-temps (/safe, /want)
+        log.info("Défausse : %s est protégée ; carte suivante.", item.title)
+        return True
     if not item.copy_ids:
         log.warning("Défausse : %s : exemplaires sans identifiant, impossible à défausser ; carte suivante.",
                     item.title)

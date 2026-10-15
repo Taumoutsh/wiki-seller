@@ -573,3 +573,24 @@ def test_progress_without_copy_ids_is_discarded_and_the_collection_reread(tmp_pa
         DISCARDER.join(120)
     assert pages_read(site, 1) == 1  # collection relue
     assert site.discarded == ["Caillou", "Caillou", "Tour Eiffel", "Victor Hugo", "Feuille", "Presque"]
+
+
+def test_card_protected_during_the_discard_is_kept(tmp_path):
+    from datetime import datetime, timezone
+
+    from wiki_seller.discard import DISCARDER
+
+    with discard_site() as site:
+        # La défausse avait listé « Caillou » ; elle a été protégée (/safe) entre-temps.
+        config = make_config(tmp_path, site.url, ["Caillou"], discard_below=15, discard_trigger=1)
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        (config.state_dir / "discard_progress.json").write_text(json.dumps({
+            "started_at": datetime.now(timezone.utc).isoformat(), "position": 0, "copies_done": 0, "done": 0,
+            "cards": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2,
+                       "copy_ids": ["a1", "a2"]},
+                      {"card_id": "B", "title": "Feuille", "rarity": "PC", "average": None, "copies": 1,
+                       "copy_ids": ["b1"]}],
+        }), encoding="utf-8")
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == ["Feuille"]

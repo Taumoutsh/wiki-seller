@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
+from .state import LISTS_LOCK
+
 # Nombre d'exemplaires conservés pour une carte présente dans safed_cards.json.
 PROTECTED_COPIES_TO_KEEP = 1
 
@@ -38,7 +40,8 @@ def load_safe_cards(path: Path) -> set[str]:
             "(une liste vide [] vend toutes les cartes)."
         )
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with LISTS_LOCK:
+            data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise SafeCardsError(f"{path} n'est pas un JSON valide : {exc}") from exc
     if isinstance(data, dict):

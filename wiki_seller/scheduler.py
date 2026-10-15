@@ -139,7 +139,7 @@ def loop(config: Config, dry_run: bool, debug: bool) -> None:
     snipe = False
     bot = telegram_bot(config)
     if bot is not None:
-        CommandListener(bot, REPORT_REQUEST.set).start()
+        CommandListener(bot, REPORT_REQUEST.set, config).start()
     while True:
         try:
             if snipe:

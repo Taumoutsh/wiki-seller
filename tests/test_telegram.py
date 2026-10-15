@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 from wiki_seller.telegram import TelegramBot
@@ -114,3 +115,28 @@ def test_session_reply_reaches_the_request_while_commands_are_listened(tmp_path)
             listener.stop()
     assert len(tried) == 1 and len(fake.deleted) == 1
     assert any("envoyez d'abord" in t for t in fake.sent) and fake.sent[-1].startswith("✅")
+
+
+def test_safe_and_want_commands_edit_the_lists(tmp_path):
+    from wiki_seller.telegram import CommandListener
+
+    from .test_end_to_end import make_config
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", ["Tour Eiffel"], wanted=[])
+    with FakeTelegram() as fake:
+        listener = CommandListener(bot(tmp_path, fake), lambda: None, config).start()
+        try:
+            assert wait_for(lambda: (tmp_path / "telegram.json").exists())
+            fake.say("/safe Victor Hugo")
+            assert wait_for(lambda: len(fake.sent) == 1)
+            fake.say("/want Gustave Eiffel 300 2")
+            assert wait_for(lambda: len(fake.sent) == 2)
+            fake.say("/want Gustave Eiffel")
+            assert wait_for(lambda: len(fake.sent) == 3)
+        finally:
+            listener.stop()
+    assert fake.sent[0].startswith("🛡️ « Victor Hugo » protégée")
+    assert "Gustave Eiffel » ajoutée dans les achats (300 max, 2 exemplaire(s))" in fake.sent[1]
+    assert fake.sent[2].startswith("❌ Usage : /want")
+    assert json.loads(config.safe_cards_file.read_text()) == ["Tour Eiffel", "Victor Hugo"]
+    assert json.loads(config.wanted_cards_file.read_text()) == [{"name": "Gustave Eiffel", "max_price": 300, "copies": 2}]
