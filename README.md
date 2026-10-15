@@ -194,6 +194,27 @@ Le script n'utilise `SESSION_COOKIES` que s'il n'a pas de session valide dans `s
 Si le journal indique « La session de SESSION_COOKIES est expirée », recommencez ces
 étapes avec une nouvelle copie.
 
+### Renouveler la session depuis Telegram
+
+Avec un bot Telegram, plus besoin d'aller sur le serveur : quand aucune session ne
+fonctionne plus, le bot vous envoie le lien du site et la marche à suivre, et il suffit
+de lui **répondre avec la ligne copiée par le favori** (étape 2 ci-dessus).
+
+1. Dans Telegram, écrivez à **@BotFather** : `/newbot`, choisissez un nom ; il vous
+   donne le jeton du bot (`123456:ABC…`) → `TELEGRAM_BOT_TOKEN` dans `.env`.
+2. Écrivez n'importe quoi à votre nouveau bot, puis ouvrez
+   `https://api.telegram.org/bot<JETON>/getUpdates` : le nombre après `"chat":{"id":`
+   est votre identifiant → `TELEGRAM_CHAT_ID` dans `.env`. Relancez le conteneur.
+
+Quand la session expire, le script se met en attente (`TELEGRAM_WAIT`, 60 min par
+défaut, puis il réessaie au réveil suivant) et vous écrit. Vous répondez avec les
+cookies ; le bot **supprime aussitôt votre message**, essaie la session sur le site et
+vous confirme qu'elle est acceptée (✅) ou refusée (❌, renvoyez-en une). Pas de nouveau
+message avant 3 h tant que vous n'avez pas répondu. La session reçue est gardée dans
+`state/session_cookies.txt` pour les redémarrages. Seuls les messages de
+`TELEGRAM_CHAT_ID` sont lus. Les cookies transitent par les serveurs de Telegram :
+gardez le bot pour vous seul.
+
 ## Utilisation
 
 ```bash
@@ -225,6 +246,9 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `OPEN_PACKS_HOURS` | *(vide)* | Heures de Paris où les paquets sont ouverts ; vide = jamais |
 | `PACKS_VERIFY_WAIT` | *(vide)* | Minutes d'attente qu'une personne fasse la vérification humaine (exige `HEADLESS=false` et un écran distant) ; vide = pause de 12 h |
 | `NOTIFY_URL` | *(vide)* | Notification (ntfy) quand une vérification attend quelqu'un |
+| `TELEGRAM_BOT_TOKEN` | *(vide)* | Jeton du bot Telegram qui demande une nouvelle session quand elle expire (voir « Renouveler la session depuis Telegram ») |
+| `TELEGRAM_CHAT_ID` | *(vide)* | Votre identifiant de conversation Telegram : seuls ses messages sont lus |
+| `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse avant de réessayer au réveil suivant |
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |

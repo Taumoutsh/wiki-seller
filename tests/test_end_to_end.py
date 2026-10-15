@@ -672,3 +672,26 @@ def test_discard_through_api_dry_run_sends_nothing(tmp_path):
         run_once(config, dry_run=True)
         DISCARDER.join(120)
     assert site.discarded == [] and len(site.collection) == len(DISCARD_COLLECTION)
+
+
+def test_expired_session_is_renewed_through_telegram(tmp_path):
+    import threading
+    import time
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, challenge="manual") as site, FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], session_cookies="session=expired",
+                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+
+        def answer():  # la personne répond une fois la demande reçue
+            while not tg.sent:
+                time.sleep(0.1)
+            tg.say("sb-x-auth-token.0=base64-abc; session=ok")
+
+        threading.Thread(target=answer, daemon=True).start()
+        result = run_once(config, dry_run=True)
+    assert result.listed == 5 and site.logins == 0  # jamais bloqué sur la page /login
+    assert site.url in tg.sent[0] and tg.sent[-1].startswith("✅") and len(tg.deleted) == 1
+    saved = (config.state_dir / "session_cookies.txt").read_text(encoding="utf-8")
+    assert "auth-token.0=base64-abc" in saved  # gardée pour les redémarrages

@@ -803,6 +803,10 @@ def main(argv: list[str] | None = None) -> int:
              config.auction_duration_label, config.pass_interval, config.wanted_cards_file,
              f"des cartes à moins de {config.discard_below} au-delà de {config.discard_trigger} exemplaires"
              if config.discard_below else "désactivée")
+    if config.telegram_token and not config.telegram_chat_id:
+        log.warning("TELEGRAM_BOT_TOKEN sans TELEGRAM_CHAT_ID : bot Telegram désactivé (voir le README).")
+    elif config.telegram_token:
+        log.info("Bot Telegram actif : il demandera une nouvelle session si elle expire.")
 
     try:
         if args.loop:

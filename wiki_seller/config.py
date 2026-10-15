@@ -140,6 +140,11 @@ class Config:
     # et URL de notification (ntfy) pour la prévenir.
     packs_verify_wait: timedelta | None = None
     notify_url: str | None = None
+    # Bot Telegram qui demande une nouvelle session quand elle expire (vide = désactivé).
+    telegram_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_wait: timedelta = timedelta(minutes=60)
+    telegram_api_url: str = "https://api.telegram.org"
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
     api_trace: bool = False
     # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
@@ -241,6 +246,9 @@ def load_config() -> Config:
         packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "")),
         packs_verify_wait=(timedelta(minutes=wait) if (wait := _positive_int("PACKS_VERIFY_WAIT")) else None),
         notify_url=os.getenv("NOTIFY_URL", "").strip() or None,
+        telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+        telegram_wait=timedelta(minutes=_positive_int("TELEGRAM_WAIT") or 60),
         unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         price_cache_ttl=timedelta(hours=_positive_int("PRICE_CACHE_HOURS") or 24),

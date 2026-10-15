@@ -51,6 +51,8 @@ if [[ -f "$STATE_FILE" ]]; then
     rm -f "$STATE_FILE"
     echo "Ancienne session supprimée ($STATE_FILE)."
 fi
+# Idem pour la dernière session reçue par le bot Telegram.
+rm -f state/session_cookies.txt
 
 if [[ "$restart" -eq 1 ]]; then
     if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then

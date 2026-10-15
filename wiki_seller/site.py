@@ -48,6 +48,7 @@ PACK_OPEN_BUTTON = 'button:has(span:text-is("Ouvrir"))'
 PACK_MORE_CARDS = re.compile(r"Encore\s+\d+\s+cartes?", re.I)
 PACK_CONTINUE = re.compile(r"^\s*Continuer\s*$", re.I)
 # « 🗑️ Défausser ⊙+1 » : icône et badge autour du libellé.
+SESSION_COOKIES_FILE = "session_cookies.txt"  # dans state/ : dernière session reçue par Telegram
 DISCARD_BUTTON = re.compile(r"D[ée]fausser", re.I)
 DISCARD_CONFIRM = re.compile(r"D[ée]fausser|confirmer|^\s*oui\b", re.I)
 DISCARD_CONFIRM_WAIT = 3  # s pour que la confirmation « Défausser cette carte ? » apparaisse
@@ -384,28 +385,61 @@ class WikiMasters:
         if self.is_logged_in():
             log.info("Session existante réutilisée.")
             return
-        if self.config.session_cookies and self.import_session_cookies():
+        received = self.received_session_cookies()
+        if received and received != self.config.session_cookies \
+                and self.import_session_cookies(received, "reçue par Telegram"):
+            return
+        if self.config.session_cookies and self.import_session_cookies(self.config.session_cookies):
+            return
+        if self.session_from_telegram():
             return
         self.login()
 
-    def import_session_cookies(self) -> bool:
-        """Session copiée depuis un navigateur connecté (SESSION_COOKIES) : évite la
-        vérification Cloudflare de la page /login. Le site la renouvelle ensuite tout
-        seul et la version à jour est enregistrée dans state/."""
-        cookies = parse_cookies(self.config.session_cookies)
+    def import_session_cookies(self, text: str, source: str = "SESSION_COOKIES") -> bool:
+        """Session copiée depuis un navigateur connecté (SESSION_COOKIES, ou reçue par le
+        bot Telegram) : évite la vérification Cloudflare de la page /login. Le site la
+        renouvelle ensuite tout seul et la version à jour est enregistrée dans state/."""
+        cookies = parse_cookies(text)
         if not cookies:
-            log.warning("SESSION_COOKIES ne contient aucun cookie « nom=valeur ».")
+            log.warning("La session %s ne contient aucun cookie « nom=valeur ».", source)
             return False
         self.page.context.add_cookies(
             [{"name": name, "value": value, "url": self.config.base_url} for name, value in cookies])
         self.page.goto(self.url("/collection"), wait_until="domcontentloaded")
         if self.is_logged_in():
-            log.info("Connecté avec la session de SESSION_COOKIES (%d cookie(s)).", len(cookies))
+            log.info("Connecté avec la session %s (%d cookie(s)).", source, len(cookies))
             return True
-        log.warning("La session de SESSION_COOKIES est expirée ou invalide : "
-                    "copiez-en une nouvelle depuis un navigateur connecté.")
+        log.warning("La session %s est expirée ou invalide : copiez-en une nouvelle depuis "
+                    "un navigateur connecté.", source)
         self.page.context.clear_cookies()
         return False
+
+    def received_session_cookies(self) -> str:
+        """Dernière session reçue par le bot Telegram (state/session_cookies.txt)."""
+        try:
+            return (self.config.state_dir / SESSION_COOKIES_FILE).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def session_from_telegram(self) -> bool:
+        """Session expirée : le bot Telegram demande de nouveaux cookies et attend la
+        réponse (TELEGRAM_WAIT). Les cookies acceptés sont gardés pour les redémarrages."""
+        from .telegram import telegram_bot
+
+        bot = telegram_bot(self.config)
+        if bot is None:
+            return False
+
+        def try_cookies(cookies: str) -> bool:
+            if not self.import_session_cookies(cookies, "reçue par Telegram"):
+                return False
+            path = self.config.state_dir / SESSION_COOKIES_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cookies, encoding="utf-8")
+            path.chmod(0o600)
+            return True
+
+        return bot.request_session(self.config.base_url, try_cookies, self.config.telegram_wait)
 
     def _wait_logged_in(self, seconds: float) -> bool:
         deadline = time.monotonic() + seconds
