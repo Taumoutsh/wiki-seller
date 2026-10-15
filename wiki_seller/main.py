@@ -40,6 +40,8 @@ from .site import (
     SessionExpired,
     WikiMasters,
 )
+from .report import maybe_send_report, record_discard
+from .telegram import telegram_bot
 from .trace import install_api_trace
 from .unsold import UnsoldTracker
 from .verification import notify
@@ -167,6 +169,7 @@ def run_once(config: Config, dry_run: bool = False, debug: bool = False) -> RunR
         _buy(site, config, dry_run)
         result = _sell(site, config, safe_names, dry_run)
         check_discard(site, config, dry_run, debug)
+        _report(site, config, dry_run)
         return result
 
 
@@ -175,6 +178,24 @@ def run_snipe(config: Config, dry_run: bool = False, debug: bool = False) -> Non
     with open_site(config, debug) as site:
         run_bids(site, config, dry_run, snipe_only=True)
         check_discard(site, config, dry_run, debug)
+        _report(site, config, dry_run)
+
+
+def _report(site: WikiMasters, config: Config, dry_run: bool) -> None:
+    """Bilan Telegram toutes les REPORT_HOURS (au premier réveil après l'échéance)."""
+    if dry_run or not config.report_every:
+        return
+    bot = telegram_bot(config)
+    if bot is None:
+        return
+    try:
+        market = site.fetch_market_state()
+        my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
+        maybe_send_report(site, config, bot, market.history, my_id)
+    except SessionExpired:
+        raise
+    except Exception as exc:
+        log.warning("Bilan Telegram non envoyé : %s", str(exc).splitlines()[0])
 
 
 def market_adjuster(site: WikiMasters, config: Config, title: str, my_auction_ids: set[str]):
@@ -655,6 +676,8 @@ def _discard_round(config: Config, dry_run: bool, debug: bool, progress: Discard
                         break
                     progress.copies_done += 1
                     progress.done += 1
+                    if status is DiscardStatus.DISCARDED:
+                        record_discard(config)
                     progress.save(config)
                     log.info("Défausse : %s (%s, %s) : %s%s.", item.title, item.rarity or "?", price,
                              status.value, f" via {detail}" if detail else "")

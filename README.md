@@ -197,7 +197,8 @@ Si le journal indique « La session de SESSION_COOKIES est expirée », recommen
 ### Renouveler la session depuis Telegram
 
 Avec un bot Telegram, plus besoin d'aller sur le serveur : quand aucune session ne
-fonctionne plus, le bot vous envoie le lien du site et la marche à suivre, et il suffit
+fonctionne plus (ni celle de `state/`, ni `SESSION_COOKIES`, ni la connexion par
+`MAIL`/`PASSWORD`, en général bloquée par Cloudflare), le bot vous envoie le lien du site et la marche à suivre, et il suffit
 de lui **répondre avec la ligne copiée par le favori** (étape 2 ci-dessus).
 
 1. Dans Telegram, écrivez à **@BotFather** : `/newbot`, choisissez un nom ; il vous
@@ -214,6 +215,21 @@ message avant 3 h tant que vous n'avez pas répondu. La session reçue est gard�
 `state/session_cookies.txt` pour les redémarrages. Seuls les messages de
 `TELEGRAM_CHAT_ID` sont lus. Les cookies transitent par les serveurs de Telegram :
 gardez le bot pour vous seul.
+
+**Bilan toutes les 2 h** (`REPORT_HOURS`, `0` pour le couper) : le même bot vous envoie
+l'argent gagné depuis le bilan précédent et le solde du compte, par exemple :
+
+```
+📊 Bilan WikiMasters (14:00 → 16:02)
+💰 Ventes : 4 carte(s), +87
+🗑️ Défausses : 120 exemplaire(s), +120
+Total gagné : +207
+👛 Solde actuel : 1 234 wikibidous
+```
+
+Les ventes sont les prix finaux de vos enchères conclues (historique du site) ; chaque
+exemplaire défaussé rapporte 1 wikibidou. Le bilan part au premier réveil après
+l'échéance (pas en `--dry-run`) ; le compteur est gardé dans `state/report.json`.
 
 ## Utilisation
 
@@ -249,6 +265,7 @@ capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
 | `TELEGRAM_BOT_TOKEN` | *(vide)* | Jeton du bot Telegram qui demande une nouvelle session quand elle expire (voir « Renouveler la session depuis Telegram ») |
 | `TELEGRAM_CHAT_ID` | *(vide)* | Votre identifiant de conversation Telegram : seuls ses messages sont lus |
 | `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse avant de réessayer au réveil suivant |
+| `REPORT_HOURS` | `2` | Bilan Telegram (ventes, défausses, solde) toutes les N heures ; `0` = jamais |
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |

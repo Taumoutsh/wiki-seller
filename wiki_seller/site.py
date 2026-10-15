@@ -391,9 +391,11 @@ class WikiMasters:
             return
         if self.config.session_cookies and self.import_session_cookies(self.config.session_cookies):
             return
-        if self.session_from_telegram():
-            return
-        self.login()
+        try:
+            self.login()
+        except SiteError:  # vérification Cloudflare, identifiants refusés… : on demande par Telegram
+            if not self.session_from_telegram():
+                raise
 
     def import_session_cookies(self, text: str, source: str = "SESSION_COOKIES") -> bool:
         """Session copiée depuis un navigateur connecté (SESSION_COOKIES, ou reçue par le
@@ -541,6 +543,23 @@ class WikiMasters:
         if log_done:
             log.info("Collection chargée : %d entrée(s).", len(scan.entries))
         return True
+
+    def fetch_balance(self) -> int | None:
+        """Solde du compte en wikibidous (/api/wikibidous), ou None s'il est illisible."""
+        try:
+            status, data = self.api_get("/api/wikibidous")
+        except Exception:
+            return None
+        if not 200 <= status < 300:
+            return None
+        if isinstance(data, (int, float)) and not isinstance(data, bool):
+            return int(data)
+        if isinstance(data, dict):
+            for key in ("balance", "wikibidous", "amount", "total", "solde"):
+                value = data.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return int(value)
+        return None
 
     def fetch_mine(self) -> dict:
         """Onglets « Mes ventes » (selling), « Mes enchères » (bidding) et « Gagnées » (won)."""

@@ -695,3 +695,24 @@ def test_expired_session_is_renewed_through_telegram(tmp_path):
     assert site.url in tg.sent[0] and tg.sent[-1].startswith("✅") and len(tg.deleted) == 1
     saved = (config.state_dir / "session_cookies.txt").read_text(encoding="utf-8")
     assert "auth-token.0=base64-abc" in saved  # gardée pour les redémarrages
+
+
+def test_telegram_report_with_sales_discards_and_balance(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    now = datetime.now(timezone.utc)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES) as site, FakeTelegram() as tg:
+        site.selling = list(FULL_SLOTS)  # aucune vente pendant la passe
+        site.history = [{"id": "h1", "seller_id": ME, "status": "settled", "final_price": 40,
+                         "settled_at": (now - timedelta(hours=1)).isoformat(), "card": {"id": "A"}}]
+        config = make_config(tmp_path, site.url, [], telegram_token=TOKEN, telegram_chat_id=CHAT_ID,
+                             telegram_api_url=tg.url, report_every=timedelta(hours=2))
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        (config.state_dir / "report.json").write_text(json.dumps(
+            {"since": (now - timedelta(hours=2, minutes=5)).isoformat(), "discarded": 3}))
+        run_once(config)
+    assert len(tg.sent) == 1
+    assert "Ventes : 1 carte(s), +40" in tg.sent[0] and "Défausses : 3 exemplaire(s), +3" in tg.sent[0]
+    assert "Total gagné : +43" in tg.sent[0] and "Solde actuel : 100 wikibidous" in tg.sent[0]

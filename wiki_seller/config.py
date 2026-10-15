@@ -145,6 +145,8 @@ class Config:
     telegram_chat_id: str = ""
     telegram_wait: timedelta = timedelta(minutes=60)
     telegram_api_url: str = "https://api.telegram.org"
+    # Bilan Telegram (ventes, défausses, solde) tous les report_every ; None = jamais.
+    report_every: timedelta | None = None
     # Journal des appels à l'API du site dans state/api.log (--trace-api).
     api_trace: bool = False
     # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
@@ -249,6 +251,7 @@ def load_config() -> Config:
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         telegram_wait=timedelta(minutes=_positive_int("TELEGRAM_WAIT") or 60),
+        report_every=(timedelta(hours=hours) if (hours := _non_negative_int("REPORT_HOURS", 2)) else None),
         unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         price_cache_ttl=timedelta(hours=_positive_int("PRICE_CACHE_HOURS") or 24),
