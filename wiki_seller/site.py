@@ -782,6 +782,19 @@ class WikiMasters:
                 pass
             return DiscardStatus.FAILED, str(exc).splitlines()[0]
 
+    def discard_card_api(self, copy_id: str, dry_run: bool) -> tuple[DiscardStatus, str]:
+        """Défausse un exemplaire par l'API : la requête que la fiche envoie après la
+        confirmation « Défausser cette carte ? » (POST /api/user-cards/{id}/discard)."""
+        path = f"/api/user-cards/{copy_id}/discard"
+        if dry_run:
+            return DiscardStatus.DRY_RUN, ""
+        status, _, text = self.api_post(path)
+        if status == 401:
+            raise SessionExpired(f"{path} → HTTP {status}")
+        if 200 <= status < 300:
+            return DiscardStatus.DISCARDED, f"POST {path}"
+        return DiscardStatus.FAILED, f"POST {path} → HTTP {status} : {text[:200]}"
+
     def _confirm_discard(self, buttons_before: int) -> None:
         """Chaque défausse demande une confirmation (« Défausser cette carte ? ») : un
         second bouton « Défausser » apparaît dans une fenêtre, après celui de la fiche."""

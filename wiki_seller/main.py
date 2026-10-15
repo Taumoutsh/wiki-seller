@@ -645,7 +645,10 @@ def _discard_round(config: Config, dry_run: bool, debug: bool, progress: Discard
                 while progress.copies_done < item.copies:
                     if GATE.should_yield():
                         return False
-                    status, detail = site.discard_card(item.title, dry_run)
+                    if config.actions_via_api and progress.copies_done < len(item.copy_ids):
+                        status, detail = site.discard_card_api(item.copy_ids[progress.copies_done], dry_run)
+                    else:
+                        status, detail = site.discard_card(item.title, dry_run)
                     price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
                     if status is DiscardStatus.FAILED:
                         log.warning("Défausse : %s : %s (%s) ; carte suivante.", item.title, status.value, detail)

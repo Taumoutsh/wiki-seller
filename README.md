@@ -40,9 +40,11 @@ Au-delà de **`DISCARD_TRIGGER` (150)**, il défausse toutes les cartes qui vale
 de `DISCARD_BELOW` (15)** sur le marché, **au fil de l'eau** : il examine les cartes des
 plus communes aux plus rares (`C`, `PC`, `R`, `SR`, `UR`, `L`), lit le prix de chacune
 et la défausse aussitôt si elle vaut moins de 15, un exemplaire à la fois (le journal
-fait le point toutes les 100 cartes examinées). Il ouvre la carte depuis
-« Collection », clique sur **« Défausser »** dans sa fiche, puis valide la fenêtre
-« Défausser cette carte ? » (le site la montre à chaque fois ; la carte rapporte 1 wikibidou).
+fait le point toutes les 100 cartes examinées). Avec `ACTIONS_VIA=api` (par défaut), il
+envoie directement la requête de la fiche, `POST /api/user-cards/{exemplaire}/discard`,
+sans ouvrir de page (environ 1 s par exemplaire). Avec `ACTIONS_VIA=page`, il ouvre la
+carte depuis « Collection », clique sur **« Défausser »** dans sa fiche, puis valide la
+fenêtre « Défausser cette carte ? ». Chaque exemplaire défaussé rapporte 1 wikibidou.
 Si une défausse tourne déjà, aucune autre n'est lancée.
 
 - **Cartes défaussées :** prix moyen connu strictement inférieur à 15, ou aucune vente

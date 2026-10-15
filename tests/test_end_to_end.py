@@ -646,3 +646,29 @@ def test_each_card_is_discarded_as_soon_as_its_price_is_read(tmp_path):
     # Prix du « Caillou » (C), ses deux défausses aussitôt, avant de lire le prix suivant.
     assert site.events[:3] == [("prix", "A"), ("défausse", "Caillou"), ("défausse", "Caillou")]
     assert site.events.index(("défausse", "Caillou")) < site.events.index(("prix", "F"))
+
+
+def test_discard_through_api_skips_the_card_page(tmp_path, monkeypatch):
+    from wiki_seller.main import DISCARDER
+    from wiki_seller.site import WikiMasters
+
+    def no_page(*args, **kwargs):
+        raise AssertionError("défausse par la fiche au lieu de l'API")
+
+    monkeypatch.setattr(WikiMasters, "discard_card", no_page)
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, ["tour eiffel"], wanted=[{"name": "Victor Hugo", "max_price": 1}],
+                             discard_below=15, discard_trigger=7, actions_via_api=True)
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Presque"]
+
+
+def test_discard_through_api_dry_run_sends_nothing(tmp_path):
+    from wiki_seller.main import DISCARDER
+
+    with discard_site() as site:
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1, actions_via_api=True)
+        run_once(config, dry_run=True)
+        DISCARDER.join(120)
+    assert site.discarded == [] and len(site.collection) == len(DISCARD_COLLECTION)

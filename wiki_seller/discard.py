@@ -11,7 +11,7 @@ la place dès qu'une passe (ou une surenchère) attend."""
 
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .selection import CardGroup, count_listed, normalize_name
 
@@ -75,6 +75,7 @@ class DiscardItem:
     rarity: str | None
     average: float | None  # None : aucune vente connue (C/PC)
     copies: int
+    copy_ids: list[str] = field(default_factory=list)  # exemplaires à défausser par l'API
 
 
 # Ordre d'examen : les plus communes d'abord (les plus susceptibles de valoir peu).
@@ -85,13 +86,20 @@ def discard_candidates(groups: list[CardGroup], protected_names: set[str], selli
     """Cartes à examiner pour la défausse, les plus communes d'abord. Jamais les cartes
     protégées (`protected_names` : cartes à garder et cartes voulues), ni les
     exemplaires en vente. Le prix (`average`) est lu ensuite, carte par carte."""
+    listed_ids = set()
+    for auction in selling:
+        if isinstance(auction, dict):
+            card = auction.get("card") if isinstance(auction.get("card"), dict) else {}
+            listed_ids |= {str(auction.get("user_card_id") or ""), str(auction.get("card_id") or ""),
+                           str(card.get("id") or "")}
     items = []
     for group in groups:
         if normalize_name(group.title) in protected_names:
             continue
         copies = group.count - count_listed(group, selling)
         if copies > 0:
-            items.append(DiscardItem(group.card_id, group.title, group.rarity, None, copies))
+            copy_ids = [c for c in group.copy_ids if c not in listed_ids][:copies]
+            items.append(DiscardItem(group.card_id, group.title, group.rarity, None, copies, copy_ids))
     rank = {r: i for i, r in enumerate(RARITY_ORDER)}
     items.sort(key=lambda i: (rank.get(i.rarity or "", len(rank)), normalize_name(i.title)))
     return items

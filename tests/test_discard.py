@@ -168,3 +168,9 @@ def test_discard_restarts_sooner_when_prices_were_missing(tmp_path):
     assert DiscardWorker.recently_finished(config)  # tout lu : attente d'une heure
     progress.write_text(json.dumps({"finished_at": finished, "unpriced": 3}), encoding="utf-8")
     assert not DiscardWorker.recently_finished(config)  # prix manquants : relance après 15 min
+
+
+def test_candidates_carry_the_copy_ids_not_on_sale():
+    selling = [{"card_id": "g1", "status": "active"}]
+    cards = {i.title: i.copy_ids for i in discard_candidates(GROUPS, set(), selling)}
+    assert cards["Caillou"] == ["a1", "a2"] and cards["En vente"] == ["g2"]
