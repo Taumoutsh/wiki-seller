@@ -101,21 +101,6 @@ def test_next_wake(tmp_path):
     assert next_wake(next_pass, night, now) == (next_pass, False)
 
 
-def test_wanted_cards_file(tmp_path):
-    from wiki_seller.buying import WantedCardsError, load_wanted_cards
-
-    path = tmp_path / "wanted.json"
-    assert load_wanted_cards(path) == []
-    path.write_text('[{"name": " Tour Eiffel ", "max_price": 500}, {"name": "Pomme", "max_price": 5, "copies": 3}]')
-    assert [(c.name, c.max_price, c.copies, c.key) for c in load_wanted_cards(path)] == [
-        ("Tour Eiffel", 500, 1, "tour eiffel"), ("Pomme", 5, 3, "pomme")]
-    for bad in ('{"name": "x"}', '[{"name": "x", "max_price": "10"}]', '[{"max_price": 10}]', "[,",
-                '[{"name": "x", "max_price": 10, "copies": 0}]'):
-        path.write_text(bad)
-        with pytest.raises(WantedCardsError):
-            load_wanted_cards(path)
-
-
 def test_search_queries_drop_parentheses_then_punctuation():
     from wiki_seller.site import search_queries
 

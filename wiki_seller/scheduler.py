@@ -7,11 +7,11 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from .buying import WantedCardsError, WantedState, my_user_id, run_bids
+from .buying import WantedState, my_user_id, run_bids
 from .config import Config, ConfigError
 from .discard import check_discard
+from .lists import ListError, safe_names
 from .report import send_report
-from .selection import SafeCardsError, load_safe_cards
 from .selling import RunResult, sell
 from .session import open_site
 from .site import SessionExpired, WikiMasters
@@ -30,12 +30,12 @@ REPORT_REQUEST = threading.Event()
 
 
 def run_once(config: Config, dry_run: bool = False, debug: bool = False) -> RunResult:
-    safe_names = load_safe_cards(config.safe_cards_file)
-    log.info("%d carte(s) protégée(s) dans %s.", len(safe_names), config.safe_cards_file)
+    protected = safe_names(config)  # liste absente ou illisible : rien n'est vendu
+    log.info("%d carte(s) protégée(s).", len(protected))
     with open_site(config, debug) as site:
         site.refresh_market()
         _buy(site, config, dry_run)
-        result = sell(site, config, safe_names, dry_run)
+        result = sell(site, config, safe_names(config), dry_run)  # /safe pendant les achats
         check_discard(config, dry_run, debug)
         _report(site, config, dry_run)
         return result
@@ -54,7 +54,7 @@ def _buy(site: WikiMasters, config: Config, dry_run: bool) -> None:
         run_bids(site, config, dry_run)
     except SessionExpired:
         raise
-    except WantedCardsError as exc:
+    except ListError as exc:
         log.error("Achats ignorés : %s", exc)
     except Exception as exc:  # les ventes passent quand même
         log.warning("Achats interrompus : %s", str(exc).splitlines()[0])
@@ -140,14 +140,22 @@ def loop(config: Config, dry_run: bool, debug: bool) -> None:
     bot = telegram_bot(config)
     if bot is not None:
         CommandListener(bot, REPORT_REQUEST.set, config).start()
+    list_error = None
     while True:
         try:
             if snipe:
                 run_snipe(config, dry_run=dry_run, debug=debug)
             else:
                 next_pass = next_run_at(run_once(config, dry_run=dry_run, debug=debug), config, now_utc())
-        except (SafeCardsError, ConfigError):
+            list_error = None
+        except ConfigError:
             raise
+        except ListError as exc:  # le bot reste à l'écoute : /safe corrige la liste
+            log.error("%s Nouvel essai dans 10 minutes.", exc)
+            if bot is not None and str(exc) != list_error:
+                bot.send(f"❌ Passe impossible : {exc}")
+            list_error = str(exc)
+            next_pass = now_utc() + RETRY_AFTER_ERROR
         except SessionExpired as exc:
             log.warning("Session expirée (%s) : nouvelle connexion à la prochaine passe.", exc)
             config.storage_state_file.unlink(missing_ok=True)

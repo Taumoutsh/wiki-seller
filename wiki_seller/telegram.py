@@ -13,6 +13,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .commands import HELP_TEXT, LIST_COMMANDS, run_list_command
 from .state import read_json, write_json
 
 log = logging.getLogger("wiki_seller")
@@ -180,10 +181,6 @@ class TelegramBot:
         return False
 
 
-HELP_TEXT = ("Commandes :\n"
-             "/update : bilan maintenant (ventes, défausses, solde)\n"
-             "/safe <carte> : protéger une carte (jamais vendue ni défaussée)\n"
-             "/want <carte> <prix max> [exemplaires] : acheter une carte")
 REPORT_COMMANDS = ("/update", "/bilan")
 
 
@@ -223,29 +220,10 @@ class CommandListener:
                 elif command in REPORT_COMMANDS:
                     self.bot.send("⏳ Bilan en préparation…")
                     self.on_report()
-                elif command in ("/safe", "/want") and self.config is not None:
-                    self.bot.send(self._edit_list(command, text.strip().partition(" ")[2]))
+                elif command in LIST_COMMANDS and self.config is not None:
+                    self.bot.send(run_list_command(self.config, command, text.strip().partition(" ")[2]))
                 else:
                     self.bot.send(HELP_TEXT)
-
-    def _edit_list(self, command: str, args: str) -> str:
-        """/safe <carte> et /want <carte> <prix max> [exemplaires] : réponse à envoyer."""
-        from .buying import WantedCardsError
-        from .lists import add_safe_card, parse_want, set_wanted_card
-        from .selection import SafeCardsError
-
-        try:
-            if command == "/safe":
-                added, total = add_safe_card(self.config.safe_cards_file, args)
-                name = " ".join(args.split())
-                return (f"🛡️ « {name} » protégée : jamais défaussée, et toujours un exemplaire gardé "
-                        f"({total} carte(s) protégée(s))." if added else f"« {name} » est déjà protégée.")
-            name, price, copies = parse_want(args)
-            status, entry = set_wanted_card(self.config.wanted_cards_file, name, price, copies)
-            detail = f"{entry['max_price']} max, {entry.get('copies', 1)} exemplaire(s)"
-            return f"🛒 « {entry['name']} » {status} dans les achats ({detail}) : prise en compte à la prochaine passe."
-        except (SafeCardsError, WantedCardsError, OSError) as exc:
-            return f"❌ {exc}"
 
     def _cookies(self, message: dict) -> None:
         """Cookies reçus pendant l'écoute : pour la demande de session en cours, sinon
@@ -266,3 +244,10 @@ def telegram_bot(config) -> TelegramBot | None:
         return None
     return TelegramBot(config.telegram_token, config.telegram_chat_id, config.state_dir / "telegram.json",
                        config.telegram_api_url)
+
+
+def notify(config, text: str) -> None:
+    """Message dans la conversation du bot (achat obtenu, vente conclue…), s'il est configuré."""
+    bot = telegram_bot(config)
+    if bot is not None:
+        bot.send(text)

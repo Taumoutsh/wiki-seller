@@ -11,8 +11,10 @@ services:
     # Chromium utilise /dev/shm ; les 64 Mo par défaut de Docker le font planter.
     shm_size: 512m
     volumes:
-      # Cartes protégées et cartes à acheter, modifiables à la main ou par le bot Telegram
-      # (/safe, /want), sans reconstruire l'image (relues à chaque passe).
+      # Fichiers d'état, dont les listes de cartes (state/safe_cards.json, buy_cards.json,
+      # sell_cards.json) modifiées par le bot Telegram (/safe, /buy, /sell, /list…).
+      - ./state:/app/state
+      # Anciennes listes, reprises une fois dans state/ au premier démarrage : ces deux
+      # lignes (et les fichiers) seront à supprimer à la prochaine mise à jour.
       - ./safed_cards.json:/app/safed_cards.json
       - ./wanted_cards.json:/app/wanted_cards.json
-      - ./state:/app/state

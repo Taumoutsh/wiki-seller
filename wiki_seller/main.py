@@ -8,9 +8,10 @@ from logging.handlers import RotatingFileHandler
 
 from .config import OBSOLETE_SETTINGS, Config, ConfigError, load_config, obsolete_settings
 from .discard import DISCARDER
+from .lists import ListError, buy_cards, legacy_files, safe_titles
 from .scheduler import loop, run_once
-from .selection import SafeCardsError
 from .site import SessionExpired
+from .telegram import notify
 
 log = logging.getLogger("wiki_seller")
 
@@ -28,9 +29,9 @@ def setup_logging(config: Config) -> None:
 
 
 def log_startup(config: Config, dry_run: bool) -> None:
-    log.info("Démarrage%s : raretés %s, enchères « %s », passe toutes les %s, achats %s, défausse %s.",
+    log.info("Démarrage%s : raretés %s, enchères « %s », passe toutes les %s, défausse %s.",
              " (simulation)" if dry_run else "", ",".join(config.sell_rarities) or "toutes",
-             config.auction_duration_label, config.pass_interval, config.wanted_cards_file,
+             config.auction_duration_label, config.pass_interval,
              f"des cartes à moins de {config.discard_below} au-delà de {config.discard_trigger} exemplaires"
              if config.discard_below else "désactivée")
     for name in obsolete_settings():
@@ -39,6 +40,26 @@ def log_startup(config: Config, dry_run: bool) -> None:
         log.warning("TELEGRAM_BOT_TOKEN sans TELEGRAM_CHAT_ID : bot Telegram désactivé (voir le README).")
     elif config.telegram_token:
         log.info("Bot Telegram actif : il demandera une nouvelle session si elle expire.")
+    remind_legacy_files(config, dry_run)
+
+
+def remind_legacy_files(config: Config, dry_run: bool) -> None:
+    """Les listes sont dans state/ : les anciens safed_cards.json et wanted_cards.json y
+    sont repris au premier démarrage, puis ne servent plus. Rappel de les supprimer."""
+    try:
+        safe_titles(config)  # reprise des anciens fichiers
+        buy_cards(config)
+    except ListError:
+        pass  # signalé par la passe
+    legacy = legacy_files(config)
+    if not legacy:
+        return
+    names = " et ".join(p.name for p in legacy)
+    text = (f"🧹 {names} : repris dans state/ et modifiés désormais par le bot (/list). Ces anciens fichiers "
+            "ne servent plus : à supprimer, avec leurs lignes dans docker-compose.yml, à la prochaine mise à jour.")
+    log.warning("%s", text)
+    if not dry_run:
+        notify(config, text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             run_once(config, dry_run=args.dry_run, debug=args.debug)
             DISCARDER.join()  # une passe unique attend la fin de la défausse lancée
-    except SafeCardsError as exc:
+    except ListError as exc:
         log.error("%s", exc)
         return 2
     except SessionExpired as exc:

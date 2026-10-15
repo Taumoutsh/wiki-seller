@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SITE_TIMEZONE = "Europe/Paris"
-# safed_cards.json et wanted_cards.json : modifiés par le bot Telegram, lus par les passes.
+# Listes de cartes (lists.py) : modifiées par le bot Telegram, lues par les passes.
 LISTS_LOCK = threading.RLock()
 
 

@@ -7,11 +7,12 @@ bot Telegram pour la session et les bilans.
 À chaque passe, le script :
 
 1. se connecte (voir « Connexion ») ;
-2. mise sur les cartes de `wanted_cards.json` (voir « Achats ») ;
-3. met en vente, s'il reste de la place (le site autorise 5 enchères à la fois), les
+2. mise sur les cartes à acheter (`/buy`, voir « Achats ») ;
+3. met en vente, s'il reste de la place (le site autorise 5 enchères à la fois),
+   **d'abord les cartes demandées** (`/sell`, voir « Ventes à prix exact »), puis les
    cartes des raretés `SELL_RARITIES` (par défaut légendaires `L` et super rares `SR`),
-   **de la plus chère à la moins chère**, sauf celles de `safed_cards.json` (pour une
-   carte protégée, un exemplaire est conservé et les doublons sont vendus). Mise de
+   **de la plus chère à la moins chère**, sauf les cartes protégées (`/safe` : un
+   exemplaire est conservé et les doublons sont vendus). Mise de
    départ : **70 % du prix moyen du marché**, arrondie à l'entier inférieur et ajustée
    d'après les enchères en cours de la même carte (`MARKET_ADJUST`), pour **1 h**. Une
    carte sans prix moyen est ignorée ; une carte dont le prix n'a pas pu être lu
@@ -39,8 +40,8 @@ la **défausse aussitôt** si elle vaut moins de **`DISCARD_BELOW` (15)**, un ex
 
 - **Défaussées :** prix moyen strictement inférieur à 15, ou aucune vente connue pour
   une commune (`C`) ou peu commune (`PC`). Tous les exemplaires, y compris le dernier.
-- **Jamais défaussées :** les cartes de `safed_cards.json` et de `wanted_cards.json`,
-  les exemplaires en vente ou en échange, les cartes rares sans vente connue, et celles
+- **Jamais défaussées :** les cartes protégées, à acheter et à vendre (voir « Listes de
+  cartes »), les exemplaires en vente ou en échange, les cartes rares sans vente connue, et celles
   dont le prix n'a pas pu être lu (redemandées la fois suivante).
 - **Une session à la fois :** la défausse et les passes partagent la session du site ;
   un seul navigateur est ouvert à la fois. Quand une passe se réveille, la défausse lui
@@ -61,21 +62,33 @@ vente et la défausse. Un refus passager du site (trop de requêtes, panne) ne f
 laisser de côté que la carte concernée, après 30 s de pause ; l'API n'est abandonnée
 qu'après 5 refus de suite, ou dès un accès interdit.
 
-## Achats (wanted_cards.json)
+## Listes de cartes
 
-```json
-[
-  {"name": "Tour Eiffel", "max_price": 500},
-  {"name": "Victor Hugo", "max_price": 120, "copies": 2}
-]
-```
+Trois listes, dans `state/`, modifiées par le bot Telegram (voir « Commandes ») et
+relues à chaque passe :
 
-`copies` (facultatif, 1 par défaut) est le nombre d'exemplaires à acheter, l'un après
-l'autre. Pour chaque carte :
+| Fichier | Commandes | Contenu |
+|---|---|---|
+| `state/safe_cards.json` | `/safe`, `/unsafe` | Cartes protégées : jamais défaussées, un exemplaire toujours gardé |
+| `state/buy_cards.json` | `/buy`, `/buyandsell`, `/unbuy` | Cartes à acheter, avec leur prix maximum |
+| `state/sell_cards.json` | `/sell`, `/unsell` | Cartes à vendre à un prix exact |
+
+`/list` les affiche. Les noms sont comparés sans majuscules, accents ni espaces en trop.
+Sans liste de cartes protégées, aucune passe ne tourne (le script vendrait tout) :
+envoyez `/safe <carte>`, ou écrivez `[]` dans `state/safe_cards.json` pour tout vendre.
+
+Au premier démarrage, les anciens `safed_cards.json` et `wanted_cards.json` sont repris
+dans `state/` ; ils ne servent plus ensuite (le journal et le bot le rappellent) et
+seront retirés de `docker-compose.yml` à la prochaine mise à jour.
+
+## Achats
+
+`/buy Tour Eiffel 500` : achète la carte à 500 au plus ; `/buy Victor Hugo 120 x2` pour
+2 exemplaires, l'un après l'autre. Pour chaque carte :
 
 - si vous avez déjà une enchère sur cette carte dans « Mes enchères », elle est reprise ;
 - sinon, le script cherche la carte dans le Marché et choisit l'enchère la moins chère
-  dont la mise minimale ne dépasse pas `max_price` ;
+  dont la mise minimale ne dépasse pas le prix maximum ;
 - il mise la mise minimale (lue sur la page de l'enchère), jamais directement votre
   maximum ;
 - s'il est dépassé, il **ne surenchérit pas tout de suite** : si la nouvelle mise
@@ -85,25 +98,30 @@ l'autre. Pour chaque carte :
   seconde** et, si vous n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (5)
   de la fin**, dans la limite ; une mise des 10 dernières secondes prolonge l'enchère
   de 60 s : la surveillance continue jusqu'à la vraie fin ;
-- **une seule enchère à la fois par carte** ; une fois `copies` exemplaires obtenus,
-  la carte n'est plus recherchée.
+- **une seule enchère à la fois par carte**.
 
-Le suivi est dans `state/wanted_state.json` ; `wanted_cards.json` n'est jamais modifié.
-Pour racheter une carte déjà obtenue, supprimez sa ligne de `state/wanted_state.json`.
+Chaque exemplaire obtenu est annoncé par le bot (« 🛒 Obtenue : Tour Eiffel pour 480 »).
+Une fois tous les exemplaires obtenus, la carte **quitte la liste d'achat et devient
+protégée**. Avec `/buyandsell Tour Eiffel 500 800`, elle part à la place dans les
+ventes à 800 (voir ci-dessous). Le suivi des enchères est dans `state/wanted_state.json`.
 `MAX_TOTAL_BIDS` limite la somme des mises en cours.
 
-## safed_cards.json
+## Ventes à prix exact
 
-Une liste JSON des noms de cartes à ne pas vendre ni défausser, tels qu'affichés sur le
-site :
+`/sell Tour Eiffel 800` met la carte en vente **à 800 exactement** (ni `PRICE_RATIO`, ni
+ajustement au marché), quelle que soit sa rareté, pour la durée habituelle (nuit
+comprise) ; `/sell Victor Hugo 120 x2` pour 2 exemplaires.
 
-```json
-["Tour Eiffel", "Victor Hugo"]
-```
-
-La comparaison ignore les majuscules, les accents et les espaces en trop. Le fichier est
-relu à chaque passe. S'il est absent, le script refuse de tourner ; une liste vide `[]`
-vend tout.
+- Ces cartes passent **en priorité** dans les places libres, dès la passe suivante ; les
+  enchères en cours ne sont pas annulées.
+- Une enchère terminée sans acheteur est **relancée au même prix** à chaque passe,
+  jusqu'à la vente (la mise de côté des invendues ne s'applique pas).
+- Chaque vente est annoncée (« 💰 Vendue : Tour Eiffel à 800 ») ; une fois tous les
+  exemplaires vendus, la carte quitte la liste.
+- **Carte protégée :** en un seul exemplaire, elle n'est plus protégée et part ; en
+  plusieurs, elle reste protégée et le dernier exemplaire est gardé.
+- Une carte absente de la collection est signalée une fois et reste dans la liste
+  (`/unsell` pour l'annuler). Ces cartes ne sont jamais défaussées.
 
 ## Connexion
 
@@ -167,11 +185,16 @@ wikibidou par exemplaire (compteur dans `state/report.json`). Pas de bilan en `-
 | Commande | Effet |
 |---|---|
 | `/update` (ou `/bilan`) | Bilan immédiat depuis le dernier bilan automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il part juste après |
-| `/safe Tour Eiffel` | Ajoute la carte à `safed_cards.json` : jamais défaussée, et toujours un exemplaire gardé. Une défausse en cours la respecte aussitôt |
-| `/want Tour Eiffel 500` | Ajoute la carte à `wanted_cards.json` avec son prix maximum, ou met à jour ce prix si elle y est déjà ; `/want Victor Hugo 120 x2` pour 2 exemplaires. Le dernier nombre est toujours le prix : `/want Apollo 11 500` vise « Apollo 11 » à 500 au plus. Prise en compte à la prochaine passe |
+| `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
+| `/safe Tour Eiffel` · `/unsafe Tour Eiffel` | Protège la carte (jamais défaussée, toujours un exemplaire gardé), ou la retire des protégées. Une défausse en cours la respecte aussitôt |
+| `/buy Tour Eiffel 500` · `/unbuy Tour Eiffel` | Achète la carte à 500 au plus (ou met ce prix à jour) ; `x2` pour 2 exemplaires. Protégée une fois obtenue |
+| `/sell Tour Eiffel 800` · `/unsell Tour Eiffel` | Vend la carte à 800 exactement, en priorité, jusqu'à la vente ; `x2` pour 2 exemplaires |
+| `/buyandsell Tour Eiffel 500 800` | Achète la carte à 500 au plus, puis la revend à 800 ; `x2` pour 2 exemplaires |
 
-Les noms sont comparés sans majuscules, accents ni espaces en trop : écrivez-les comme
-sur le site. Tout autre message reçoit la liste des commandes.
+Les derniers nombres sont toujours les prix : `/buy Apollo 11 500` vise « Apollo 11 »
+à 500 au plus. Les modifications comptent dès la passe suivante. `/want` est l'ancien
+nom de `/buy`, encore accepté pour l'instant. Tout autre message reçoit la liste des
+commandes.
 
 ## Utilisation
 
@@ -201,13 +224,12 @@ chaque étape dans `state/debug/`. Le journal est dans `state/seller.log`.
 | `PRICE_CACHE_HOURS` | `24` | Validité d'un prix moyen en cache |
 | `DISCARD_BELOW` | `15` | Défausse des cartes valant moins que ce prix moyen ; `0` = désactivée |
 | `DISCARD_TRIGGER` | `150` | Exemplaires dans la collection au-delà desquels la défausse est lancée |
-| `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
 | `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(vide)* | Bot Telegram (voir « Bot Telegram ») |
 | `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse quand la session a expiré |
 | `REPORT_HOURS` | `2` | Bilan Telegram toutes les N heures ; `0` = jamais |
-| `SAFE_CARDS_FILE` / `STATE_DIR` | `safed_cards.json` / `state` | Emplacements des fichiers |
+| `STATE_DIR` | `state` | Dossier des fichiers d'état et des listes de cartes |
 | `BASE_URL` | `https://www.wiki-masters.com` | Adresse du site |
 | `HEADLESS` / `CHROMIUM_EXECUTABLE` | `true` / *(vide)* | Navigateur visible, Chromium déjà installé |
 | `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
@@ -218,18 +240,14 @@ Les anciennes options `ACTIONS_VIA`, `OPEN_PACKS_HOURS`, `PACKS_VERIFY_WAIT`,
 ## Docker (serveur)
 
 ```bash
-cp safed_cards.example.json safed_cards.json      # à remplir
-cp wanted_cards.example.json wanted_cards.json    # ou echo '[]' > wanted_cards.json
 # créer .env avec au moins MAIL et PASSWORD
 mkdir -p state
 docker compose up -d --build
 docker compose logs -f
 ```
 
-Créez `safed_cards.json` et `wanted_cards.json` **avant** le premier `up`, sinon Docker
-crée des dossiers à leur place. Le conteneur tourne en `--loop` et redémarre tout seul.
-Ces deux fichiers sont montés depuis le serveur, modifiables à la main ou par le bot
-(`/safe`, `/want`), et relus à chaque passe. Le `.env` n'est
+Le conteneur tourne en `--loop` et redémarre tout seul. Les listes de cartes se gèrent
+ensuite avec le bot (`/safe`, `/buy`, `/sell`…). Le `.env` n'est
 lu qu'à la création du conteneur : après l'avoir modifié, lancez `docker compose up -d`
 (et non `restart`). Session, caches et suivis sont conservés dans `state/`.
 
@@ -241,8 +259,9 @@ lu qu'à la création du conteneur : après l'avoir modifié, lancez `docker com
 | `scheduler.py` | Passes, boucle, réveils (surenchères, `/update`) |
 | `session.py` | Un seul navigateur à la fois, connexion |
 | `site.py` | Client de l'API du site |
-| `selling.py` | Passe de vente |
+| `selling.py` | Passe de vente (ventes demandées, puis plan de vente) |
 | `buying.py` | Achats et surenchères |
+| `lists.py` / `commands.py` | Listes de cartes (`state/`) et commandes du bot qui les modifient |
 | `discard.py` | Défausse en arrière-plan |
 | `pricing.py` | Prix moyens et leur cache |
 | `selection.py` | Logique pure : collection, plan de vente, ajustement au marché |

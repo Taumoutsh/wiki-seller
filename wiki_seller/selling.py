@@ -1,6 +1,9 @@
-"""Passe de vente : les cartes des raretés SELL_RARITIES, de la plus chère à la moins
-chère, dans les places libres aux enchères (5 à la fois sur le site)."""
+"""Passe de vente, dans les places libres aux enchères (5 à la fois sur le site) :
+d'abord les cartes demandées (/sell, /buyandsell) au prix exact, remises en vente jusqu'à
+ce qu'elles partent ; puis les cartes des raretés SELL_RARITIES, de la plus chère à la
+moins chère, à PRICE_RATIO du prix moyen."""
 
+import dataclasses
 import logging
 import random
 import time
@@ -9,19 +12,25 @@ from datetime import datetime
 
 from .buying import WantedState, auction_title, my_user_id
 from .config import Config
+from .lists import ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
 from .pricing import fetch_averages
 from .selection import (
+    PROTECTED_COPIES_TO_KEEP,
+    CardGroup,
     SaleItem,
     adjust_to_market,
     build_sale_plan,
     competitor_price,
     copies_available,
+    copies_not_on_sale,
+    count_listed,
     normalize_name,
     parse_collection,
 )
-from .site import ListingResult, ListingStatus, SessionExpired, WikiMasters
-from .state import now_utc, paris_now, write_json
-from .unsold import UnsoldTracker
+from .site import ListingResult, ListingStatus, SessionExpired, WikiMasters, entry_rarity
+from .state import now_utc, paris_now, parse_time, write_json
+from .telegram import notify
+from .unsold import UnsoldTracker, auction_outcome
 
 log = logging.getLogger(__name__)
 
@@ -79,24 +88,220 @@ def list_item(site: WikiMasters, config: Config, item: SaleItem, dry_run: bool, 
     d'exemplaire (le premier vient d'être mis en vente)."""
     k = copy_index % len(item.copy_ids) if item.copy_ids else 0
     copies = item.copy_ids[k:] + item.copy_ids[:k]
+    if item.exact:
+        return site.list_card(item.card_id, copies, item.title, None, dry_run, None, sale_duration(config),
+                              price=item.price)
     return site.list_card(item.card_id, copies, item.title, item.average, dry_run,
                           market_adjuster(site, config, item.title, my_auction_ids), sale_duration(config))
 
 
+class _Listings:
+    """Mises en vente de la passe, dans la limite des places libres."""
+
+    def __init__(self, site: WikiMasters, config: Config, dry_run: bool, free: int, my_ids: set[str]):
+        self.site, self.config, self.dry_run, self.free, self.my_ids = site, config, dry_run, free, my_ids
+        self.listed, self.last_listing_at, self.slots_full = 0, None, False
+
+    @property
+    def room(self) -> bool:
+        return self.listed < self.free and not self.slots_full
+
+    def list(self, item: SaleItem, copy_index: int) -> bool:
+        """Met en vente un exemplaire ; False s'il faut passer à la carte suivante."""
+        result = list_item(self.site, self.config, item, self.dry_run, copy_index, self.my_ids)
+        if result.status is ListingStatus.FAILED:  # souvent passager
+            log.info("%s : échec (%s), nouvel essai.", item.title, result.detail)
+            time.sleep(RETRY_LISTING_AFTER)
+            result = list_item(self.site, self.config, item, self.dry_run, copy_index, self.my_ids)
+        if result.status in (ListingStatus.LISTED, ListingStatus.DRY_RUN):
+            self.listed += 1
+            if result.status is ListingStatus.LISTED:
+                self.last_listing_at = now_utc()
+            if item.exact:
+                log.info("%s : %s à %d (prix demandé).", result.status.value.capitalize(), item.title, result.price)
+            else:
+                log.info("%s : %s à %d (prix moyen %g, %d%%).", result.status.value.capitalize(),
+                         item.title, result.price, result.average, round(self.config.price_ratio * 100))
+            time.sleep(random.uniform(*LISTING_PAUSE))
+            return True
+        if result.status is ListingStatus.SLOTS_FULL:
+            log.info("Le site indique que les enchères sont pleines (%s).", result.detail)
+            self.slots_full = True
+        else:
+            log.warning("%s : %s%s", item.title, result.status.value, f" ({result.detail})" if result.detail else "")
+        return False
+
+
+# ─────────────────────────── Ventes à prix exact (/sell) ───────────────────────────
+
+
+def priority_cards(config: Config) -> list[SellCard]:
+    try:
+        return sell_cards(config)
+    except ListError as exc:
+        log.error("Ventes demandées ignorées : %s", exc)
+        return []
+
+
+def record_sales(config: Config, cards: list[SellCard], history: list, my_id: str | None,
+                 dry_run: bool) -> None:
+    """Ventes conclues des cartes à vendre (historique du site) : notées et annoncées ; la
+    carte quitte la liste une fois tous ses exemplaires vendus. Seules comptent les ventes
+    conclues après la demande."""
+    for card in cards:
+        added = parse_time(card.added_at)
+        sold = set(card.sold)
+        for auction in sorted((a for a in history or [] if isinstance(a, dict)),
+                              key=lambda a: a.get("settled_at") or a.get("end_at") or ""):
+            settled = parse_time(auction.get("settled_at") or auction.get("end_at"))
+            if (auction.get("id") in sold or auction_outcome(auction) != "sold"
+                    or (my_id and auction.get("seller_id") != my_id)
+                    or normalize_name(auction_title(auction)) != card.key
+                    or (added and (not settled or settled < added))):
+                continue
+            sold.add(auction["id"])
+            price = auction.get("final_price")
+            if dry_run:
+                log.info("Simulation : vente de « %s » à %s (non notée).", card.name, price)
+                continue
+            updated = record_sale(config, card.name, auction["id"])
+            left = updated.remaining if updated else 0
+            log.info("Vente demandée conclue : « %s » à %s%s.", card.name, price,
+                     f" ; encore {left} exemplaire(s) à vendre" if left > 0 else " ; retirée de la liste")
+            notify(config, f"💰 Vendue : {card.name} à {price}"
+                           + (f" (encore {left} à vendre)" if left > 0 else ""))
+            if left <= 0:
+                break
+
+
+def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup], selling: list[dict],
+                   safe_names: set[str], dry_run: bool) -> list[SaleItem]:
+    """Exemplaires des cartes à vendre à mettre en vente, au prix demandé. Une carte
+    protégée en un seul exemplaire quitte les cartes protégées ; en plusieurs, elle le
+    reste et le dernier exemplaire est gardé. Une carte absente de la collection est
+    signalée une fois et reste dans la liste."""
+    items = []
+    for card in cards:
+        if card.remaining <= 0:
+            continue
+        matching = [g for g in groups if normalize_name(g.title) == card.key]
+        owned = sum(g.count for g in matching)
+        if not owned:
+            log.info("Vente demandée : « %s » introuvable dans la collection.", card.name)
+            if not card.missing_notified and not dry_run:
+                update_sell(config, card.name, missing_notified=True)
+                notify(config, f"❓ « {card.name} » est introuvable dans votre collection : elle reste dans "
+                               "les ventes et partira dès qu'elle y sera (/unsell pour l'annuler).")
+            continue
+        if not dry_run and (card.missing_notified or card.name != matching[0].title):
+            update_sell(config, card.name, missing_notified=False, name=matching[0].title)  # nom exact
+        card = dataclasses.replace(card, name=matching[0].title)
+        keep_one = card.keep_one
+        if keep_one is None:  # première fois que la carte est trouvée
+            keep_one = card.key in safe_names and owned > 1
+            card = _settle_protection(config, card, keep_one, owned, safe_names, dry_run)
+        listed = sum(count_listed(g, selling) for g in matching)
+        keep = PROTECTED_COPIES_TO_KEEP if keep_one and card.key in safe_names else 0  # /unsafe : tout part
+        count = min(card.remaining - listed, owned - listed - keep)
+        if count <= 0:
+            log.info("Vente demandée : « %s » — %d exemplaire(s) déjà en vente.", card.name, listed)
+            continue
+        copy_ids = tuple(c for g in matching for c in copies_not_on_sale(g, selling))
+        items.append(SaleItem(matching[0].card_id, matching[0].title, matching[0].rarity, 0, card.price,
+                              count, copy_ids, exact=True))
+    return items
+
+
+def _settle_protection(config: Config, card: SellCard, keep_one: bool, owned: int, safe_names: set[str],
+                       dry_run: bool) -> SellCard:
+    """Carte protégée mise en vente : décidé une fois pour toutes, à la première passe
+    qui la trouve (sinon, une fois les doublons vendus, le dernier exemplaire partirait)."""
+    copies = card.copies
+    if keep_one and card.remaining > owned - PROTECTED_COPIES_TO_KEEP:
+        copies = len(card.sold) + owned - PROTECTED_COPIES_TO_KEEP
+        message = (f"🛡️ « {card.name} » est protégée : le dernier exemplaire est gardé, "
+                   f"{owned - PROTECTED_COPIES_TO_KEEP} exemplaire(s) mis en vente.")
+        log.info("Vente demandée : %s", message)
+        if not dry_run:
+            notify(config, message)
+    elif card.key in safe_names and not keep_one:
+        log.info("Vente demandée : « %s » (un seul exemplaire) n'est plus protégée.", card.name)
+        if not dry_run:
+            remove_safe(config, card.name)
+            notify(config, f"🛡️ « {card.name} » (un seul exemplaire) n'est plus protégée : elle est mise en vente.")
+    if not dry_run:
+        update_sell(config, card.name, keep_one=keep_one, copies=copies)
+    return dataclasses.replace(card, keep_one=keep_one, copies=copies)
+
+
+# ─────────────────────────── Passe ───────────────────────────
+
+
 def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool) -> RunResult:
     market = site.fetch_market_state()
+    my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
+    priority = priority_cards(config)
+    if priority:
+        record_sales(config, priority, market.history, my_id, dry_run)
+        priority = [c for c in priority_cards(config) if c.remaining > 0]
     log.info("Enchères en cours : %d/%d.", len(market.selling), market.max_auctions)
     if market.free_slots == 0:
         log.info("Aucune place libre aux enchères : rien à faire pour l'instant.")
         return RunResult(0, None, True, market.earliest_end())
 
-    entries, in_trade = site.fetch_collection(config.sell_rarities)
-    groups = parse_collection(entries, excluded_copy_ids=in_trade)
+    # Les cartes à vendre (/sell) sont de toutes raretés : la collection est alors lue en entier.
+    entries, in_trade = site.fetch_collection(() if priority else config.sell_rarities)
+    my_ids = {a.get("id") for a in market.selling if isinstance(a, dict)}
+    listings = _Listings(site, config, dry_run, market.free_slots, my_ids)
+    if priority:
+        groups = parse_collection(entries, excluded_copy_ids=in_trade)
+        items = priority_items(config, priority, groups, market.selling, safe_names, dry_run)
+        if items:
+            log.info("Ventes demandées : %s", ", ".join(f"{i.title} ×{i.copies_to_sell} à {i.price}" for i in items))
+        _list_all(listings, items)
+        if config.sell_rarities:
+            entries = [e for e in entries if entry_rarity(e) in config.sell_rarities]
+    priority_keys = {c.key for c in priority}
+    groups = [g for g in parse_collection(entries, excluded_copy_ids=in_trade)
+              if normalize_name(g.title) not in priority_keys]
+    if listings.room:
+        _sell_plan(site, config, listings, groups, safe_names, market, my_id)
+    else:
+        log.info("Plus de place libre après les ventes demandées.")
+
+    if listings.last_listing_at:
+        write_json(config.run_state_file, {"last_listing_at": listings.last_listing_at.isoformat()})
+    log.info("Passe terminée : %d carte(s) %s.", listings.listed, "simulée(s)" if dry_run else "mise(s) en vente")
+    full = listings.slots_full or listings.listed >= listings.free
+    earliest = None
+    if full:
+        try:
+            earliest = site.fetch_market_state().earliest_end()
+        except Exception:
+            pass
+    elif not listings.listed:
+        earliest = market.earliest_end()
+    return RunResult(listings.listed, listings.last_listing_at, full, earliest)
+
+
+def _list_all(listings: _Listings, items: list[SaleItem]) -> None:
+    for item in items:
+        if not listings.room:
+            return
+        for copy_index in range(item.copies_to_sell):
+            if not listings.room or not listings.list(item, copy_index):
+                break
+
+
+def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: list[CardGroup],
+               safe_names: set[str], market, my_id: str | None) -> None:
+    """Ventes habituelles (SELL_RARITIES) : PRICE_RATIO du prix moyen, des plus chères
+    aux moins chères, dans les places restantes."""
     sellable = [g for g in groups if copies_available(g, safe_names, market.selling) > 0]
 
     # Cartes qui ne se vendent pas : mises de côté quelques jours (state/unsold.json).
     unsold = UnsoldTracker(config.unsold_file, config.unsold_max_tries, config.unsold_cooldown)
-    unsold.update(market.history, my_user_id(market.mine, WantedState(config.wanted_state_file).my_id), now_utc())
+    unsold.update(market.history, my_id, now_utc())
     unsold.save()
     paused = {g.card_id: until for g in sellable if (until := unsold.paused(g.card_id, g.title, now_utc()))}
     if paused:
@@ -114,47 +319,8 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
                  ", ".join(f"{t} ({r})" for t, r in plan.skipped[:10]))
     if not plan.items:
         log.info("Aucune carte à mettre en vente.")
-        return RunResult(0, None, False, market.earliest_end())
-
-    free = market.free_slots
+        return
+    free = listings.free - listings.listed
     log.info("%d place(s) libre(s). Ordre de vente : %s", free,
              ", ".join(f"{i.title} (~{i.average:g})" for i in plan.items[:free + 5]))
-
-    my_ids = {a.get("id") for a in market.selling if isinstance(a, dict)}
-    listed, last_listing_at, slots_full = 0, None, False
-    for item in plan.items:
-        if listed >= free or slots_full:
-            break
-        for copy_index in range(item.copies_to_sell):
-            if listed >= free:
-                break
-            result = list_item(site, config, item, dry_run, copy_index, my_ids)
-            if result.status is ListingStatus.FAILED:  # souvent passager
-                log.info("%s : échec (%s), nouvel essai.", item.title, result.detail)
-                time.sleep(RETRY_LISTING_AFTER)
-                result = list_item(site, config, item, dry_run, copy_index, my_ids)
-            if result.status in (ListingStatus.LISTED, ListingStatus.DRY_RUN):
-                listed += 1
-                if result.status is ListingStatus.LISTED:
-                    last_listing_at = now_utc()
-                log.info("%s : %s à %d (prix moyen %g, %d%%).", result.status.value.capitalize(),
-                         item.title, result.price, result.average, round(config.price_ratio * 100))
-            elif result.status is ListingStatus.SLOTS_FULL:
-                log.info("Le site indique que les enchères sont pleines (%s).", result.detail)
-                slots_full = True
-                break
-            else:
-                log.warning("%s : %s%s", item.title, result.status.value, f" ({result.detail})" if result.detail else "")
-                break  # carte suivante
-            time.sleep(random.uniform(*LISTING_PAUSE))
-
-    if last_listing_at:
-        write_json(config.run_state_file, {"last_listing_at": last_listing_at.isoformat()})
-    log.info("Passe terminée : %d carte(s) %s.", listed, "simulée(s)" if dry_run else "mise(s) en vente")
-    earliest = None
-    if slots_full or listed >= free:
-        try:
-            earliest = site.fetch_market_state().earliest_end()
-        except Exception:
-            pass
-    return RunResult(listed, last_listing_at, slots_full or listed >= free, earliest)
+    _list_all(listings, plan.items)

@@ -6,6 +6,7 @@ import os
 import pytest
 
 from wiki_seller.config import Config
+from wiki_seller.lists import buy_cards, safe_names
 from wiki_seller.scheduler import run_once, run_snipe
 from wiki_seller.site import SiteError
 
@@ -149,10 +150,10 @@ def test_bids_once_then_rebids_only_at_the_end_or_moves_on(tmp_path):
         state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
         assert state["auction_id"] == "e1"
 
-        site.settle("e1")  # gagnée
+        site.settle("e1")  # gagnée : la carte quitte les achats et devient protégée
         run_once(config)
-    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-    assert state["status"] == "won" and state["won"] == {"e1": 200}
+    assert buy_cards(config) == [] and "gustave eiffel" in safe_names(config)
+    assert "gustave eiffel" not in json.loads(config.wanted_state_file.read_text())["cards"]
 
 
 def test_copies_buys_several_one_after_the_other(tmp_path):
@@ -168,8 +169,7 @@ def test_copies_buys_several_one_after_the_other(tmp_path):
         assert state["status"] == "bidding" and list(state["won"]) == ["e2"]
         site.settle("e1")
         run_once(config)
-    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-    assert state["status"] == "won" and set(state["won"]) == {"e1", "e2"} and len(site.bids) == 2
+    assert len(site.bids) == 2 and buy_cards(config) == [] and "gustave eiffel" in safe_names(config)
 
 
 def test_old_won_state_is_kept(tmp_path):
@@ -265,9 +265,7 @@ def test_card_won_elsewhere_is_not_bought_again(tmp_path):
         config.wanted_state_file.write_text(json.dumps(
             {"my_id": ME, "cards": {"gustave eiffel": {"name": "Gustave Eiffel", "since": since}}}))
         run_once(config)
-    assert site.bids == []
-    state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-    assert state["status"] == "won" and state["won"] == {"e1": 210}
+    assert site.bids == [] and buy_cards(config) == [] and "gustave eiffel" in safe_names(config)
 
 
 def test_sale_price_follows_current_auctions_of_the_card(tmp_path, caplog):
@@ -594,3 +592,79 @@ def test_card_protected_during_the_discard_is_kept(tmp_path):
         run_once(config)
         DISCARDER.join(120)
     assert site.discarded == ["Feuille"]
+
+
+def test_sell_list_goes_first_at_the_exact_price_until_sold(tmp_path):
+    from datetime import datetime, timezone
+
+    from wiki_seller.lists import sell_cards, set_sell
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site, FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, ["Tour Eiffel", "Château de Versailles"], sell_rarities=("L",),
+                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+        safe_names(config)  # reprise de l'ancien fichier
+        set_sell(config, "Pomme", 999)
+        set_sell(config, "tour eiffel", 4500)  # protégée, un seul exemplaire : n'est plus protégée
+        set_sell(config, "Château de Versailles", 700, 2)  # protégée, deux exemplaires : un est gardé
+        set_sell(config, "Inconnue", 10)
+        first = run_once(config)
+        # Toutes raretés pour les ventes demandées ; aucune autre carte en L.
+        assert [(l["title"], l["price"]) for l in site.listings] == [
+            ("Pomme", "999"), ("Tour Eiffel", "4500"), ("Château de Versailles", "700")]
+        assert first.listed == 3 and any("rarity=" not in q for q in site.collection_requests)
+        assert safe_names(config) == {"chateau de versailles"}
+        cards = {c.name: c for c in sell_cards(config)}
+        assert cards["Château de Versailles"].copies == 1 and cards["Château de Versailles"].keep_one
+        assert cards["Inconnue"].missing_notified
+
+        site.selling.clear()  # enchères terminées sans acheteur : remises en vente au même prix
+        run_once(config)
+        assert [(l["title"], l["price"]) for l in site.listings[3:]] == [
+            ("Pomme", "999"), ("Tour Eiffel", "4500"), ("Château de Versailles", "700")]
+
+        site.selling = list(FULL_SLOTS)
+        site.history = [{"id": "h1", "seller_id": ME, "status": "settled_sold", "winner_id": "x", "final_price": 999,
+                         "settled_at": datetime.now(timezone.utc).isoformat(), "card": {"wikipedia_title": "Pomme"}},
+                        {"id": "h0", "seller_id": ME, "status": "settled_sold", "winner_id": "x", "final_price": 5,
+                         "settled_at": "2020-01-01T00:00:00Z", "card": {"wikipedia_title": "Tour Eiffel"}}]
+        run_once(config)
+    assert sorted(c.name for c in sell_cards(config)) == ["Château de Versailles", "Inconnue", "Tour Eiffel"]
+    assert sum("introuvable" in t for t in tg.sent) == 1  # signalée une seule fois
+    assert any("Tour Eiffel » (un seul exemplaire) n'est plus protégée" in t for t in tg.sent)
+    assert any("le dernier exemplaire est gardé, 1 exemplaire(s)" in t for t in tg.sent)
+    assert "💰 Vendue : Pomme à 999" in tg.sent
+
+
+def test_buy_and_sell_lists_the_card_once_bought(tmp_path):
+    from wiki_seller.lists import sell_cards, set_buy
+
+    # max_auctions=2 : une place est prise par e4, votre vente en cours.
+    with FakeWikiMasters(list(COLLECTION), API_AVERAGES, max_auctions=2, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [])
+        set_buy(config, "Gustave Eiffel", 300, sell_price=900)
+        run_once(config)
+        assert site.bids == [("e2", 150)]
+        site.settle("e2")
+        site.collection.append(entry("ge1", "GE", "Gustave Eiffel"))
+        site.selling.clear()
+        run_once(config)
+    assert buy_cards(config) == [] and safe_names(config) == set()
+    assert [(c.name, c.price) for c in sell_cards(config)] == [("Gustave Eiffel", 900)]
+    assert (site.listings[-1]["title"], site.listings[-1]["price"]) == ("Gustave Eiffel", "900")
+
+
+def test_sell_list_dry_run_changes_nothing(tmp_path, caplog):
+    from wiki_seller.lists import sell_file, set_sell
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1) as site:
+        config = make_config(tmp_path, site.url, ["Tour Eiffel"])
+        set_sell(config, "Tour Eiffel", 4500)
+        set_sell(config, "Inconnue", 1)
+        before = sell_file(config).read_text()
+        with caplog.at_level("INFO"):
+            result = run_once(config, dry_run=True)
+    assert result.listed == 1 and site.listings == []
+    assert "Tour Eiffel à 4500 (prix demandé)" in caplog.text
+    assert sell_file(config).read_text() == before and safe_names(config) == {"tour eiffel"}

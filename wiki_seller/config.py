@@ -117,7 +117,7 @@ class Config:
     mail: str
     password: str
     base_url: str
-    safe_cards_file: Path
+    safe_cards_file: Path  # ancienne liste, reprise dans state/ (lists.py) ; à retirer
     state_dir: Path
     price_ratio: float
     auction_duration_label: str
@@ -129,7 +129,8 @@ class Config:
     session_cookies: str = ""
     # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
     run_interval: timedelta | None = None
-    # Achats : liste des cartes voulues, budget total optionnel, avance avant la fin.
+    # Achats : ancienne liste (reprise dans state/, à retirer), budget total optionnel,
+    # avance avant la fin.
     wanted_cards_file: Path = Path("wanted_cards.json")
     max_total_bids: int | None = None
     snipe_lead: timedelta = timedelta(seconds=5)

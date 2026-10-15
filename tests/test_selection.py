@@ -1,11 +1,5 @@
-import json
-
-import pytest
-
 from wiki_seller.selection import (
-    SafeCardsError,
     build_sale_plan,
-    load_safe_cards,
     normalize_name,
     parse_collection,
     sale_price,
@@ -19,23 +13,6 @@ def entry(copy_id, card_id, title, rarity="R", **extra):
 def test_normalize_ignores_case_accents_and_spaces():
     assert normalize_name("  Élysée   Montmartre ") == normalize_name("elysee montmartre")
     assert normalize_name("L’Étranger") == normalize_name("l'etranger")
-
-
-def test_load_safe_cards(tmp_path):
-    path = tmp_path / "safed_cards.json"
-    path.write_text(json.dumps(["Tour Eiffel", "Élysée"]), encoding="utf-8")
-    assert load_safe_cards(path) == {"tour eiffel", "elysee"}
-    path.write_text(json.dumps({"cards": ["Paris"]}), encoding="utf-8")
-    assert load_safe_cards(path) == {"paris"}
-
-
-def test_missing_or_invalid_safe_cards_file_is_an_error(tmp_path):
-    with pytest.raises(SafeCardsError):
-        load_safe_cards(tmp_path / "absent.json")
-    bad = tmp_path / "bad.json"
-    bad.write_text('{"cards": "Paris"}', encoding="utf-8")
-    with pytest.raises(SafeCardsError):
-        load_safe_cards(bad)
 
 
 def test_sale_price_is_floor_of_ratio():

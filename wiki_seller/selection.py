@@ -1,23 +1,15 @@
-"""Logique pure (sans navigateur) : lecture de la liste protégée, regroupement de la
-collection, calcul des prix et ordre de mise en vente."""
+"""Logique pure (sans navigateur) : regroupement de la collection, calcul des prix et
+ordre de mise en vente."""
 
-import json
 import math
 import re
 import statistics
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path
 
-from .state import LISTS_LOCK
-
-# Nombre d'exemplaires conservés pour une carte présente dans safed_cards.json.
+# Nombre d'exemplaires conservés pour une carte protégée (state/safe_cards.json).
 PROTECTED_COPIES_TO_KEEP = 1
-
-
-class SafeCardsError(Exception):
-    pass
 
 
 def normalize_name(name: str) -> str:
@@ -27,28 +19,6 @@ def normalize_name(name: str) -> str:
     text = text.replace("’", "'").replace("‘", "'").replace("ʼ", "'")
     text = re.sub(r"\s+", " ", text)
     return text.casefold().strip()
-
-
-def load_safe_cards(path: Path) -> set[str]:
-    """Charge safed_cards.json : une liste JSON de noms, ou {"cards": [...]}.
-
-    L'absence du fichier est une erreur : sans lui, le script mettrait toute la
-    collection en vente."""
-    if not path.exists():
-        raise SafeCardsError(
-            f"{path} introuvable. Copiez safed_cards.example.json en {path} "
-            "(une liste vide [] vend toutes les cartes)."
-        )
-    try:
-        with LISTS_LOCK:
-            data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SafeCardsError(f"{path} n'est pas un JSON valide : {exc}") from exc
-    if isinstance(data, dict):
-        data = data.get("cards")
-    if not isinstance(data, list) or not all(isinstance(n, str) for n in data):
-        raise SafeCardsError(f"{path} doit contenir une liste de noms de cartes, ex. [\"Tour Eiffel\"].")
-    return {normalize_name(n) for n in data if n.strip()}
 
 
 @dataclass
@@ -134,6 +104,7 @@ class SaleItem:
     price: int
     copies_to_sell: int
     copy_ids: tuple[str, ...] = ()  # exemplaires possédés (secours si le site attend leur id)
+    exact: bool = False  # prix demandé (/sell) : ni ratio, ni ajustement au marché
 
 
 @dataclass

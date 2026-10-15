@@ -17,11 +17,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .buying import WantedCardsError, load_wanted_cards
 from .config import Config
+from .lists import protected_names
 from .pricing import PriceReader
 from .report import record_discard
-from .selection import CardGroup, copies_not_on_sale, count_listed, load_safe_cards, normalize_name, parse_collection
+from .selection import CardGroup, copies_not_on_sale, count_listed, normalize_name, parse_collection
 from .session import GATE, open_site
 from .site import CollectionScan, DiscardStatus, SessionExpired, WikiMasters
 from .state import now_utc, parse_time, read_json, write_json
@@ -76,16 +76,6 @@ def should_discard(rarity: str | None, average: float | None, below: int) -> boo
     if average:
         return average < below
     return (rarity or "") in DISCARD_WITHOUT_PRICE
-
-
-def protected_names(config: Config) -> set[str]:
-    """Cartes jamais défaussées : celles de safed_cards.json et de wanted_cards.json."""
-    names = set(load_safe_cards(config.safe_cards_file))
-    try:
-        names |= {normalize_name(c.name) for c in load_wanted_cards(config.wanted_cards_file)}
-    except WantedCardsError as exc:
-        log.warning("Défausse : %s ; les cartes voulues ne sont pas protégées.", exc)
-    return names
 
 
 # ─────────────────────────── Avancement ───────────────────────────
@@ -278,7 +268,7 @@ def _discard_copies(site: WikiMasters, config: Config, item: DiscardItem, progre
                     dry_run: bool) -> bool:
     """Défausse les exemplaires de la carte. False si une passe attend la session."""
     price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
-    if normalize_name(item.title) in protected_names(config):  # protégée entre-temps (/safe, /want)
+    if normalize_name(item.title) in protected_names(config):  # protégée entre-temps (/safe, /buy, /sell)
         log.info("Défausse : %s est protégée ; carte suivante.", item.title)
         return True
     if not item.copy_ids:

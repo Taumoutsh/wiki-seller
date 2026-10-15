@@ -1,19 +1,21 @@
-"""Achat des cartes de wanted_cards.json : on mise sur une enchère dans la limite de
-prix, on surenchérit si quelqu'un passe devant, et on revient SNIPE_LEAD avant la fin.
+"""Achat des cartes de state/buy_cards.json (/buy, /buyandsell) : on mise sur une
+enchère dans la limite de prix, on surenchérit si quelqu'un passe devant, et on revient
+SNIPE_LEAD avant la fin. Le suivi (enchère choisie, heure de fin, exemplaires obtenus)
+est enregistré dans state/wanted_state.json.
 
-Le fichier wanted_cards.json n'est jamais modifié par le script : le suivi (enchère
-choisie, heure de fin, carte obtenue) est enregistré dans state/wanted_state.json."""
+Une fois tous les exemplaires obtenus, la carte quitte la liste d'achat et devient
+protégée, ou part dans les ventes au prix demandé (/buyandsell)."""
 
-import json
 import logging
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import Config
+from .lists import BuyCard, buy_cards, complete_purchase
 from .selection import normalize_name
-from .state import LISTS_LOCK, parse_time, read_json, write_json
+from .state import parse_time, read_json, write_json
+from .telegram import notify
 
 log = logging.getLogger(__name__)
 
@@ -26,48 +28,6 @@ SNIPE_STARTUP = timedelta(seconds=45)
 WATCH_START = timedelta(seconds=60)
 WATCH_POLL = 1  # secondes entre deux vérifications pendant la fin d'enchère
 WATCH_GUARD = timedelta(minutes=60)  # guerre d'enchères : chaque mise ajoute une minute
-
-
-class WantedCardsError(Exception):
-    pass
-
-
-@dataclass(frozen=True)
-class WantedCard:
-    name: str
-    max_price: int
-    copies: int = 1  # exemplaires à acheter
-
-    @property
-    def key(self) -> str:
-        return normalize_name(self.name)
-
-
-def load_wanted_cards(path: Path) -> list[WantedCard]:
-    """Liste JSON [{"name": "Tour Eiffel", "max_price": 500, "copies": 2}, ...] (copies :
-    1 par défaut). Fichier absent = rien à acheter."""
-    if not path.exists():
-        return []
-    if path.is_dir():  # Docker crée un dossier si le fichier monté n'existe pas
-        raise WantedCardsError(f"{path} est un dossier : créez le fichier (voir wanted_cards.example.json).")
-    try:
-        with LISTS_LOCK:
-            data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise WantedCardsError(f"{path} n'est pas un JSON valide : {exc}") from exc
-    if not isinstance(data, list):
-        raise WantedCardsError(f'{path} doit contenir une liste, ex. [{{"name": "Tour Eiffel", "max_price": 500}}].')
-    cards = []
-    for item in data:
-        name = item.get("name") if isinstance(item, dict) else None
-        price = item.get("max_price") if isinstance(item, dict) else None
-        if not isinstance(name, str) or not name.strip() or isinstance(price, bool) or not isinstance(price, int) or price < 1:
-            raise WantedCardsError(f"{path} : entrée invalide {item!r} (attendu name + max_price entier positif).")
-        copies = item.get("copies", 1)
-        if isinstance(copies, bool) or not isinstance(copies, int) or copies < 1:
-            raise WantedCardsError(f"{path} : « copies » doit être un entier positif ({item!r}).")
-        cards.append(WantedCard(name.strip(), price, copies))
-    return cards
 
 
 def auction_title(auction: dict) -> str:
@@ -83,7 +43,7 @@ def min_next_bid(auction: dict) -> int:
     return int(auction.get("effective_bid") or auction.get("base_amount") or 0)
 
 
-def choose_auction(auctions: list[dict], card: WantedCard, my_id: str | None, now: datetime,
+def choose_auction(auctions: list[dict], card: BuyCard, my_id: str | None, now: datetime,
                    my_sales: set[str] = frozenset(), exclude: set[str] = frozenset()) -> dict | None:
     """Enchère active de cette carte, pas à nous, dans la limite : la moins chère, puis
     celle qui finit le plus tôt."""
@@ -100,7 +60,7 @@ def choose_auction(auctions: list[dict], card: WantedCard, my_id: str | None, no
     return candidates[0][2] if candidates else None
 
 
-def won_since(mine: dict, card: WantedCard, since: datetime | None) -> list[dict]:
+def won_since(mine: dict, card: BuyCard, since: datetime | None) -> list[dict]:
     """Enchères de cette carte dans « Gagnées », réglées depuis `since`."""
     found = []
     for auction in mine.get("won") or []:
@@ -137,7 +97,7 @@ class WantedState:
         if value:
             self.data["my_id"] = value
 
-    def card(self, card: WantedCard) -> dict:
+    def card(self, card: BuyCard) -> dict:
         return self.data["cards"].setdefault(card.key, {"name": card.name})
 
     def save(self) -> None:
@@ -161,8 +121,13 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
     """Une passe d'achat. snipe_only : ne traiter que les enchères suivies qui se
     terminent bientôt : attendre SNIPE_LEAD avant la fin, puis surveiller l'enchère
     jusqu'à sa vraie fin (le site la prolonge de 60 s après une mise tardive)."""
-    wanted = load_wanted_cards(config.wanted_cards_file)
+    wanted = buy_cards(config)
     state = WantedState(config.wanted_state_file)
+    dropped = set(state.data["cards"]) - {c.key for c in wanted}  # /unbuy : suivi oublié
+    if dropped and not dry_run:
+        for key in dropped:
+            del state.data["cards"][key]
+        state.save()
     if not wanted:
         return
     offset = site.server_clock_offset()
@@ -181,6 +146,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
             entry = state.card(card)
             entry.setdefault("since", buyer.now().isoformat())
             if buyer.count_wins(card, entry, won_since(mine, card, parse_time(entry["since"]))):
+                buyer.complete(card)
                 continue
             # Une seule enchère à la fois : si vous menez déjà une enchère de cette carte
             # dans « Mes enchères », c'est elle qu'on suit, et on ne mise nulle part ailleurs.
@@ -200,6 +166,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
             if auction and auction.get("status") != "active":
                 if state.my_id and auction.get("winner_id") == state.my_id:
                     if buyer.count_wins(card, entry, [auction]):
+                        buyer.complete(card)
                         continue
                 else:
                     log.info("Achat : enchère perdue pour « %s » ; recherche d'une autre.", card.name)
@@ -255,7 +222,7 @@ class _Buyer:
         self.site, self.config, self.state, self.dry_run, self.now = site, config, state, dry_run, now
         self.budget_used = 0
 
-    def count_wins(self, card: WantedCard, entry: dict, wins: list[dict]) -> bool:
+    def count_wins(self, card: BuyCard, entry: dict, wins: list[dict]) -> bool:
         """Note les enchères gagnées ; True si le nombre d'exemplaires voulu est atteint."""
         if entry.get("status") == "won" and "won" not in entry:  # ancien format : déjà obtenue
             entry["won"] = {entry.get("auction_id") or "avant": entry.get("price")}
@@ -265,6 +232,9 @@ class _Buyer:
                 won[auction["id"]] = auction.get("final_price")
                 log.info("Achat : « %s » obtenue pour %s (%d/%d).", card.name, auction.get("final_price"),
                          len(won), card.copies)
+                if not self.dry_run:
+                    notify(self.config, f"🛒 Obtenue : {card.name} pour {auction.get('final_price')}"
+                                        + (f" ({len(won)}/{card.copies})" if card.copies > 1 else ""))
         entry["won"] = won
         if len(won) >= card.copies:
             if entry.get("status") != "won":
@@ -278,10 +248,23 @@ class _Buyer:
             _forget(entry)
         return False
 
+    def complete(self, card: BuyCard) -> None:
+        """Tous les exemplaires obtenus : la carte quitte les achats (et leur suivi) pour
+        les cartes protégées, ou pour les ventes (/buyandsell)."""
+        bought = len(self.state.card(card).get("won") or {})
+        if self.dry_run:
+            log.info("Simulation : achat de « %s » terminé ; elle passerait %s.", card.name,
+                     f"dans les ventes à {card.sell_price}" if card.sell_price else "dans les cartes protégées")
+            return
+        message = complete_purchase(self.config, card, bought)
+        del self.state.data["cards"][card.key]  # redemandée plus tard, elle repartira de zéro
+        log.info("Achat : %s", message)
+        notify(self.config, message)
+
     def leading(self, auction: dict) -> bool:
         return bool(self.state.my_id) and auction.get("current_bidder_id") == self.state.my_id
 
-    def bid_if_needed(self, card: WantedCard, entry: dict, auction: dict) -> None:
+    def bid_if_needed(self, card: BuyCard, entry: dict, auction: dict) -> None:
         if self.leading(auction):
             log.info("Achat : « %s » — vous menez à %s (fin %s).", card.name, auction.get("current_bid"),
                      auction.get("end_at"))
@@ -318,7 +301,7 @@ class _Buyer:
         else:
             log.warning("Achat : la mise sur « %s » n'a pas été confirmée par le site.", card.name)
 
-    def watch_until_end(self, card: WantedCard, entry: dict, auction: dict) -> None:
+    def watch_until_end(self, card: BuyCard, entry: dict, auction: dict) -> None:
         """Surveille l'enchère de près à partir de WATCH_START avant la fin (relue chaque
         seconde) et surenchérit dès que vous n'êtes plus en tête à SNIPE_LEAD de la fin,
         dans la limite. Une mise des 10 dernières secondes prolonge l'enchère de 60 s :
@@ -361,7 +344,7 @@ class _Buyer:
         if minimum and minimum > auction["current_bid"]:
             entry["step"] = minimum - auction["current_bid"]
 
-    def fast_bid(self, card: WantedCard, entry: dict, auction: dict) -> None:
+    def fast_bid(self, card: BuyCard, entry: dict, auction: dict) -> None:
         """Surenchère de dernière seconde : montant calculé avec le pas appris, envoyé
         directement par l'API ; la page n'est relue que si le pas est inconnu ou refusé."""
         current = auction.get("current_bid")

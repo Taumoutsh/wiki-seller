@@ -357,15 +357,18 @@ class WikiMasters:
 
     # ─────────────────────────── Vente et défausse ───────────────────────────
 
-    def list_card(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float,
-                  dry_run: bool, adjust=None, duration_label: str | None = None) -> ListingResult:
+    def list_card(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float | None,
+                  dry_run: bool, adjust=None, duration_label: str | None = None,
+                  price: int | None = None) -> ListingResult:
         """Mise en vente : POST /api/marketplace {card_id, base_amount, duration_minutes}.
         Malgré son nom, `card_id` attend l'identifiant de l'exemplaire possédé (avec celui
         de la carte, le site répond 409 « Vous ne possédez pas cette carte ») : on essaie
-        les exemplaires, puis la carte en dernier recours."""
-        price = sale_price(average, self.config.price_ratio)
-        if adjust and price >= 1:
-            price = adjust(price, average)
+        les exemplaires, puis la carte en dernier recours. `price` : prix exact (/sell),
+        sinon PRICE_RATIO du prix moyen, ajusté par `adjust`."""
+        if price is None:
+            price = sale_price(average, self.config.price_ratio)
+            if adjust and price >= 1:
+                price = adjust(price, average)
         if price < 1:
             return ListingResult(ListingStatus.NO_PRICE, average=average, detail=f"moyenne {average:g}")
         duration = auction_minutes(duration_label or self.config.auction_duration_label)

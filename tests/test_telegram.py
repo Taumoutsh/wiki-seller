@@ -117,26 +117,38 @@ def test_session_reply_reaches_the_request_while_commands_are_listened(tmp_path)
     assert any("envoyez d'abord" in t for t in fake.sent) and fake.sent[-1].startswith("✅")
 
 
-def test_safe_and_want_commands_edit_the_lists(tmp_path):
+def test_list_commands_edit_the_lists(tmp_path):
+    from wiki_seller.lists import buy_file, safe_file, sell_file
     from wiki_seller.telegram import CommandListener
 
     from .test_end_to_end import make_config
 
     config = make_config(tmp_path, "http://127.0.0.1:1", ["Tour Eiffel"], wanted=[])
+    commands = ["/safe Victor Hugo", "/want Gustave Eiffel 300 x2", "/buy Gustave Eiffel", "/sell Tour Eiffel 800",
+                "/buyandsell Apollo 11 500 900", "/unsell Pomme", "/unsafe Victor Hugo", "/list"]
     with FakeTelegram() as fake:
         listener = CommandListener(bot(tmp_path, fake), lambda: None, config).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())
-            fake.say("/safe Victor Hugo")
-            assert wait_for(lambda: len(fake.sent) == 1)
-            fake.say("/want Gustave Eiffel 300 x2")
-            assert wait_for(lambda: len(fake.sent) == 2)
-            fake.say("/want Gustave Eiffel")
-            assert wait_for(lambda: len(fake.sent) == 3)
+            for n, command in enumerate(commands, 1):
+                fake.say(command)
+                assert wait_for(lambda: len(fake.sent) == n)
         finally:
             listener.stop()
-    assert fake.sent[0].startswith("🛡️ « Victor Hugo » protégée")
-    assert "Gustave Eiffel » ajoutée dans les achats (300 max, 2 exemplaire(s))" in fake.sent[1]
-    assert fake.sent[2].startswith("❌ Usage : /want")
-    assert json.loads(config.safe_cards_file.read_text()) == ["Tour Eiffel", "Victor Hugo"]
-    assert json.loads(config.wanted_cards_file.read_text()) == [{"name": "Gustave Eiffel", "max_price": 300, "copies": 2}]
+    safe, want, buy_usage, sell, buy_and_sell, unsell, unsafe, listing = fake.sent
+    assert safe.startswith("🛡️ « Victor Hugo » protégée")
+    assert "Gustave Eiffel » ajoutée dans les achats (300 max, 2 exemplaire(s))" in want and "/want est l'ancien" in want
+    assert buy_usage.startswith("❌ Usage : /buy")
+    assert "1 exemplaire(s) à 800" in sell and "Elle est protégée" in sell
+    assert "Apollo 11 » ajoutée dans les achats (500 max, 1 exemplaire(s)), revendue à 900" in buy_and_sell
+    assert unsell == "« Pomme » n'est pas dans les ventes."
+    assert unsafe == "« Victor Hugo » n'est plus protégée."
+    assert listing.splitlines() == ["🛡️ Protégées (1) : Tour Eiffel", "🛒 À acheter (2) :",
+                                    "• Gustave Eiffel : 300 max, 0/2 obtenu(s)",
+                                    "• Apollo 11 : 500 max, 0/1 obtenu(s), revente à 900",
+                                    "💰 À vendre (1) :", "• Tour Eiffel : 800, 0/1 vendu(s)"]
+    assert json.loads(safe_file(config).read_text()) == ["Tour Eiffel"]
+    assert json.loads(buy_file(config).read_text()) == [
+        {"name": "Gustave Eiffel", "max_price": 300, "copies": 2},
+        {"name": "Apollo 11", "max_price": 500, "sell_price": 900}]
+    assert [(c["name"], c["price"]) for c in json.loads(sell_file(config).read_text())] == [("Tour Eiffel", 800)]
