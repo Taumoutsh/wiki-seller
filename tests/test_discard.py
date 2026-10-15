@@ -142,3 +142,21 @@ def test_price_pause_gives_way_to_a_waiting_pass(tmp_path, monkeypatch):
     site = PriceStub(refused={"X0"})
     _, unknown, complete = main.fetch_averages(site, config, price_groups(3), lambda: next(calls, True))
     assert not complete and site.asked == ["X0"]
+
+
+def test_discard_restarts_sooner_when_prices_were_missing(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller.main import DiscardWorker
+
+    from .test_end_to_end import make_config
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", [])
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    finished = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    progress = config.state_dir / "discard_progress.json"
+    progress.write_text(json.dumps({"finished_at": finished, "unpriced": 0}), encoding="utf-8")
+    assert DiscardWorker.recently_finished(config)  # tout lu : attente d'une heure
+    progress.write_text(json.dumps({"finished_at": finished, "unpriced": 3}), encoding="utf-8")
+    assert not DiscardWorker.recently_finished(config)  # prix manquants : relance après 15 min

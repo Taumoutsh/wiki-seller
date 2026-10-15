@@ -33,7 +33,8 @@ prises, elle démarre dès la fin de la première enchère en cours, et au plus 
 ## Défausse automatique (arrière-plan)
 
 À chaque réveil (passe ou surenchère), le script lance la défausse dans un **thread à
-part** (sauf si elle tourne déjà, ou s'est terminée il y a moins d'une heure). Ce thread
+part** (sauf si elle tourne déjà, ou s'est terminée il y a moins d'une heure, ou moins
+de 15 minutes si des prix n'avaient pas pu être lus). Ce thread
 lit toute la collection et compte les exemplaires, toutes raretés et doublons compris.
 Au-delà de **`DISCARD_TRIGGER` (150)**, il défausse toutes les cartes qui valent **moins
 de `DISCARD_BELOW` (15)** sur le marché, un exemplaire à la fois. Il ouvre la carte depuis

@@ -57,6 +57,7 @@ PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour
 SITE_TIMEZONE = "Europe/Paris"
 DISCARD_PAUSE = (1.0, 3.0)  # secondes entre deux défausses, pour garder un rythme humain
 DISCARD_RECHECK = timedelta(hours=1)  # délai avant de relancer une défausse terminée
+DISCARD_RECHECK_UNPRICED = timedelta(minutes=15)  # idem s'il restait des prix à lire
 DISCARD_PROGRESS_MAX_AGE = timedelta(hours=24)  # au-delà, la collection lue est trop ancienne
 DISCARD_SAVE_EVERY_PAGES = 20  # pages de collection lues entre deux sauvegardes
 
@@ -444,8 +445,10 @@ class DiscardWorker:
 
     @staticmethod
     def recently_finished(config: Config) -> bool:
-        finished = read_json(discard_progress_file(config), {}).get("finished_at")
-        return bool(finished) and now_utc() - datetime.fromisoformat(finished) < DISCARD_RECHECK
+        data = read_json(discard_progress_file(config), {})
+        finished = data.get("finished_at")
+        delay = DISCARD_RECHECK_UNPRICED if data.get("unpriced") else DISCARD_RECHECK
+        return bool(finished) and now_utc() - datetime.fromisoformat(finished) < delay
 
     def start(self, config: Config, dry_run: bool, debug: bool) -> bool:
         with self._lock:
@@ -506,10 +509,12 @@ class DiscardProgress:
     copies_done: int = 0  # exemplaires déjà traités de cette carte
     done: int = 0
     total: int = 0
+    unpriced: int = 0  # cartes dont le prix n'a pas pu être lu : relance plus tôt
 
     def save(self, config: Config, finished: bool = False) -> None:
         data = {"started_at": self.started_at, "position": self.position,
-                "copies_done": self.copies_done, "done": self.done, "total": self.total}
+                "copies_done": self.copies_done, "done": self.done, "total": self.total,
+                "unpriced": self.unpriced}
         if finished:
             data["finished_at"] = now_utc().isoformat()
         elif self.plan is not None:  # la collection lue ne sert plus une fois le plan établi
@@ -530,7 +535,8 @@ class DiscardProgress:
             if data.get("finished_at") or now_utc() - started > DISCARD_PROGRESS_MAX_AGE:
                 return cls()
             progress = cls(started_at=data["started_at"], position=data["position"],
-                           copies_done=data["copies_done"], done=data["done"], total=data["total"])
+                           copies_done=data["copies_done"], done=data["done"], total=data["total"],
+                           unpriced=data.get("unpriced", 0))
             if data.get("plan") is not None:
                 progress.plan = [DiscardItem(**i) for i in data["plan"]]
             elif data.get("scan"):
@@ -628,10 +634,14 @@ def _build_discard_plan(site: WikiMasters, config: Config, progress: DiscardProg
     market = site.fetch_market_state()
     plan = build_discard_plan(groups, averages, config.discard_below, protected, market.selling, unknown)
     progress.plan, progress.total = plan, sum(i.copies for i in plan)
+    progress.unpriced = len(unknown)
     progress.save(config)
     log.info("Collection : %d exemplaire(s) > %d. Défausse : %d exemplaire(s) de %d carte(s) à moins de %d%s.",
              count, config.discard_trigger, progress.total, len(plan), config.discard_below,
              f", ex. : {', '.join(i.title for i in plan[:10])}" if plan else "")
+    if unknown:
+        log.info("Défausse : %d carte(s) sans prix lu, redemandée(s) à la prochaine défausse (dans %d min).",
+                 len(unknown), DISCARD_RECHECK_UNPRICED.seconds // 60)
     return True
 
 
