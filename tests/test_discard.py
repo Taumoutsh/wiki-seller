@@ -72,3 +72,73 @@ def test_gate_background_waits_for_running_pass():
         order.append("pass done")
     t.join(5)
     assert order == ["pass done", "background"]
+
+
+class PriceStub:
+    """Site minimal pour fetch_averages : refuse le prix des cartes de `refused`."""
+
+    def __init__(self, refused=(), transient=True):
+        self.refused, self.transient, self.asked = set(refused), transient, []
+
+    def fetch_average(self, card_id, rarity):
+        from wiki_seller.site import PriceApiUnavailable
+
+        self.asked.append(card_id)
+        if card_id in self.refused:
+            raise PriceApiUnavailable("trop de requêtes", transient=self.transient)
+        return 5.0
+
+
+def price_groups(n):
+    return parse_collection([entry(f"x{i}", f"X{i}", f"Carte {i}", "C") for i in range(n)])
+
+
+def test_transient_price_refusal_skips_only_that_card(tmp_path, monkeypatch):
+    import wiki_seller.main as main
+
+    from .test_end_to_end import make_config
+
+    monkeypatch.setattr(main, "PRICE_RETRY_PAUSE", 0)
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    config = make_config(tmp_path, "http://127.0.0.1:1", [])
+    site = PriceStub(refused={"X1"})
+    averages, unknown, complete = main.fetch_averages(site, config, price_groups(4))
+    assert complete and unknown == {"X1"}
+    assert averages == {"X0": 5.0, "X2": 5.0, "X3": 5.0}
+    # La carte refusée n'est pas mise en cache : elle sera redemandée la prochaine fois.
+    site = PriceStub()
+    main.fetch_averages(site, config, price_groups(4))
+    assert site.asked == ["X1"]
+
+
+def test_price_api_given_up_after_repeated_or_forbidden_refusals(tmp_path, monkeypatch):
+    import wiki_seller.main as main
+
+    from .test_end_to_end import make_config
+
+    monkeypatch.setattr(main, "PRICE_RETRY_PAUSE", 0)
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    config = make_config(tmp_path, "http://127.0.0.1:1", [])
+    refused = {f"X{i}" for i in range(main.PRICE_FAILURES_BEFORE_GIVING_UP)}
+    site = PriceStub(refused=refused)
+    _, unknown, complete = main.fetch_averages(site, config, price_groups(8))
+    assert complete and len(site.asked) == len(refused) and len(unknown) == 8
+    # Accès interdit (401/403) : abandon dès le premier refus.
+    (tmp_path / "b").mkdir()
+    config = make_config(tmp_path / "b", "http://127.0.0.1:1", [])
+    site = PriceStub(refused={"X0"}, transient=False)
+    _, unknown, _ = main.fetch_averages(site, config, price_groups(3))
+    assert site.asked == ["X0"] and len(unknown) == 3
+
+
+def test_price_pause_gives_way_to_a_waiting_pass(tmp_path, monkeypatch):
+    import wiki_seller.main as main
+
+    from .test_end_to_end import make_config
+
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    config = make_config(tmp_path, "http://127.0.0.1:1", [])
+    calls = iter([False, True])  # avant la carte 0 : rien ; pendant la pause : une passe attend
+    site = PriceStub(refused={"X0"})
+    _, unknown, complete = main.fetch_averages(site, config, price_groups(3), lambda: next(calls, True))
+    assert not complete and site.asked == ["X0"]

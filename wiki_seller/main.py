@@ -49,6 +49,8 @@ log = logging.getLogger("wiki_seller")
 RESTART_MARGIN = timedelta(minutes=1)
 RETRY_AFTER_ERROR = timedelta(minutes=10)
 PRICE_SAVE_EVERY = 50
+PRICE_RETRY_PAUSE = 30  # s de pause après un refus passager de l'API des prix
+PRICE_FAILURES_BEFORE_GIVING_UP = 5  # refus passagers de suite avant d'abandonner l'API des prix
 RETRY_LISTING_AFTER = 5  # secondes
 PACKS_VERIFICATION_PAUSE = timedelta(hours=12)  # après une demande de vérification humaine
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
@@ -284,6 +286,16 @@ def _buy(site: WikiMasters, config: Config, dry_run: bool) -> None:
         log.warning("Achats interrompus : %s", str(exc).splitlines()[0])
 
 
+def _pause(seconds: float, should_stop) -> bool:
+    """Attend `seconds` secondes ; False dès qu'une passe attend la session."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if should_stop():
+            return False
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+    return True
+
+
 def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda: False):
     """Prix moyens (cache state/price_cache.json, sinon l'API). Renvoie (prix par carte,
     cartes dont l'API a refusé le prix, True si tout a été lu sans interruption)."""
@@ -292,6 +304,7 @@ def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda
     unknown: set[str] = set()
     price_api_ok = True
     fetched = 0
+    failures = 0  # refus passagers de suite
     try:
         for group in groups:
             key = f"{group.card_id}:{group.rarity}"
@@ -306,11 +319,19 @@ def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda
             try:
                 averages[group.card_id] = site.fetch_average(group.card_id, group.rarity)
             except PriceApiUnavailable as exc:
+                unknown.add(group.card_id)  # pas mis en cache : redemandé la prochaine fois
+                failures += 1
+                if exc.transient and failures < PRICE_FAILURES_BEFORE_GIVING_UP:
+                    log.info("Prix de « %s » non lu (%s) : carte laissée de côté, pause de %d s.",
+                             group.title, exc, PRICE_RETRY_PAUSE)
+                    if not _pause(PRICE_RETRY_PAUSE, should_stop):
+                        return averages, unknown, False
+                    continue
                 log.warning("API des prix indisponible (%s) : prix lus dans la fenêtre d'enchère, "
                             "sans classement pour les cartes concernées.", exc)
                 price_api_ok = False
-                unknown.add(group.card_id)
                 continue
+            failures = 0
             cache[key] = {"average": averages[group.card_id], "at": now_utc().isoformat()}
             fetched += 1
             if fetched % PRICE_SAVE_EVERY == 0:

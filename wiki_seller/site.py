@@ -81,7 +81,12 @@ class HumanVerificationRequired(Exception):
 
 
 class PriceApiUnavailable(Exception):
-    """L'API des prix a refusé la requête : le prix sera lu dans la fenêtre d'enchère."""
+    """L'API des prix a refusé la requête : le prix sera lu dans la fenêtre d'enchère.
+    `transient` : refus passager (trop de requêtes, panne), pas un accès interdit."""
+
+    def __init__(self, message: str, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
 
 
 class DiscardStatus(Enum):
@@ -523,8 +528,10 @@ class WikiMasters:
         """Prix moyen de la carte (None si aucune vente connue)."""
         try:
             data = self.api_get_ok(f"/api/marketplace/cards/{card_id}/sales?scope=summary")
-        except (SessionExpired, SiteError) as exc:
+        except SessionExpired as exc:
             raise PriceApiUnavailable(str(exc)) from exc
+        except SiteError as exc:
+            raise PriceApiUnavailable(str(exc), transient=True) from exc
         return self._average_from(data, rarity)
 
     @staticmethod

@@ -46,7 +46,10 @@ Si une défausse tourne déjà, aucune autre n'est lancée.
   y compris le dernier.
 - **Cartes jamais défaussées :** celles de `safed_cards.json` et de
   `wanted_cards.json`, les exemplaires en vente ou engagés dans un échange, les cartes
-  rares sans prix connu, et celles dont le prix n'a pas pu être lu.
+  rares sans prix connu, et celles dont le prix n'a pas pu être lu. Si l'API des prix
+  refuse une carte en passant (trop de requêtes, panne), seule cette carte est laissée
+  de côté (pause de 30 s, puis carte suivante) et redemandée à la défausse suivante ;
+  l'API n'est abandonnée qu'après 5 refus de suite, ou dès un accès interdit.
 - **Une seule session à la fois :** la défausse et les passes partagent la même
   session du site. Pour ne pas la faire annuler, un seul navigateur est ouvert à la
   fois. Quand une passe ou une surenchère se réveille, la défausse se met en pause
