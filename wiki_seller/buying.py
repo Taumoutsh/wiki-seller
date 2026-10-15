@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .config import Config
 from .selection import normalize_name
+from .state import parse_time, read_json, write_json
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ SNIPE_STARTUP = timedelta(seconds=45)
 # Surveillance de la fin d'enchère : à partir de WATCH_START avant la fin, l'enchère est
 # relue toutes les WATCH_POLL secondes ; on surenchérit à SNIPE_LEAD de la fin.
 WATCH_START = timedelta(seconds=60)
+WATCH_POLL = 1  # secondes entre deux vérifications pendant la fin d'enchère
+WATCH_GUARD = timedelta(minutes=60)  # guerre d'enchères : chaque mise ajoute une minute
 
 
 class WantedCardsError(Exception):
@@ -64,15 +67,6 @@ def load_wanted_cards(path: Path) -> list[WantedCard]:
             raise WantedCardsError(f"{path} : « copies » doit être un entier positif ({item!r}).")
         cards.append(WantedCard(name.strip(), price, copies))
     return cards
-
-
-def parse_time(value) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def auction_title(auction: dict) -> str:
@@ -130,10 +124,7 @@ def my_user_id(mine: dict, known: str | None) -> str | None:
 class WantedState:
     def __init__(self, path: Path):
         self.path = path
-        try:
-            self.data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            self.data = {}
+        self.data = read_json(path, {})
         self.data.setdefault("cards", {})
 
     @property
@@ -149,10 +140,7 @@ class WantedState:
         return self.data["cards"].setdefault(card.key, {"name": card.name})
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        write_json(self.path, self.data)
 
     def next_snipe_at(self, lead: timedelta, now: datetime | None = None,
                       offset: timedelta = timedelta(0)) -> datetime | None:
@@ -374,10 +362,10 @@ class _Buyer:
 
     def fast_bid(self, card: WantedCard, entry: dict, auction: dict) -> None:
         """Surenchère de dernière seconde : montant calculé avec le pas appris, envoyé
-        directement par l'API ; la page n'est relue que si le site refuse."""
+        directement par l'API ; la page n'est relue que si le pas est inconnu ou refusé."""
         current = auction.get("current_bid")
         step = entry.get("step")
-        if not self.config.actions_via_api or (isinstance(current, int) and not step):
+        if isinstance(current, int) and not step:
             self.bid_if_needed(card, entry, auction)  # lecture de la page
             self._learn_step(entry, auction)
             return
@@ -401,6 +389,3 @@ class _Buyer:
         self.bid_if_needed(card, entry, auction)
         self._learn_step(entry, auction)
 
-
-WATCH_POLL = 1  # secondes entre deux vérifications pendant la fin d'enchère
-WATCH_GUARD = timedelta(minutes=60)  # guerre d'enchères : chaque mise ajoute une minute

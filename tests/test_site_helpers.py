@@ -4,24 +4,9 @@ import pytest
 
 from wiki_seller.config import Config, ConfigError, load_config, parse_duration
 
-from wiki_seller.main import RunResult, next_run_at
-from wiki_seller.site import AVERAGE_AFTER, AVERAGE_UNAVAILABLE, duration_pattern, parse_cookies, parse_int
-
-
-def test_average_regex():
-    assert parse_int(AVERAGE_AFTER.search("Prix moyen\n1 234 W").group(1)) == 1234
-    assert parse_int(AVERAGE_AFTER.search("Prix moyen : 117\nMise de départ").group(1)) == 117
-    assert AVERAGE_AFTER.search("Prix moyen ...") is None
-    # Libellé du vrai site : « Moyenne » puis la valeur, dans la fenêtre d'enchère.
-    text = "Akira Toriyama\nMarché · Ultra Rare\nMoyenne\n1 953\nMise de départ\n1367"
-    assert parse_int(AVERAGE_AFTER.search(text).group(1)) == 1953
-    assert AVERAGE_UNAVAILABLE.search("Prix moyen Indisponible")
-
-
-def test_duration_pattern():
-    pattern = duration_pattern("1 h")
-    assert pattern.match("1 h") and pattern.match("1h") and pattern.match(" 1 heure ")
-    assert not pattern.match("12 h") and not pattern.match("10 min")
+from wiki_seller.scheduler import next_run_at
+from wiki_seller.selling import RunResult
+from wiki_seller.session import parse_cookies
 
 
 def test_next_run_is_one_hour_after_last_listing(tmp_path):
@@ -87,19 +72,12 @@ def test_run_interval_rejects_bad_values(monkeypatch, value):
         load_config()
 
 
-def test_packs_window_and_next_wake(tmp_path):
+def test_next_wake(tmp_path):
     import json as _json
 
-    from wiki_seller.main import in_packs_window, next_wake
+    from wiki_seller.scheduler import next_wake
 
-    default = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
-    assert not in_packs_window(default, datetime(2026, 1, 1, 1, 0))  # désactivé par défaut
-    night = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None, packs_hours=(0, 6))
-    assert in_packs_window(night, datetime(2026, 1, 1, 0, 0)) and in_packs_window(night, datetime(2026, 1, 1, 5, 59))
-    assert not in_packs_window(night, datetime(2026, 1, 1, 6, 0))
-    wrap = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None, packs_hours=(22, 2))
-    assert in_packs_window(wrap, datetime(2026, 1, 1, 23)) and in_packs_window(wrap, datetime(2026, 1, 1, 1))
-    assert not in_packs_window(wrap, datetime(2026, 1, 1, 12))
+    night = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
 
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     next_pass = now + timedelta(minutes=30)
@@ -147,31 +125,6 @@ def test_search_queries_drop_parentheses_then_punctuation():
                                                                  "Zelda II The Adventure of Link"]
 
 
-def test_pack_cards_and_summary():
-    from wiki_seller.site import pack_cards, pack_summary
-
-    data = {"remaining": 3, "cards": [{"id": "x", "card": {"wikipedia_title": "Tour Eiffel", "rarity": "ur"}},
-                                      {"card": {"wikipedia_title": "Pomme", "rarity": "C", "is_shiny": True}},
-                                      {"wikipedia_title": "Loire", "rarity": "L"}]}
-    cards = pack_cards(data)
-    assert cards == [{"title": "Tour Eiffel", "rarity": "UR", "shiny": False},
-                     {"title": "Pomme", "rarity": "C", "shiny": True},
-                     {"title": "Loire", "rarity": "L", "shiny": False}]
-    assert pack_summary(cards) == "3 cartes : 1 L, 1 UR, 1 C"
-    assert pack_summary([]) == "contenu non lu"
-
-
-def test_rate_limit_wait():
-    from wiki_seller.site import rate_limit_wait
-
-    soon = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
-    assert 29 <= rate_limit_wait(soon) <= 32
-    assert rate_limit_wait(None) == 10.0
-    assert rate_limit_wait("2020-01-01T00:00:00Z") == 2.0  # déjà passé : petit délai
-    far = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
-    assert rate_limit_wait(far) == 120.0
-
-
 def test_night_durations(tmp_path, monkeypatch):
     from wiki_seller.config import _night_durations
 
@@ -203,3 +156,14 @@ def test_price_cache_ttl_from_env(monkeypatch):
     assert load_config().price_cache_ttl == timedelta(hours=24)
     monkeypatch.setenv("PRICE_CACHE_HOURS", "6")
     assert load_config().price_cache_ttl == timedelta(hours=6)
+
+
+def test_obsolete_settings_are_reported(monkeypatch):
+    from wiki_seller.config import obsolete_settings
+
+    for name in ("ACTIONS_VIA", "OPEN_PACKS_HOURS", "PACKS_VERIFY_WAIT", "NOTIFY_URL", "API_TRACE"):
+        monkeypatch.delenv(name, raising=False)
+    assert obsolete_settings() == []
+    monkeypatch.setenv("ACTIONS_VIA", "page")
+    monkeypatch.setenv("OPEN_PACKS_HOURS", "0-6")
+    assert obsolete_settings() == ["ACTIONS_VIA", "OPEN_PACKS_HOURS"]

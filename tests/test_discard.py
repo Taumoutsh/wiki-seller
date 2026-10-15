@@ -1,7 +1,8 @@
 import threading
 import time
 
-from wiki_seller.discard import SessionGate, discard_candidates, should_discard, total_copies
+from wiki_seller.discard import discard_candidates, should_discard, total_copies
+from wiki_seller.session import SessionGate
 from wiki_seller.selection import parse_collection
 
 
@@ -87,6 +88,7 @@ class PriceStub:
 
     def __init__(self, refused=(), transient=True):
         self.refused, self.transient, self.asked = set(refused), transient, []
+        self.retries = 0
 
     def fetch_average(self, card_id, rarity):
         from wiki_seller.site import PriceApiUnavailable
@@ -102,11 +104,11 @@ def price_groups(n):
 
 
 def test_transient_price_refusal_skips_only_that_card(tmp_path, monkeypatch):
-    import wiki_seller.main as main
+    import wiki_seller.pricing as main
 
     from .test_end_to_end import make_config
 
-    monkeypatch.setattr(main, "PRICE_RETRY_PAUSE", 0)
+    monkeypatch.setattr(main, "RETRY_PAUSE", 0)
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
     config = make_config(tmp_path, "http://127.0.0.1:1", [])
     site = PriceStub(refused={"X1"})
@@ -120,14 +122,14 @@ def test_transient_price_refusal_skips_only_that_card(tmp_path, monkeypatch):
 
 
 def test_price_api_given_up_after_repeated_or_forbidden_refusals(tmp_path, monkeypatch):
-    import wiki_seller.main as main
+    import wiki_seller.pricing as main
 
     from .test_end_to_end import make_config
 
-    monkeypatch.setattr(main, "PRICE_RETRY_PAUSE", 0)
+    monkeypatch.setattr(main, "RETRY_PAUSE", 0)
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
     config = make_config(tmp_path, "http://127.0.0.1:1", [])
-    refused = {f"X{i}" for i in range(main.PRICE_FAILURES_BEFORE_GIVING_UP)}
+    refused = {f"X{i}" for i in range(main.FAILURES_BEFORE_GIVING_UP)}
     site = PriceStub(refused=refused)
     _, unknown, complete = main.fetch_averages(site, config, price_groups(8))
     assert complete and len(site.asked) == len(refused) and len(unknown) == 8
@@ -140,7 +142,7 @@ def test_price_api_given_up_after_repeated_or_forbidden_refusals(tmp_path, monke
 
 
 def test_price_pause_gives_way_to_a_waiting_pass(tmp_path, monkeypatch):
-    import wiki_seller.main as main
+    import wiki_seller.pricing as main
 
     from .test_end_to_end import make_config
 
@@ -156,7 +158,7 @@ def test_discard_restarts_sooner_when_prices_were_missing(tmp_path):
     import json
     from datetime import datetime, timedelta, timezone
 
-    from wiki_seller.main import DiscardWorker
+    from wiki_seller.discard import next_start
 
     from .test_end_to_end import make_config
 
@@ -165,9 +167,9 @@ def test_discard_restarts_sooner_when_prices_were_missing(tmp_path):
     finished = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
     progress = config.state_dir / "discard_progress.json"
     progress.write_text(json.dumps({"finished_at": finished, "unpriced": 0}), encoding="utf-8")
-    assert DiscardWorker.recently_finished(config)  # tout lu : attente d'une heure
+    assert next_start(config)  # tout lu : attente d'une heure
     progress.write_text(json.dumps({"finished_at": finished, "unpriced": 3}), encoding="utf-8")
-    assert not DiscardWorker.recently_finished(config)  # prix manquants : relance après 15 min
+    assert not next_start(config)  # prix manquants : relance après 15 min
 
 
 def test_candidates_carry_the_copy_ids_not_on_sale():

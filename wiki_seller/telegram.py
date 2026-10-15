@@ -13,6 +13,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .state import read_json, write_json
+
 log = logging.getLogger("wiki_seller")
 
 POLL_SECONDS = 50  # attente maximale d'une requête getUpdates (long polling)
@@ -34,13 +36,13 @@ Votre message sera supprimé dès qu'il sera lu."""
 
 def session_cookie_names(text: str) -> list[str]:
     """Noms des cookies de session (« …auth-token… ») trouvés dans un message."""
-    from .site import parse_cookies
+    from .session import parse_cookies
 
     return [name for name, value in parse_cookies(text) if "auth-token" in name and value]
 
 
 def normalize_cookies(text: str) -> str:
-    from .site import parse_cookies
+    from .session import parse_cookies
 
     return "; ".join(f"{name}={value}" for name, value in parse_cookies(text))
 
@@ -71,14 +73,10 @@ class TelegramBot:
     # ─────────────────────────── État (dernier message lu, dernière demande) ───────────────────────────
 
     def _state(self) -> dict:
-        try:
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
+        return read_json(self.state_file, {})
 
     def _save_state(self, state: dict) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self.state_file.write_text(json.dumps(state), encoding="utf-8")
+        write_json(self.state_file, state)
 
     # ─────────────────────────── Lecture des messages ───────────────────────────
 

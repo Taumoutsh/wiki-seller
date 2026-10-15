@@ -99,18 +99,22 @@ def parse_collection(entries: list[dict], excluded_copy_ids: set[str] = frozense
     return list(groups.values())
 
 
+def auction_refs(auction: dict) -> set[str]:
+    """Identifiants (carte ou exemplaire) auxquels une enchère en cours fait référence."""
+    card = auction.get("card") if isinstance(auction.get("card"), dict) else {}
+    return {r for r in (_str(auction.get("card_id")), _str(auction.get("user_card_id")), _str(card.get("id"))) if r}
+
+
 def count_listed(group: CardGroup, selling: list[dict]) -> int:
     """Nombre d'enchères en cours portant sur un exemplaire de cette carte."""
     ids = {group.card_id, *group.copy_ids}
-    total = 0
-    for auction in selling:
-        if not isinstance(auction, dict):
-            continue
-        card = auction.get("card") if isinstance(auction.get("card"), dict) else {}
-        refs = {_str(auction.get("card_id")), _str(auction.get("user_card_id")), _str(card.get("id"))}
-        if refs & ids:
-            total += 1
-    return total
+    return sum(1 for a in selling if isinstance(a, dict) and auction_refs(a) & ids)
+
+
+def copies_not_on_sale(group: CardGroup, selling: list[dict]) -> list[str]:
+    """Exemplaires de la carte qui ne sont dans aucune enchère en cours."""
+    listed = set().union(*(auction_refs(a) for a in selling if isinstance(a, dict)))
+    return [c for c in group.copy_ids if c not in listed]
 
 
 def sale_price(average: float, ratio: float) -> int:
@@ -123,8 +127,8 @@ class SaleItem:
     card_id: str
     title: str
     rarity: str | None
-    average: float | None  # None : prix inconnu côté API, lu dans la fenêtre d'enchère
-    price: int | None
+    average: float
+    price: int
     copies_to_sell: int
     copy_ids: tuple[str, ...] = ()  # exemplaires possédés (secours si le site attend leur id)
 
@@ -148,20 +152,16 @@ def build_sale_plan(
     ratio: float,
     unknown_prices: set[str] = frozenset(),
 ) -> SalePlan:
-    """Liste des cartes à vendre, de la plus chère à la moins chère.
-
-    Les cartes dont l'API n'a pas donné le prix (`unknown_prices`) passent en dernier :
-    leur prix sera lu dans la fenêtre d'enchère."""
+    """Liste des cartes à vendre, de la plus chère à la moins chère. Les cartes dont le
+    prix n'a pas pu être lu (`unknown_prices`) sont laissées pour la passe suivante."""
     items: list[SaleItem] = []
-    unknown: list[SaleItem] = []
     skipped: list[tuple[str, str]] = []
     for group in groups:
         copies = copies_available(group, safe_names, selling)
         if copies <= 0:
             continue
         if group.card_id in unknown_prices:
-            unknown.append(SaleItem(group.card_id, group.title, group.rarity, None, None, copies,
-                                    tuple(group.copy_ids)))
+            skipped.append((group.title, "prix illisible pour l'instant"))
             continue
         average = averages.get(group.card_id)
         if not average or average <= 0:
@@ -174,8 +174,7 @@ def build_sale_plan(
         items.append(SaleItem(group.card_id, group.title, group.rarity, average, price, copies,
                               tuple(group.copy_ids)))
     items.sort(key=lambda i: (-i.average, normalize_name(i.title)))
-    unknown.sort(key=lambda i: normalize_name(i.title))
-    return SalePlan(items=items + unknown, skipped=skipped)
+    return SalePlan(items=items, skipped=skipped)
 
 
 @dataclass

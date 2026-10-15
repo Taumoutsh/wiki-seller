@@ -1,91 +1,65 @@
 # wiki-seller
 
-Met automatiquement aux enchères les cartes de votre collection
-[WikiMasters](https://www.wiki-masters.com), sauf celles listées dans `safed_cards.json`.
+Automatise votre compte [WikiMasters](https://www.wiki-masters.com) : mise aux enchères
+des cartes de valeur, achat des cartes voulues, défausse des cartes sans valeur, et un
+bot Telegram pour la session et les bilans.
 
 À chaque passe, le script :
 
-0. entre **0 h et 6 h** (heure de Paris), ouvre tous les paquets disponibles (voir
-   « Paquets »), puis mise sur les cartes de `wanted_cards.json` (voir « Achats ») ;
-1. réutilise la session enregistrée dans `state/`, sinon celle de `SESSION_COOKIES`,
-   sinon se connecte avec `MAIL` / `PASSWORD` sur `/login` (voir « Première connexion »).
-2. compte les enchères en cours. Le site en autorise 5 à la fois : s'il n'y a plus
-   de place, la vente s'arrête là.
-3. lit la collection, **limitée aux raretés de `SELL_RARITIES`** (par défaut
-   légendaires `L` et super rares `SR`), et retire les cartes protégées. Pour une carte protégée,
-   **un exemplaire est conservé** et les doublons sont vendus.
-4. classe les cartes restantes **de la plus chère à la moins chère**, selon le prix
-   moyen du marché.
-5. pour chaque carte, tant qu'il reste de la place : ouvre la carte dans
-   « Collection », clique sur **« Mettre aux enchères »**, attend la **« Moyenne »**,
-   saisit une mise de départ de **70 % du prix moyen arrondi à l'entier inférieur**,
-   ajustée d'après les enchères en cours de la même carte (voir `MARKET_ADJUST`),
-   choisit **1 h** et clique sur **« Lancer l'enchère »**. Une carte sans prix moyen
-   (vide ou 0) est ignorée.
-6. au-delà de 150 exemplaires dans la collection, lance en arrière-plan la défausse des
-   cartes valant moins de 15 (voir « Défausse automatique »).
+1. se connecte (voir « Connexion ») ;
+2. mise sur les cartes de `wanted_cards.json` (voir « Achats ») ;
+3. met en vente, s'il reste de la place (le site autorise 5 enchères à la fois), les
+   cartes des raretés `SELL_RARITIES` (par défaut légendaires `L` et super rares `SR`),
+   **de la plus chère à la moins chère**, sauf celles de `safed_cards.json` (pour une
+   carte protégée, un exemplaire est conservé et les doublons sont vendus). Mise de
+   départ : **70 % du prix moyen du marché**, arrondie à l'entier inférieur et ajustée
+   d'après les enchères en cours de la même carte (`MARKET_ADJUST`), pour **1 h**. Une
+   carte sans prix moyen est ignorée ; une carte dont le prix n'a pas pu être lu
+   attend la passe suivante ;
+4. lance la défausse en arrière-plan (voir « Défausse automatique ») ;
+5. envoie le bilan Telegram si son heure est venue (voir « Bot Telegram »).
 
 En mode `--loop`, la passe suivante démarre **`RUN_INTERVAL` après la dernière mise en
-vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient déjà
-prises, elle démarre dès la fin de la première enchère en cours, et au plus tard
-`RUN_INTERVAL` plus tard (les ventes de nuit durent jusqu'à 12 h).
+vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient prises,
+elle démarre dès la fin de la première enchère en cours, et au plus tard `RUN_INTERVAL`
+plus tard (les ventes de nuit durent jusqu'à 12 h).
+
+Toutes les actions passent par l'API du site, comme la page elle-même : aucune
+vérification humaine n'est jamais contournée.
 
 ## Défausse automatique (arrière-plan)
 
-À chaque réveil (passe ou surenchère), le script lance la défausse dans un **thread à
-part** (sauf si elle tourne déjà, ou s'est terminée il y a moins d'une heure, ou moins
-de 15 minutes si des prix n'avaient pas pu être lus). Ce thread
-lit toute la collection et compte les exemplaires, toutes raretés et doublons compris.
-Au-delà de **`DISCARD_TRIGGER` (150)**, il défausse toutes les cartes qui valent **moins
-de `DISCARD_BELOW` (15)** sur le marché, **au fil de l'eau** : il examine les cartes des
-plus communes aux plus rares (`C`, `PC`, `R`, `SR`, `UR`, `L`), lit le prix de chacune
-et la défausse aussitôt si elle vaut moins de 15, un exemplaire à la fois (le journal
-fait le point toutes les 100 cartes examinées). Avec `ACTIONS_VIA=api` (par défaut), il
-envoie directement la requête de la fiche, `POST /api/user-cards/{exemplaire}/discard`,
-sans ouvrir de page (environ 1 s par exemplaire). Avec `ACTIONS_VIA=page`, il ouvre la
-carte depuis « Collection », clique sur **« Défausser »** dans sa fiche, puis valide la
-fenêtre « Défausser cette carte ? ». Chaque exemplaire défaussé rapporte 1 wikibidou.
-Si une défausse tourne déjà, aucune autre n'est lancée.
+À chaque réveil (passe ou surenchère), un **thread à part** est lancé, sauf s'il tourne
+déjà ou s'est terminé il y a moins d'une heure (15 min si des prix n'avaient pas pu
+être lus). Il lit toute la collection et compte les exemplaires. Au-delà de
+**`DISCARD_TRIGGER` (150)**, il examine les cartes **des plus communes aux plus rares**
+(`C`, `PC`, `R`, `SR`, `UR`, `L`) : il lit le prix de chacune (cache, sinon le site) et
+la **défausse aussitôt** si elle vaut moins de **`DISCARD_BELOW` (15)**, un exemplaire
+à la fois (`POST /api/user-cards/{exemplaire}/discard`, 1 wikibidou chacun).
 
-- **Cartes défaussées :** prix moyen connu strictement inférieur à 15, ou aucune vente
-  connue pour une commune (`C`) ou peu commune (`PC`). Tous les exemplaires partent,
-  y compris le dernier.
-- **Cartes jamais défaussées :** celles de `safed_cards.json` et de
-  `wanted_cards.json`, les exemplaires en vente ou engagés dans un échange, les cartes
-  rares sans prix connu, et celles dont le prix n'a pas pu être lu. Si l'API des prix
-  refuse une carte en passant (trop de requêtes, panne), seule cette carte est laissée
-  de côté (pause de 30 s, puis carte suivante) et redemandée à la défausse suivante ;
-  l'API n'est abandonnée qu'après 5 refus de suite, ou dès un accès interdit.
-- **Une seule session à la fois :** la défausse et les passes partagent la même
-  session du site. Pour ne pas la faire annuler, un seul navigateur est ouvert à la
-  fois. Quand une passe ou une surenchère se réveille, la défausse se met en pause
-  après la page de collection, le prix ou la carte en cours, puis reprend là où elle
-  s'était arrêtée une fois la passe terminée : la collection n'est lue qu'une fois, et
-  les prix déjà lus restent dans `state/price_cache.json`.
-- **Reprise après un redémarrage :** l'avancement (collection lue, carte en cours d'examen)
-  est sauvegardé dans `state/discard_progress.json`, puis repris au réveil suivant s'il
-  date de moins de 24 h. Supprimez ce fichier pour repartir de zéro.
-- **Simulation :** en `--dry-run`, la fiche est ouverte et le bouton trouvé, mais
-  rien n'est défaussé.
-- **Passe unique :** sans `--loop`, le script attend la fin de la défausse avant de
-  s'arrêter.
+- **Défaussées :** prix moyen strictement inférieur à 15, ou aucune vente connue pour
+  une commune (`C`) ou peu commune (`PC`). Tous les exemplaires, y compris le dernier.
+- **Jamais défaussées :** les cartes de `safed_cards.json` et de `wanted_cards.json`,
+  les exemplaires en vente ou en échange, les cartes rares sans vente connue, et celles
+  dont le prix n'a pas pu être lu (redemandées la fois suivante).
+- **Une session à la fois :** la défausse et les passes partagent la session du site ;
+  un seul navigateur est ouvert à la fois. Quand une passe se réveille, la défausse lui
+  laisse la place après la page, le prix ou l'exemplaire en cours, puis reprend où elle
+  en était.
+- **Reprise :** l'avancement est gardé dans `state/discard_progress.json` (24 h au plus),
+  même après un redémarrage. Supprimez ce fichier pour repartir de zéro.
+- **Journal :** une ligne par exemplaire défaussé, et toutes les 100 cartes examinées un
+  point d'étape avec le temps moyen par prix et le nombre de refus du site.
 
-Chaque défausse est notée dans le journal (`Défausse : …`), avec la requête envoyée
-par la page. `DISCARD_BELOW=0` désactive la défausse.
+`DISCARD_BELOW=0` désactive la défausse. En `--dry-run`, rien n'est envoyé.
 
-## Paquets
+## Prix moyens
 
-**Désactivé par défaut** : le site exige désormais une vérification humaine pour ouvrir
-les paquets, ouvrez-les à la main. Si `OPEN_PACKS_HOURS` est réglé (par ex. `0-6`), chaque passe va dans « Paquets »,
-clique sur « Ouvrir », fait défiler les 5 cartes avec la flèche, clique sur « Continuer »
-et recommence tant qu'il reste des paquets. Le site en stocke 10 au maximum. En
-simulation (`--dry-run`), aucun paquet n'est ouvert.
-
-Si le site exige une **vérification anti-bot** pour ouvrir les paquets (réponse
-`human_verification_required`), le script ne la contourne pas : il recharge une fois la
-page des paquets et retente 5 s plus tard ; si le site la redemande, il le signale dans le
-journal et suspend l'ouverture automatique 12 h (`state/packs_pause.json`). Ouvrez-les
-à la main en attendant ; supprimez ce fichier pour réessayer plus tôt.
+Les prix viennent de `/api/marketplace/cards/<id>/sales?scope=summary`, une requête par
+carte, gardés `PRICE_CACHE_HOURS` (24 h) dans `state/price_cache.json`, partagé par la
+vente et la défausse. Un refus passager du site (trop de requêtes, panne) ne fait
+laisser de côté que la carte concernée, après 30 s de pause ; l'API n'est abandonnée
+qu'après 5 refus de suite, ou dès un accès interdit.
 
 ## Achats (wanted_cards.json)
 
@@ -100,124 +74,82 @@ journal et suspend l'ouverture automatique 12 h (`state/packs_pause.json`). Ouvr
 l'autre. Pour chaque carte :
 
 - si vous avez déjà une enchère sur cette carte dans « Mes enchères », elle est reprise ;
-- sinon, le script cherche la carte dans « Marché » et choisit l'enchère la moins chère
+- sinon, le script cherche la carte dans le Marché et choisit l'enchère la moins chère
   dont la mise minimale ne dépasse pas `max_price` ;
-- il clique sur « Miser » avec le montant prérempli par le site (la mise minimale),
-  jamais directement votre maximum ;
-- s'il est dépassé, il **ne surenchérit pas tout de suite** : à chaque passe, il vérifie
-  la vraie mise minimale (champ prérempli) ; si elle reste dans la limite, il attend la
-  fin de l'enchère pour surenchérir ; sinon il abandonne cette enchère et en cherche
+- il mise la mise minimale (lue sur la page de l'enchère), jamais directement votre
+  maximum ;
+- s'il est dépassé, il **ne surenchérit pas tout de suite** : si la nouvelle mise
+  minimale reste dans la limite, il attend la fin de l'enchère ; sinon il en cherche
   une autre ;
-- la boucle se réveille pour la **dernière minute** de l'enchère (avant une passe
-  normale si les deux se chevauchent), relit l'enchère **chaque seconde** et, si vous
-  n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (5 par défaut) de la fin**,
-  dans la limite, directement par l'API avec le pas de surenchère appris sur la page ;
-  une mise des 10 dernières secondes prolonge l'enchère de 60 s : la surveillance
-  continue jusqu'à la vraie fin ;
-- **une seule enchère à la fois par carte** : si vous menez déjà une enchère de cette
-  carte dans « Mes enchères », le script la suit et ne mise nulle part ailleurs ;
-- chaque enchère gagnée (y compris une autre que celle suivie) compte ; une fois
-  `copies` exemplaires obtenus, la carte n'est plus recherchée.
+- la boucle se réveille pour la **dernière minute** de l'enchère, la relit **chaque
+  seconde** et, si vous n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (5)
+  de la fin**, dans la limite ; une mise des 10 dernières secondes prolonge l'enchère
+  de 60 s : la surveillance continue jusqu'à la vraie fin ;
+- **une seule enchère à la fois par carte** ; une fois `copies` exemplaires obtenus,
+  la carte n'est plus recherchée.
 
-Le suivi (enchère choisie, heure de fin, carte obtenue) est dans
-`state/wanted_state.json` ; `wanted_cards.json` n'est jamais modifié par le script. Pour
-racheter une carte déjà obtenue, supprimez sa ligne de `state/wanted_state.json`. Le
-fichier est relu à chaque passe. `MAX_TOTAL_BIDS` limite la somme des mises en cours.
-En simulation, aucune mise n'est faite.
+Le suivi est dans `state/wanted_state.json` ; `wanted_cards.json` n'est jamais modifié.
+Pour racheter une carte déjà obtenue, supprimez sa ligne de `state/wanted_state.json`.
+`MAX_TOTAL_BIDS` limite la somme des mises en cours.
 
-## Installation locale
+## safed_cards.json
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-
-cp .env.example .env                              # puis renseigner MAIL et PASSWORD
-cp safed_cards.example.json safed_cards.json      # puis lister vos cartes à garder
-```
-
-`.env` et `safed_cards.json` ne sont jamais commités (voir `.gitignore`).
-
-### safed_cards.json
-
-Une liste JSON des noms de cartes à ne pas vendre, tels qu'affichés sur le site :
+Une liste JSON des noms de cartes à ne pas vendre ni défausser, tels qu'affichés sur le
+site :
 
 ```json
-[
-  "Tour Eiffel",
-  "Victor Hugo"
-]
+["Tour Eiffel", "Victor Hugo"]
 ```
 
-La comparaison ignore les majuscules, les accents et les espaces en trop. Le fichier
-est relu à chaque passe : on peut le modifier sans redémarrer le script. S'il est
-absent, le script refuse de tourner. Une liste vide `[]` vend tout.
+La comparaison ignore les majuscules, les accents et les espaces en trop. Le fichier est
+relu à chaque passe. S'il est absent, le script refuse de tourner ; une liste vide `[]`
+vend tout.
 
-## Première connexion (vérification Cloudflare)
+## Connexion
 
-Sur la page `/login`, le bouton « Connexion » reste désactivé tant que la case
-Cloudflare « Vérifiez que vous êtes humain » n'est pas validée. Le script ne coche pas
-cette case à votre place. Il remplit le formulaire, puis attend :
+Le script essaie, dans l'ordre : la session enregistrée (`state/storage_state.json`, que
+le site renouvelle tout seul), la dernière session reçue par Telegram, `SESSION_COOKIES`,
+puis `MAIL`/`PASSWORD` sur `/login`. Sur `/login`, « Connexion » reste désactivé tant que
+la case Cloudflare « Vérifiez que vous êtes humain » n'est pas validée : le script ne la
+coche pas. Il attend 30 s qu'elle passe seule (5 min avec `--headed`, le temps de la
+cocher vous-même), puis demande une session par Telegram si le bot est configuré.
 
-- sans écran (par défaut), 30 s. Si la vérification ne passe pas toute seule, il
-  s'arrête avec le message « Connexion bloquée par la vérification anti-bot Cloudflare » ;
-- avec `--headed`, 5 min, le temps que vous cochiez la case dans la fenêtre ouverte.
+### Copier la session d'un navigateur
 
-Une fois connecté, la session est enregistrée dans `state/storage_state.json` et
-réutilisée aux passes suivantes. Le site la renouvelle tout seul tant que le script
-tourne régulièrement.
-
-### Sur un serveur sans écran : copier la session d'un navigateur
-
-1. Sur votre téléphone ou votre ordinateur, connectez-vous à wiki-masters.com (en
-   cochant la case vous-même).
+1. Sur votre téléphone ou votre ordinateur, connectez-vous à wiki-masters.com.
 2. Ajoutez un favori dont l'adresse est :
 
    ```
    javascript:(()=>{const c=document.cookie.split('; ').filter(x=>x.startsWith('sb-')).join('; ');navigator.clipboard.writeText(c).then(()=>alert('Copié : '+c.split('; ').length+' cookie(s)'),()=>prompt('Tout sélectionner et copier :',c))})()
    ```
 
-   puis ouvrez ce favori sur wiki-masters.com : les cookies de session (au moins deux,
-   `…-auth-token.0` et `…-auth-token.1`) sont copiés, sur une seule ligne.
-3. Sur le serveur, lancez `./update_session.sh`, collez les cookies (une ou plusieurs
-   lignes, ils ne s'affichent pas) et validez par une ligne vide. Le script réécrit
-   `SESSION_COOKIES` dans `.env`, supprime l'ancienne session de `state/` et relance le
-   conteneur (`--no-restart` pour ne pas le relancer). À la main, la ligne s'écrit
-   `SESSION_COOKIES=sb-…-auth-token.0=base64-…;sb-…-auth-token.1=…`.
-4. **Ne vous déconnectez pas** ensuite sur ce navigateur : « Se déconnecter » ferme
-   aussi la session copiée. N'utilisez plus non plus cette session sur le téléphone :
-   deux appareils qui la renouvellent chacun de leur côté peuvent la faire annuler.
-   Effacez plutôt les données du site (Safari : Réglages → Safari → Avancé → Données
-   des sites web) puis reconnectez-vous : vous aurez une session à vous.
+   puis ouvrez-le sur wiki-masters.com : les cookies de session (`…-auth-token.0` et
+   `…-auth-token.1`) sont copiés sur une seule ligne.
+3. Envoyez cette ligne au bot Telegram quand il la demande, ou écrivez-la dans `.env`
+   (`SESSION_COOKIES=sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…`), supprimez
+   `state/storage_state.json` et relancez le conteneur (`docker compose up -d`).
+4. **Ne vous déconnectez pas** ensuite sur ce navigateur (cela fermerait aussi la
+   session copiée), et ne l'utilisez plus sur un autre appareil : deux appareils qui la
+   renouvellent chacun de leur côté peuvent la faire annuler.
 
-Le script n'utilise `SESSION_COOKIES` que s'il n'a pas de session valide dans `state/`.
-Si le journal indique « La session de SESSION_COOKIES est expirée », recommencez ces
-étapes avec une nouvelle copie.
-
-### Renouveler la session depuis Telegram
-
-Avec un bot Telegram, plus besoin d'aller sur le serveur : quand aucune session ne
-fonctionne plus (ni celle de `state/`, ni `SESSION_COOKIES`, ni la connexion par
-`MAIL`/`PASSWORD`, en général bloquée par Cloudflare), le bot vous envoie le lien du site et la marche à suivre, et il suffit
-de lui **répondre avec la ligne copiée par le favori** (étape 2 ci-dessus).
+## Bot Telegram
 
 1. Dans Telegram, écrivez à **@BotFather** : `/newbot`, choisissez un nom ; il vous
    donne le jeton du bot (`123456:ABC…`) → `TELEGRAM_BOT_TOKEN` dans `.env`.
-2. Écrivez n'importe quoi à votre nouveau bot, puis ouvrez
+2. Écrivez n'importe quoi à votre bot, puis ouvrez
    `https://api.telegram.org/bot<JETON>/getUpdates` : le nombre après `"chat":{"id":`
    est votre identifiant → `TELEGRAM_CHAT_ID` dans `.env`. Relancez le conteneur.
 
-Quand la session expire, le script se met en attente (`TELEGRAM_WAIT`, 60 min par
-défaut, puis il réessaie au réveil suivant) et vous écrit. Vous répondez avec les
-cookies ; le bot **supprime aussitôt votre message**, essaie la session sur le site et
-vous confirme qu'elle est acceptée (✅) ou refusée (❌, renvoyez-en une). Pas de nouveau
-message avant 3 h tant que vous n'avez pas répondu. La session reçue est gardée dans
-`state/session_cookies.txt` pour les redémarrages. Seuls les messages de
-`TELEGRAM_CHAT_ID` sont lus. Les cookies transitent par les serveurs de Telegram :
-gardez le bot pour vous seul.
+Seuls les messages de `TELEGRAM_CHAT_ID` sont lus. Les cookies transitent par les
+serveurs de Telegram : gardez le bot pour vous seul.
 
-**Bilan toutes les 2 h** (`REPORT_HOURS`, `0` pour le couper) : le même bot vous envoie
-l'argent gagné depuis le bilan précédent et le solde du compte, par exemple :
+**Session expirée :** le bot vous envoie le lien du site et la marche à suivre ; vous
+lui répondez avec la ligne copiée par le favori. Il **supprime aussitôt votre message**,
+essaie la session et confirme (✅) ou en demande une autre (❌). Le script attend
+`TELEGRAM_WAIT` (60 min), puis réessaie au réveil suivant, sans nouveau message avant
+3 h. La session acceptée est gardée dans `state/session_cookies.txt`.
+
+**Bilan toutes les 2 h** (`REPORT_HOURS`, `0` pour le couper) :
 
 ```
 📊 Bilan WikiMasters (14:00 → 16:02)
@@ -227,106 +159,88 @@ Total gagné : +207
 👛 Solde actuel : 1 234 wikibidous
 ```
 
-Les ventes sont les prix finaux de vos enchères conclues (historique du site) ; chaque
-exemplaire défaussé rapporte 1 wikibidou. Le bilan part au premier réveil après
-l'échéance (pas en `--dry-run`) ; le compteur est gardé dans `state/report.json`.
+Ventes : prix finaux de vos enchères conclues (historique du site) ; défausses : 1
+wikibidou par exemplaire (compteur dans `state/report.json`). Pas de bilan en `--dry-run`.
 
-**Bilan à la demande :** envoyez **`/update`** (ou `/bilan`) au bot, en mode `--loop` :
-il répond « ⏳ Bilan en préparation… » puis envoie le bilan depuis le dernier bilan
-automatique, sans changer le rythme des 2 h. S'il arrive juste avant un réveil (moins de
-90 s), il part juste après. Pendant une demande de session, le bot rappelle d'abord
-d'envoyer les cookies. Tout autre message reçoit la liste des commandes.
+**`/update`** (ou `/bilan`), en mode `--loop` : bilan immédiat depuis le dernier bilan
+automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il
+part juste après. Tout autre message reçoit la liste des commandes.
 
 ## Utilisation
 
 ```bash
-python -m wiki_seller --dry-run     # tout sauf « Lancer l'enchère » : à faire en premier
-python -m wiki_seller               # une passe
+python -m wiki_seller --dry-run     # tout simuler : à faire en premier
+python -m wiki_seller               # une passe (attend la fin de la défausse)
 python -m wiki_seller --loop        # en continu
 ```
 
-Options : `--headed` affiche le navigateur ; `--debug` enregistre une capture d'écran
-et le HTML à chaque étape dans `state/debug/`.
+`--headed` affiche le navigateur ; `--debug` enregistre une capture d'écran et le HTML à
+chaque étape dans `state/debug/`. Le journal est dans `state/seller.log`.
 
-Le journal est écrit dans `state/seller.log`. En cas d'erreur sur une carte, une
-capture d'écran et le HTML de la page sont enregistrés dans `state/debug/`.
-
-### Réglages optionnels (`.env`)
+### Réglages (`.env`)
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `BASE_URL` | `https://www.wiki-masters.com` | Adresse du site |
-| `SAFE_CARDS_FILE` | `safed_cards.json` | Liste des cartes protégées |
-| `STATE_DIR` | `state` | Session, journal, captures |
-| `PRICE_RATIO` | `0.70` | Part du prix moyen utilisée pour la mise |
-| `AUCTION_DURATION_LABEL` | `1 h` | Durée des enchères : libellé exact d'un bouton du site (`10 min`, `30 min`, `1 h`, `3 h`, `6 h`, `12 h`) |
-| `NIGHT_DURATIONS` | `1-3=12 h;3-6=6 h` | Durée des ventes selon l'heure (Paris) : de 1 h à 3 h, enchères de 12 h ; de 3 h à 6 h, de 6 h ; le reste du temps `AUCTION_DURATION_LABEL`. Vide = jamais |
+| `MAIL` / `PASSWORD` | *(requis)* | Identifiants du site |
+| `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir « Connexion ») |
+| `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
+| `PRICE_RATIO` | `0.70` | Part du prix moyen utilisée pour la mise de départ |
+| `MARKET_ADJUST` | `true` | Ajuste la mise d'après les enchères en cours de la même carte : sous leur moyenne, + un écart type ; au-dessus, − un écart type ; moins de 2 enchères : inchangée |
+| `PRICE_FLOOR_RATIO` | `0.5` | Plancher de l'ajustement : jamais sous cette part du prix moyen |
+| `AUCTION_DURATION_LABEL` | `1 h` | Durée des enchères (`10 min`, `30 min`, `1 h`, `3 h`, `6 h`, `12 h`) |
+| `NIGHT_DURATIONS` | `1-3=12 h;3-6=6 h` | Durée des ventes selon l'heure de Paris ; vide = jamais |
 | `RUN_INTERVAL` | *(durée des enchères)* | Délai avant la passe suivante (`10 min`, `1 h`, `1h30`… ; 5 min minimum) |
-| `HEADLESS` | `true` | `false` pour voir le navigateur |
-| `CHROMIUM_EXECUTABLE` | *(vide)* | Chromium déjà installé à utiliser |
-| `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir plus haut) |
-| `OPEN_PACKS_HOURS` | *(vide)* | Heures de Paris où les paquets sont ouverts ; vide = jamais |
-| `PACKS_VERIFY_WAIT` | *(vide)* | Minutes d'attente qu'une personne fasse la vérification humaine (exige `HEADLESS=false` et un écran distant) ; vide = pause de 12 h |
-| `NOTIFY_URL` | *(vide)* | Notification (ntfy) quand une vérification attend quelqu'un |
-| `TELEGRAM_BOT_TOKEN` | *(vide)* | Jeton du bot Telegram qui demande une nouvelle session quand elle expire (voir « Renouveler la session depuis Telegram ») |
-| `TELEGRAM_CHAT_ID` | *(vide)* | Votre identifiant de conversation Telegram : seuls ses messages sont lus |
-| `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse avant de réessayer au réveil suivant |
-| `REPORT_HOURS` | `2` | Bilan Telegram (ventes, défausses, solde) toutes les N heures ; `0` = jamais |
+| `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `3` / `5` | Carte invendue N fois : mise de côté pendant N jours (`state/unsold.json`) |
+| `PRICE_CACHE_HOURS` | `24` | Validité d'un prix moyen en cache |
+| `DISCARD_BELOW` | `15` | Défausse des cartes valant moins que ce prix moyen ; `0` = désactivée |
+| `DISCARD_TRIGGER` | `150` | Exemplaires dans la collection au-delà desquels la défausse est lancée |
 | `WANTED_CARDS_FILE` | `wanted_cards.json` | Cartes à acheter |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
-| `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir (surveillance chaque seconde pendant la dernière minute) |
-| `PRICE_CACHE_HOURS` | `24` | Durée de validité d'un prix moyen en cache (`state/price_cache.json`) ; au-delà, il est relu sur le site |
-| `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `3` / `5` | Carte invendue (enchère terminée sans acheteur, lue dans l'historique) `UNSOLD_MAX_TRIES` fois : plus mise en vente pendant `UNSOLD_COOLDOWN_DAYS` jours, puis retentée ; une vente réussie remet le compteur à zéro. Suivi dans `state/unsold.json` |
-| `MARKET_ADJUST` | `true` | Avant chaque vente, lit les enchères en cours de la même carte (mise actuelle, sinon mise de départ) : si le prix est sous leur moyenne, + un écart type ; au-dessus, - un écart type ; moins de 2 enchères : inchangé |
-| `PRICE_FLOOR_RATIO` | `0.5` | Plancher de l'ajustement : jamais sous cette part du prix moyen |
-| `ACTIONS_VIA` | `api` | `api` : paquets, ventes et mises par requêtes directes ; `page` : clics dans les pages (ancien mode) |
-| `API_TRACE` | *(vide)* | `1` : noter les appels à l'API du site dans `state/api.log` (sans cookies ni en-têtes) ; équivaut à `--trace-api` |
+| `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(vide)* | Bot Telegram (voir « Bot Telegram ») |
+| `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse quand la session a expiré |
+| `REPORT_HOURS` | `2` | Bilan Telegram toutes les N heures ; `0` = jamais |
+| `SAFE_CARDS_FILE` / `STATE_DIR` | `safed_cards.json` / `state` | Emplacements des fichiers |
+| `BASE_URL` | `https://www.wiki-masters.com` | Adresse du site |
+| `HEADLESS` / `CHROMIUM_EXECUTABLE` | `true` / *(vide)* | Navigateur visible, Chromium déjà installé |
 | `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
-| `DISCARD_BELOW` | `15` | Défausse en arrière-plan des cartes valant moins que ce prix moyen (voir « Défausse automatique ») ; `0` = désactivée |
-| `DISCARD_TRIGGER` | `150` | Nombre d'exemplaires dans la collection au-delà duquel la défausse est lancée |
-| `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
+
+Les anciennes options `ACTIONS_VIA`, `OPEN_PACKS_HOURS`, `PACKS_VERIFY_WAIT`,
+`NOTIFY_URL` et `API_TRACE` n'ont plus d'effet ; le journal le signale au démarrage.
 
 ## Docker (serveur)
 
 ```bash
-cp .env.example .env && cp safed_cards.example.json safed_cards.json   # à remplir
-cp wanted_cards.example.json wanted_cards.json                          # ou echo '[]' > wanted_cards.json
+cp safed_cards.example.json safed_cards.json      # à remplir
+cp wanted_cards.example.json wanted_cards.json    # ou echo '[]' > wanted_cards.json
+# créer .env avec au moins MAIL et PASSWORD
 mkdir -p state
 docker compose up -d --build
 docker compose logs -f
 ```
 
-Créez bien `safed_cards.json` et `wanted_cards.json` **avant** le premier `up`. Sinon Docker crée un
-dossier à sa place.
+Créez `safed_cards.json` et `wanted_cards.json` **avant** le premier `up`, sinon Docker
+crée des dossiers à leur place. Le conteneur tourne en `--loop` et redémarre tout seul.
+Ces deux fichiers sont montés depuis le serveur et relus à chaque passe. Le `.env` n'est
+lu qu'à la création du conteneur : après l'avoir modifié, lancez `docker compose up -d`
+(et non `restart`). Session, caches et suivis sont conservés dans `state/`.
 
-Le conteneur tourne en mode `--loop` et redémarre tout seul. Il est limité à 2 cœurs et
-2 Go de RAM (`CPU_LIMIT` et `MEM_LIMIT` dans `.env`). `safed_cards.json` est
-monté depuis le serveur : il suffit de le modifier, sans reconstruire l'image.
+## Organisation du code
 
-Le `.env`, lui, n'est lu qu'à la création du conteneur. Après l'avoir modifié, lancez
-`docker compose up -d` (et non `docker compose restart`, qui garde les anciennes
-valeurs). La session, le cache des prix et l'heure de la dernière vente sont conservés
-dans `state/`.
-
-## Fonctionnement technique
-
-- **Lectures** (collection, enchères en cours, prix moyens pour le classement) : le
-  script utilise l'API JSON que le site appelle lui-même (`/api/my-collection`,
-  `/api/marketplace?mine=1`, `/api/marketplace/cards/<id>/sales?scope=summary`),
-  depuis la page connectée.
-- **Actions** (par défaut, `ACTIONS_VIA=api`) : les requêtes que la page envoie elle-même,
-  depuis la page connectée : `POST /api/packs/open` (sans corps, renvoie les 5 cartes),
-  `POST /api/marketplace` (`card_id` = identifiant de l'exemplaire possédé, `base_amount`, `duration_minutes`) et
-  `POST /api/marketplace/<id>/bid` (`amount`, lu dans le champ prérempli de la page de
-  l'enchère). Une carte sans prix moyen côté API passe par la fenêtre d'enchère.
-- **Mise en vente avec `ACTIONS_VIA=page`** : le script passe par l'interface, comme à la main.
-  Le prix de la mise est calculé à partir de la « Moyenne » affichée dans la fenêtre
-  d'enchère. Le prix moyen de l'API ne sert qu'au classement, et de secours si le
-  libellé est absent.
-- Les libellés utilisés sont regroupés en haut de `wiki_seller/site.py`, pour les
-  ajuster si le site change : « Mettre aux enchères », « Moyenne »,
-  « Mise de départ », « 1 h », « Lancer l'enchère », « Enchères actives : X/5 »,
-  « Défausser ».
+| Module | Rôle |
+|---|---|
+| `main.py` | Ligne de commande, journal |
+| `scheduler.py` | Passes, boucle, réveils (surenchères, `/update`) |
+| `session.py` | Un seul navigateur à la fois, connexion |
+| `site.py` | Client de l'API du site |
+| `selling.py` | Passe de vente |
+| `buying.py` | Achats et surenchères |
+| `discard.py` | Défausse en arrière-plan |
+| `pricing.py` | Prix moyens et leur cache |
+| `selection.py` | Logique pure : collection, plan de vente, ajustement au marché |
+| `unsold.py` | Cartes invendues mises de côté |
+| `telegram.py` / `report.py` | Bot Telegram et bilans |
+| `state.py` / `config.py` | Fichiers d'état et horloge ; réglages |
 
 ## Tests
 
@@ -335,5 +249,6 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-`tests/test_end_to_end.py` lance un vrai Chromium contre une imitation locale du site
-(`tests/fake_site.py`) : connexion, popup anti-bot, collection, fenêtre d'enchère.
+Les tests tournent en parallèle (`pytest-xdist`). `tests/test_end_to_end.py` lance un
+vrai Chromium contre une imitation locale du site (`tests/fake_site.py`) et du bot
+Telegram (`tests/fake_telegram.py`).

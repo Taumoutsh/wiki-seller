@@ -1,27 +1,12 @@
-"""Faux wiki-masters.com minimal pour tester le parcours complet en local.
-
-Il reproduit les éléments utilisés par le script : page /login dont le bouton attend
-une vérification anti-bot, popup anti-bot avec case à cocher, API JSON, page /collection avec
-recherche, tuiles, fenêtre « Mettre aux enchères » et « Prix moyen » chargé en différé."""
+"""Faux wiki-masters.com minimal pour tester le parcours complet en local : page /login
+dont le bouton attend une vérification anti-bot, API JSON (collection, prix, enchères,
+mise en vente, défausse, mises), et page d'enchère avec la mise minimale préremplie."""
 
 import json
 import re
 import threading
-import time
-from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-
-# Comme le vrai site : /signup affiche l'inscription, avec un lien vers /login.
-SIGNUP_HTML = """<!doctype html><html><body>
-<h2>Créer un compte</h2>
-<p>Déjà inscrit ? <a href="/login">Se connecter</a></p>
-<form id="signup" onsubmit="event.preventDefault(); fetch('/auth/signup', {method: 'POST'})">
-  <label for="username">Nom d'utilisateur</label><input id="username" autocomplete="username" placeholder="WikiMaster42">
-  <label for="email">Adresse courriel</label><input id="email" type="email" autocomplete="email">
-  <label for="password">Mot de passe</label><input id="password" type="password" autocomplete="new-password">
-  <button type="submit">Créer mon compte</button>
-</form></body></html>"""
 
 # /login : « Connexion » reste désactivé tant que la vérification anti-bot (Cloudflare
 # Turnstile sur le vrai site) n'est pas validée. __CHALLENGE__ : "auto" la valide seule
@@ -43,134 +28,7 @@ document.getElementById('login').onsubmit = async (e) => {
 };
 </script></body></html>"""
 
-COLLECTION_HTML = """<!doctype html><html><body>
-<div id="antibot" class="fixed" style="display:none;position:fixed;inset:0;background:#fff;z-index:10">
-  <label><input type="checkbox" id="human"> Je ne suis pas un robot</label>
-  <button onclick="if(document.getElementById('human').checked){this.parentElement.style.display='none'}">Continuer</button>
-</div>
-<input placeholder="Rechercher par titre ou catégorie..." id="q">
-<div id="grid"></div>
-<div id="detail"></div>
-<script>
-let cards = [];
-const show = (html) => document.getElementById('detail').innerHTML = html;
-async function load() {
-  const r = await fetch('/api/my-collection?sort=rarity&page=0&stats=0');
-  cards = (await r.json()).collection;
-  render();
-  if (!sessionStorage.getItem('antibot-done')) {
-    sessionStorage.setItem('antibot-done', '1');
-    document.getElementById('antibot').style.display = 'block';
-  }
-}
-function render() {
-  const q = document.getElementById('q').value.toLowerCase();
-  const seen = new Set();
-  document.getElementById('grid').innerHTML = cards
-    .filter(c => !seen.has(c.card.id) && seen.add(c.card.id))
-    .filter(c => c.card.wikipedia_title.toLowerCase().includes(q))
-    .map(c => `<div class="cursor-pointer tile" data-id="${c.card.id}"><div><span>${c.card.wikipedia_title}</span></div><span>${c.card.rarity}</span></div>`)
-    .join('');
-  document.querySelectorAll('.tile').forEach(t => t.onclick = () => openCard(t.dataset.id));
-}
-document.getElementById('q').oninput = render;
-function openCard(id) {
-  const c = cards.find(x => x.card.id === id);
-  show(`<div role="dialog"><h2>${c.card.wikipedia_title}</h2><button id="sell">🔨 Mettre aux enchères</button><button id="discard">🗑️ Défausser <span>⊙+1</span></button></div>`);
-  document.getElementById('sell').onclick = () => openAuction(c);
-  document.getElementById('discard').onclick = () => {
-    const copies = cards.filter(x => x.card.id === id);
-    // Comme le site : une confirmation à chaque fois, avec un second bouton « Défausser ».
-    const text = copies.length > 1 ? `Vous en avez ${copies.length}. Un exemplaire sera retiré définitivement.`
-      : "C'est votre dernière copie — elle sera retirée définitivement.";
-    document.getElementById('detail').insertAdjacentHTML('beforeend',
-      `<div><h3>Défausser cette carte ?</h3><p>${text}</p><button id="no">Annuler</button><button id="yes">Défausser</button></div>`);
-    document.getElementById('yes').onclick = () => discard(copies[0]);
-  };
-}
-async function discard(copy) {
-  const r = await fetch(`/api/user-cards/${copy.id}/discard`, {method: 'POST'});
-  if (r.ok) { show(''); await load(); }
-}
-async function openAuction(c) {
-  const mine = await (await fetch('/api/marketplace?page=1&limit=50&sort=recent&mine=1')).json();
-  show(`<div role="dialog"><div class="card-frame">
-    <p>Enchères actives : ${mine.selling.length}/${mine.maxConcurrentAuctions}</p>
-    <div><span>Moyenne</span><span id="avg">...</span></div>
-    <label>MISE DE DÉPART <input aria-label="Mise de départ" inputmode="numeric" id="price" value="1"></label>
-    <div><button class="dur">10 min</button><button class="dur">1 h</button><button class="dur">24 h</button></div>
-    <button id="cancel">Annuler</button><button id="launch">Lancer l'enchère</button>
-  </div></div>`);
-  let duration = null;
-  document.querySelectorAll('.dur').forEach(b => b.onclick = () => duration = b.textContent);
-  document.getElementById('cancel').onclick = () => show('');
-  setTimeout(() => {
-    const avg = window.UI_AVERAGES[c.card.wikipedia_title];
-    document.getElementById('avg').textContent = avg ? `${avg.toLocaleString('fr-FR')} W` : 'Indisponible';
-  }, 800);
-  document.getElementById('launch').onclick = async () => {
-    const r = await fetch('/api/marketplace', {method: 'POST', body: JSON.stringify({
-      card_id: c.id, title: c.card.wikipedia_title,
-      price: document.getElementById('price').value, duration})});
-    if (r.ok) location.href = '/marketplace/' + (await r.json()).auction_id;
-  };
-}
-window.UI_AVERAGES = __UI_AVERAGES__;
-load();
-</script></body></html>"""
-
-
-# /pulls : comme le vrai site, « Ouvrir » (span dans le bouton), « N / 10 paquets
-# disponibles », puis un carrousel de 5 cartes : flèches sans texte, points, et un bouton
-# « Encore k cartes » (désactivé) qui devient « Continuer » sur la dernière carte. La
-# touche flèche droite du clavier ne fait rien (comme sur le vrai site).
-PULLS_HTML = """<!doctype html><html><body><main id="main"></main>
-<script>
-let packs = 0, card = 0, seen = new Set(), arrived = 0;
-const SEEN_AFTER = __SEEN_AFTER__;  // ms sur une carte pour qu'elle compte comme vue
-function leave() { if (Date.now() - arrived >= SEEN_AFTER) seen.add(card); }
-setInterval(() => { if (main.querySelector('.card') && Date.now() - arrived >= SEEN_AFTER && !seen.has(card)) { seen.add(card); reveal(false); } }, 100);
-const main = document.getElementById('main');
-function home() {
-  main.innerHTML = `<h1>Ouvrir un paquet</h1>
-    <button id="open" ${packs ? '' : 'disabled'}><img alt="Paquet"><span>Ouvrir</span></button>
-    <div>${packs} / 10</div><div>paquets disponibles</div>`;
-  document.getElementById('open').onclick = openPack;
-}
-// Vérification humaine : la fenêtre reste affichée tant que le serveur refuse (le test
-// simule la personne qui la fait en levant packs_need_human).
-async function openPack() {
-  const r = await fetch('/api/packs/open', {method: 'POST'});
-  const d = await r.json();
-  if (r.status === 403 && d.human_verification_required) {
-    if (!document.getElementById('verif'))
-      document.body.insertAdjacentHTML('beforeend', '<div id="verif" role="dialog"><h2>Vérification rapide</h2></div>');
-    return setTimeout(openPack, 300);
-  }
-  document.getElementById('verif')?.remove();
-  packs = d.remaining;
-  card = 0; seen = new Set(); reveal();
-}
-function reveal(moved = true) {
-  if (moved) arrived = Date.now();
-  const allSeen = seen.size >= 5 || (SEEN_AFTER === 0);
-  const dots = [0,1,2,3,4].map(i => `<button class="dot">${''}</button>`).join('');
-  main.innerHTML = `<div>Carte ${card + 1} / 5</div><div class="card">Carte n°${card + 1}</div>
-    <div style="display:flex">
-      <button id="prev" ${card ? '' : 'disabled'}><svg width="10" height="10"></svg></button>${dots}
-      <button id="next" ${card < 4 ? '' : 'disabled'}><svg width="10" height="10"></svg></button>
-    </div>
-    ${card < 4 || !allSeen ? `<button disabled>Encore ${SEEN_AFTER ? Math.max(1, 5 - seen.size) : 4 - card} cartes</button>` : '<button id="done">Continuer</button>'}`;
-  document.getElementById('prev').onclick = () => { leave(); card--; reveal(); };
-  document.querySelectorAll('.dot').forEach((d, i) => d.onclick = () => { leave(); card = i; reveal(); });
-  document.getElementById('next').onclick = () => { leave(); card++; reveal(); };
-  const done = document.getElementById('done');
-  if (done) done.onclick = home;
-}
-home();
-// Comme le vrai site : 0 d'abord, le vrai nombre une fois chargé.
-setTimeout(() => { packs = __PACKS__; if (!main.querySelector('.card')) home(); }, 1500);
-</script></body></html>"""
+COLLECTION_HTML = "<!doctype html><html><body><h1>Collection</h1></body></html>"
 
 MARKET_HTML = """<!doctype html><html><body>
 <input type="search" placeholder="Rechercher une carte…"><button disabled>Rechercher</button>
@@ -184,10 +42,7 @@ async function load() {
   const min = a.current_bid === null ? a.base_amount : a.current_bid + __STEP__;
   document.getElementById('a').innerHTML = `<h1>${a.card.wikipedia_title}</h1>
     <p>Votre solde : 1 747 wikibidous</p>
-    <input type="number" aria-label="Montant de la mise" value="${min}">
-    <button id="bid">Miser</button>`;
-  document.getElementById('bid').onclick = () => fetch('/api/marketplace/__ID__/bid', {method: 'POST',
-    body: JSON.stringify({amount: Number(document.querySelector('input').value)})});
+    <input type="number" aria-label="Montant de la mise" value="${min}">`;
 }
 setTimeout(load, 300);
 </script></body></html>"""
@@ -203,35 +58,24 @@ def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", 
 
 
 class FakeWikiMasters:
-    def __init__(self, collection, averages, ui_averages=None, selling=None, max_auctions=5,
-                 mail="me@example.com", password="secret", sales_forbidden=False,
-                 challenge="auto", packs=0, auctions=None, seen_after_ms=0, listing_id="copy",
-                 pack_cooldown=0.0, page_size=None):
+    def __init__(self, collection, averages, selling=None, max_auctions=5, mail="me@example.com",
+                 password="secret", sales_forbidden=False, challenge="auto", auctions=None,
+                 listing_id="copy", page_size=None):
         self.collection = collection
         self.page_size = page_size  # None : toute la collection sur la page 0
         self.averages = averages  # card_id -> moyenne API
-        self.ui_averages = ui_averages if ui_averages is not None else {}
         self.selling = list(selling or [])
         self.max_auctions = max_auctions
         self.mail, self.password = mail, password
         self.sales_forbidden = sales_forbidden
         self.listings = []
         self.challenge = challenge
-        self.packs = packs
-        self.seen_after_ms = seen_after_ms
-        self.pack_cooldown = pack_cooldown  # secondes entre deux ouvertures (429 sinon)
-        self.last_pack_at = -1e9
-        self.rate_limited = 0
-        self.pack_refusals = 0
         self.history = []  # vos ventes terminées (onglet « Historique »)
-        self.packs_need_human = False  # vérification anti-bot exigée (True) ou pour N demandes (int)
         self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
         self.api_listings = []  # corps des mises en vente reçues par l'API
-        self.packs_opened = 0
         self.auctions = {a["id"]: a for a in auctions or []}
         self.bids = []  # (auction_id, montant) misés par nous
         self.logins = 0
-        self.signups = 0
         self.collection_requests = []
         self.discarded = []  # titres des exemplaires défaussés, dans l'ordre
         self.events = []  # ("prix", carte) et ("défausse", titre), dans l'ordre
@@ -272,17 +116,11 @@ class FakeWikiMasters:
             def do_GET(self):
                 url = urlparse(self.path)
                 qs = parse_qs(url.query)
-                if url.path == "/signup":
-                    return self._send(200, SIGNUP_HTML, "text/html; charset=utf-8")
                 if url.path == "/login":
                     html = LOGIN_HTML.replace("__CHALLENGE__", site.challenge)
                     return self._send(200, html, "text/html; charset=utf-8")
                 if url.path == "/collection":
-                    html = COLLECTION_HTML.replace("__UI_AVERAGES__", json.dumps(site.ui_averages))
-                    return self._send(200, html, "text/html; charset=utf-8")
-                if url.path == "/pulls":
-                    html = PULLS_HTML.replace("__PACKS__", str(site.packs)).replace("__SEEN_AFTER__", str(site.seen_after_ms))
-                    return self._send(200, html, "text/html; charset=utf-8")
+                    return self._send(200, COLLECTION_HTML, "text/html; charset=utf-8")
                 if url.path == "/marketplace":
                     return self._send(200, MARKET_HTML, "text/html; charset=utf-8")
                 if url.path.startswith("/marketplace/"):
@@ -346,32 +184,6 @@ class FakeWikiMasters:
                     site.discarded.append(copy["card"]["wikipedia_title"])
                     site.events.append(("défausse", copy["card"]["wikipedia_title"]))
                     return self._send(200, {"ok": True, "wikibidous": 1})
-                if self.path == "/api/packs/open" and self._authed() and site.packs_need_human:
-                    site.pack_refusals += 1
-                    if type(site.packs_need_human) is int:  # nombre de refus avant de laisser passer
-                        site.packs_need_human -= 1
-                    return self._send(403, {"error": "Vérification anti-bot requise pour continuer à ouvrir des paquets.",
-                                            "human_verification_required": True, "code": "human_verification_required"})
-                if self.path == "/api/packs/open" and self._authed() and site.packs > 0 and site.pack_cooldown:
-                    now = time.monotonic()
-                    if now - site.last_pack_at < site.pack_cooldown:
-                        retry = datetime.now(timezone.utc) + timedelta(seconds=site.pack_cooldown - (now - site.last_pack_at))
-                        site.rate_limited += 1
-                        return self._send(429, {"error": "Ouverture trop rapide. Attends un instant avant d'ouvrir un autre paquet.",
-                                                "rate_limited": True, "rate_limit_daily": False,
-                                                "retry_after": retry.isoformat().replace("+00:00", "Z"),
-                                                "packs_remaining": site.packs})
-                    site.last_pack_at = now
-                if self.path == "/api/packs/open" and self._authed() and site.packs == 0:
-                    site.pack_refusals += 1
-                    return self._send(400, {"error": "Aucun paquet disponible", "packs_remaining": 0})
-                if self.path == "/api/packs/open" and self._authed() and site.packs > 0:
-                    site.packs -= 1
-                    site.packs_opened += 1
-                    pulled = [{"id": f"u{site.packs_opened}{i}", "card": {"wikipedia_title": f"Tirage {site.packs_opened}-{i}",
-                                                                           "rarity": r}, "is_shiny": i == 4}
-                              for i, r in enumerate(["C", "C", "PC", "UR", "L"])]
-                    return self._send(200, {"remaining": site.packs, "packs_remaining": site.packs, "cards": pulled})
                 if self.path.startswith("/api/marketplace/") and self.path.endswith("/bid") and self._authed():
                     auction = site.auctions[self.path.split("/")[3]]
                     minimum = auction["base_amount"] if auction["current_bid"] is None else auction["current_bid"] + BID_STEP
@@ -381,9 +193,6 @@ class FakeWikiMasters:
                     auction.update(current_bid=body["amount"], effective_bid=body["amount"], current_bidder_id=ME)
                     return self._send(200, {"auction_id": auction["id"], "current_bid": body["amount"],
                                             "bidder_balance": 1747 - body["amount"]})
-                if self.path == "/auth/signup":
-                    site.signups += 1
-                    return self._send(200, {})
                 if self.path == "/auth/login":
                     if body.get("mail") == site.mail and body.get("pwd") == site.password:
                         site.logins += 1
@@ -392,17 +201,15 @@ class FakeWikiMasters:
                 if self.path == "/api/marketplace" and self._authed():
                     if len(site.selling) >= site.max_auctions:
                         return self._send(400, {"error": "Nombre maximum d'enchères actives atteint"})
-                    if "base_amount" in body:  # requête directe, comme le vrai site
-                        by_card = {c["card"]["id"]: c for c in site.collection}
-                        by_copy = {c["id"]: c for c in site.collection}
-                        known = by_copy if site.listing_id == "copy" else by_card
-                        if body["card_id"] not in known:
-                            return self._send(409, {"error": "Vous ne possédez pas cette carte"})
-                        site.api_listings.append(body)
-                        labels = {10: "10 min", 30: "30 min", 60: "1 h", 360: "6 h", 720: "12 h"}
-                        body = {"card_id": body["card_id"], "title": known[body["card_id"]]["card"]["wikipedia_title"],
-                                "price": str(body["base_amount"]), "duration": labels[body["duration_minutes"]]}
-                    site.listings.append(body)
+                    by_card = {c["card"]["id"]: c for c in site.collection}
+                    by_copy = {c["id"]: c for c in site.collection}
+                    known = by_copy if site.listing_id == "copy" else by_card
+                    if body.get("card_id") not in known:
+                        return self._send(409, {"error": "Vous ne possédez pas cette carte"})
+                    site.api_listings.append(body)
+                    labels = {10: "10 min", 30: "30 min", 60: "1 h", 360: "6 h", 720: "12 h"}
+                    site.listings.append({"card_id": body["card_id"], "title": known[body["card_id"]]["card"]["wikipedia_title"],
+                                          "price": str(body["base_amount"]), "duration": labels[body["duration_minutes"]]})
                     auction = {"id": f"a{len(site.listings)}", "card_id": body["card_id"], "status": "active",
                                "end_at": "2030-01-01T10:00:00Z"}
                     site.selling.append(auction)

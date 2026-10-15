@@ -45,12 +45,10 @@ def parse_duration(text: str) -> timedelta | None:
 
 
 def _hours(value: str) -> tuple[int, int] | None:
-    """« 0-6 » → (0, 6) ; vide → None (désactivé)."""
-    if not value.strip():
-        return None
+    """« 1-3 » → (1, 3) ; illisible → None."""
     match = re.fullmatch(r"\s*(\d{1,2})\s*[-–àa]\s*(\d{1,2})\s*h?\s*", value)
     if not match or not (0 <= int(match.group(1)) <= 23 and 0 <= int(match.group(2)) <= 24):
-        raise ConfigError(f"OPEN_PACKS_HOURS illisible ({value!r}) : écrivez par ex. « 0-6 ».")
+        return None
     return int(match.group(1)), int(match.group(2))
 
 
@@ -62,13 +60,6 @@ def _ratio(name: str, default: str) -> float:
     if not 0 < value <= 1:
         raise ConfigError(f"{name} doit être compris entre 0 et 1.")
     return value
-
-
-def _actions_via(value: str) -> bool:
-    value = value.strip().lower() or "api"
-    if value not in ("api", "page"):
-        raise ConfigError("ACTIONS_VIA doit valoir « api » (requêtes directes) ou « page » (clics).")
-    return value == "api"
 
 
 def _night_durations(value: str) -> tuple[tuple[int, int, str], ...]:
@@ -100,6 +91,21 @@ def _non_negative_int(name: str, default: int) -> int:
     if not raw.isdigit():
         raise ConfigError(f"{name} doit être un nombre entier (0 pour désactiver).")
     return int(raw)
+
+
+# Options des anciennes versions, sans effet aujourd'hui : signalées au démarrage.
+OBSOLETE_SETTINGS = {
+    "ACTIONS_VIA": "toutes les actions passent par l'API",
+    "OPEN_PACKS_HOURS": "l'ouverture des paquets a été retirée",
+    "PACKS_VERIFY_WAIT": "l'ouverture des paquets a été retirée",
+    "NOTIFY_URL": "les notifications passent par le bot Telegram",
+    "API_TRACE": "le journal des appels à l'API a été retiré",
+}
+
+
+def obsolete_settings() -> list[str]:
+    """Options obsolètes encore définies (après load_config, qui lit le .env)."""
+    return [name for name in OBSOLETE_SETTINGS if os.getenv(name, "").strip()]
 
 
 def _rarities(value: str) -> tuple[str, ...]:
@@ -134,12 +140,6 @@ class Config:
     price_cache_ttl: timedelta = timedelta(hours=24)
     # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
     night_durations: tuple[tuple[int, int, str], ...] = ()
-    # Heures (locales, Europe/Paris) où les paquets sont ouverts : [début, fin[ ; None = jamais.
-    packs_hours: tuple[int, int] | None = None
-    # Vérification humaine des paquets : attente qu'une personne la fasse (None = pause directe),
-    # et URL de notification (ntfy) pour la prévenir.
-    packs_verify_wait: timedelta | None = None
-    notify_url: str | None = None
     # Bot Telegram qui demande une nouvelle session quand elle expire (vide = désactivé).
     telegram_token: str = ""
     telegram_chat_id: str = ""
@@ -147,10 +147,6 @@ class Config:
     telegram_api_url: str = "https://api.telegram.org"
     # Bilan Telegram (ventes, défausses, solde) tous les report_every ; None = jamais.
     report_every: timedelta | None = None
-    # Journal des appels à l'API du site dans state/api.log (--trace-api).
-    api_trace: bool = False
-    # Actions (paquets, ventes, mises) par requêtes directes à l'API (True) ou par clics.
-    actions_via_api: bool = False
     # Prix de vente ajusté d'un écart type d'après les enchères en cours de la même carte,
     # sans descendre sous price_floor_ratio × prix moyen.
     market_adjust: bool = False
@@ -183,10 +179,6 @@ class Config:
     @property
     def wanted_state_file(self) -> Path:
         return self.state_dir / "wanted_state.json"
-
-    @property
-    def api_trace_file(self) -> Path:
-        return self.state_dir / "api.log"
 
     @property
     def unsold_file(self) -> Path:
@@ -245,9 +237,6 @@ def load_config() -> Config:
         wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
         snipe_lead=snipe_lead or timedelta(seconds=5),
-        packs_hours=_hours(os.getenv("OPEN_PACKS_HOURS", "")),
-        packs_verify_wait=(timedelta(minutes=wait) if (wait := _positive_int("PACKS_VERIFY_WAIT")) else None),
-        notify_url=os.getenv("NOTIFY_URL", "").strip() or None,
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         telegram_wait=timedelta(minutes=_positive_int("TELEGRAM_WAIT") or 60),
@@ -256,8 +245,6 @@ def load_config() -> Config:
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         price_cache_ttl=timedelta(hours=_positive_int("PRICE_CACHE_HOURS") or 24),
         night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
-        api_trace=_bool(os.getenv("API_TRACE"), False),
-        actions_via_api=_actions_via(os.getenv("ACTIONS_VIA", "api")),
         market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),
         price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),
         discard_below=_non_negative_int("DISCARD_BELOW", 15),

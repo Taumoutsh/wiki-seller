@@ -6,8 +6,8 @@ import os
 import pytest
 
 from wiki_seller.config import Config
-from wiki_seller.main import run_once, run_snipe
-from wiki_seller.site import ListingStatus, SiteError
+from wiki_seller.scheduler import run_once, run_snipe
+from wiki_seller.site import SiteError
 
 from .fake_site import ME, FakeWikiMasters, market_auction
 
@@ -26,9 +26,6 @@ COLLECTION = [
     entry("g1", "G", "Rhône"),
 ]
 API_AVERAGES = {"A": 20, "B": 800, "C": 5000, "D": 300, "F": 150, "G": 100}
-# Valeurs affichées dans la fenêtre (le script doit utiliser celles-ci pour le prix).
-UI_AVERAGES = {"Pomme": 21, "Château de Versailles": 1234, "Tour Eiffel": 5000, "Victor Hugo": 301,
-               "Loire": 150, "Rhône": 100}
 
 
 def make_config(tmp_path, url, safe, wanted=None, **extra):
@@ -37,7 +34,7 @@ def make_config(tmp_path, url, safe, wanted=None, **extra):
     wanted_file = tmp_path / "wanted_cards.json"
     if wanted is not None:
         wanted_file.write_text(json.dumps(wanted), encoding="utf-8")
-    extra = {"packs_hours": None, "wanted_cards_file": wanted_file, **extra}
+    extra = {"wanted_cards_file": wanted_file, **extra}
     return Config(
         mail="me@example.com", password="secret", base_url=url, safe_cards_file=safe_file,
         state_dir=tmp_path / "state", price_ratio=0.7, auction_duration_label="1 h",
@@ -46,32 +43,32 @@ def make_config(tmp_path, url, safe, wanted=None, **extra):
 
 
 def test_full_run_lists_most_expensive_first(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=5) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site:
         config = make_config(tmp_path, site.url, ["tour eiffel", "CHATEAU DE VERSAILLES"])
         result = run_once(config)
 
     assert result.listed == 5 and result.last_listing_at is not None
     assert [(l["title"], l["price"], l["duration"]) for l in site.listings] == [
-        ("Château de Versailles", "863", "1 h"),  # 2 exemplaires, protégée => 1 vendu ; 1234 * 0.7
-        ("Victor Hugo", "210", "1 h"),            # 301 * 0.7 = 210.7
+        ("Château de Versailles", "560", "1 h"),  # 2 exemplaires, protégée => 1 vendu ; 800 * 0.7
+        ("Victor Hugo", "210", "1 h"),
         ("Victor Hugo", "210", "1 h"),
         ("Loire", "105", "1 h"),
         ("Rhône", "70", "1 h"),
     ]
-    assert site.logins == 1 and site.signups == 0
+    assert site.logins == 1
 
 
 def test_login_blocked_by_antibot_check_fails_cleanly(tmp_path, monkeypatch):
-    monkeypatch.setattr("wiki_seller.site.LOGIN_WAIT_HEADLESS", 2)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, challenge="manual") as site:
+    monkeypatch.setattr("wiki_seller.session.LOGIN_WAIT_HEADLESS", 2)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, challenge="manual") as site:
         config = make_config(tmp_path, site.url, [])
         with pytest.raises(SiteError, match="anti-bot"):
             run_once(config)
-    assert site.logins == 0 and site.signups == 0 and site.listings == []
+    assert site.logins == 0 and site.listings == []
 
 
 def test_second_run_reuses_session_and_respects_slots(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=5) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site:
         config = make_config(tmp_path, site.url, [])
         site.selling = [{"id": f"x{i}", "card_id": "zz", "status": "active", "end_at": "2030-01-01T10:00:00Z"}
                         for i in range(3)]
@@ -84,36 +81,24 @@ def test_second_run_reuses_session_and_respects_slots(tmp_path):
 
 
 def test_dry_run_does_not_launch(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
         config = make_config(tmp_path, site.url, [])
         result = run_once(config, dry_run=True)
     assert result.listed == 5 and result.last_listing_at is None
     assert site.listings == []
 
 
-def test_card_without_ui_average_is_skipped(tmp_path):
-    ui = dict(UI_AVERAGES)
-    del ui["Tour Eiffel"]  # la fenêtre affiche « Indisponible »
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, ui, max_auctions=2) as site:
-        config = make_config(tmp_path, site.url, [])
-        run_once(config)
-    assert [l["title"] for l in site.listings] == ["Château de Versailles", "Château de Versailles"]
-
-
-def test_price_api_refused_falls_back_to_window_price(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=2, sales_forbidden=True) as site:
-        config = make_config(tmp_path, site.url, [])
-        result = run_once(config)
-    assert result.listed == 2
-    # Sans classement possible : ordre alphabétique, prix lu dans la fenêtre.
-    assert [(l["title"], l["price"]) for l in site.listings] == [
-        ("Château de Versailles", "863"), ("Château de Versailles", "863")]
-
+def test_cards_without_readable_price_wait_for_the_next_pass(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=2, sales_forbidden=True) as site:
+        with caplog.at_level("INFO"):
+            result = run_once(make_config(tmp_path, site.url, []))
+    assert result.listed == 0 and site.listings == []
+    assert "prix illisible pour l'instant" in caplog.text
 
 def test_only_selected_rarities_are_loaded_and_sold(tmp_path):
     collection = [entry("a1", "A", "Pomme", "SR"), entry("b1", "B", "Château de Versailles", "C"),
                   entry("c1", "C", "Tour Eiffel", "L"), entry("f1", "F", "Loire", "UR")]
-    with FakeWikiMasters(collection, API_AVERAGES, UI_AVERAGES) as site:
+    with FakeWikiMasters(collection, API_AVERAGES) as site:
         config = make_config(tmp_path, site.url, [], sell_rarities=("L", "SR"))
         result = run_once(config, dry_run=True)
     assert result.listed == 2
@@ -124,29 +109,10 @@ def test_only_selected_rarities_are_loaded_and_sold(tmp_path):
 
 
 def test_session_cookies_skip_the_login_page(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, challenge="manual") as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, challenge="manual") as site:
         config = make_config(tmp_path, site.url, [], session_cookies="other=1; session=ok")
         result = run_once(config, dry_run=True)
-    assert result.listed == 5 and site.logins == 0 and site.signups == 0
-
-
-def test_packs_are_opened_during_the_night_window(tmp_path, caplog):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3) as site:
-        config = make_config(tmp_path, site.url, [], packs_hours=(0, 24))
-        with caplog.at_level("INFO"):
-            run_once(config, dry_run=False)
-    assert site.packs_opened == 3 and site.packs == 0
-    # Contenu du paquet : résumé, et détail des UR et L seulement.
-    assert "5 cartes : 1 L, 1 UR, 1 PC, 2 C" in caplog.text
-    assert "★ UR — Tirage 1-3" in caplog.text and "★ L — Tirage 1-4 (brillante)" in caplog.text
-    assert "Tirage 1-2" not in caplog.text
-
-
-def test_packs_are_not_opened_in_dry_run_or_outside_the_window(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=2) as site:
-        run_once(make_config(tmp_path, site.url, [], packs_hours=(0, 24)), dry_run=True)
-        run_once(make_config(tmp_path, site.url, [], packs_hours=None), dry_run=True)
-    assert site.packs_opened == 0
+    assert result.listed == 5 and site.logins == 0
 
 
 def eiffel_auctions():
@@ -159,7 +125,7 @@ def test_bids_once_then_rebids_only_at_the_end_or_moves_on(tmp_path):
     from datetime import datetime, timedelta, timezone
 
     wanted = [{"name": "gustave eiffel", "max_price": 300}]
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted, snipe_lead=timedelta(seconds=25))
         run_once(config)
         assert site.bids == [("e2", 150)]  # la moins chère, ni l'homonyme ni la nôtre
@@ -191,7 +157,7 @@ def test_bids_once_then_rebids_only_at_the_end_or_moves_on(tmp_path):
 
 def test_copies_buys_several_one_after_the_other(tmp_path):
     wanted = [{"name": "Gustave Eiffel", "max_price": 300, "copies": 2}]
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted)
         run_once(config)
         assert site.bids == [("e2", 150)]
@@ -207,7 +173,7 @@ def test_copies_buys_several_one_after_the_other(tmp_path):
 
 
 def test_old_won_state_is_kept(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}])
         config.wanted_state_file.parent.mkdir(parents=True, exist_ok=True)
         config.wanted_state_file.write_text(json.dumps({"my_id": ME, "cards": {"gustave eiffel": {
@@ -217,7 +183,7 @@ def test_old_won_state_is_kept(tmp_path):
 
 
 def test_buying_dry_run_places_no_bid(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}])
         run_once(config, dry_run=True)
     assert site.bids == []
@@ -228,7 +194,7 @@ def test_snipe_bids_just_before_the_end(tmp_path):
 
     end = (datetime.now(timezone.utc) + timedelta(seconds=40)).isoformat()
     auction = market_auction("s1", "Victor Hugo", 50, end_at=end)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
                              snipe_lead=timedelta(seconds=25))
         run_once(config)
@@ -242,44 +208,15 @@ def test_snipe_bids_just_before_the_end(tmp_path):
 
 def test_card_with_parentheses_is_found_without_them(tmp_path):
     auctions = [market_auction("d1", "Dewey Martin (acteur)", 1), market_auction("d2", "Dewey Martin (homonymie)", 1)]
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=auctions) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Dewey Martin (acteur)", "max_price": 5}])
         run_once(config)
     assert site.bids == [("d1", 1)]
 
 
-def test_pack_waits_for_each_card_to_be_counted(tmp_path):
-    # Comme sur le vrai site : « Encore N cartes » ne baisse qu'une fois la carte affichée
-    # un moment (ici 1 s). Le script attend ce décompte avant la carte suivante.
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=2, seen_after_ms=1000) as site:
-        from wiki_seller.main import open_site
-        with open_site(make_config(tmp_path, site.url, []), debug=False) as wm:
-            assert wm.open_packs(dry_run=False) == 2
-    assert site.packs_opened == 2
-
-
-def test_api_trace_logs_calls_without_secrets(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
-        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}],
-                             api_trace=True)
-        run_once(config)
-    lines = [json.loads(l) for l in config.api_trace_file.read_text().splitlines()]
-    bids = [l for l in lines if l["method"] == "POST" and l["path"].endswith("/bid")]
-    assert bids and bids[0]["sent"] == '{"amount": 150}' and bids[0]["status"] == 200
-    assert any(l["path"].startswith("/api/marketplace?") and l["received"] for l in lines)
-    assert "session=ok" not in config.api_trace_file.read_text()
-
-
-def test_redact_masks_secret_fields():
-    from wiki_seller.trace import redact
-
-    assert redact({"amount": 5, "access_token": "x", "nested": [{"refresh_token": "y", "id": 1}]}) == \
-        {"amount": 5, "access_token": "***", "nested": [{"refresh_token": "***", "id": 1}]}
-
-
-def test_api_mode_lists_by_request_with_api_average(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=3) as site:
-        config = make_config(tmp_path, site.url, [], actions_via_api=True)
+def test_listing_sends_copy_ids_and_api_average(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=3) as site:
+        config = make_config(tmp_path, site.url, [])
         result = run_once(config)
     assert result.listed == 3
     # Prix moyen de l'API (et non celui de la fenêtre), par l'identifiant d'un exemplaire.
@@ -290,32 +227,18 @@ def test_api_mode_lists_by_request_with_api_average(tmp_path):
     ]
 
 
-def test_api_mode_falls_back_to_card_id(tmp_path, caplog):
+def test_listing_falls_back_to_card_id(tmp_path, caplog):
     # Si le site attendait l'identifiant de la carte (409 avec celui de l'exemplaire).
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, listing_id="card") as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1, listing_id="card") as site:
         with caplog.at_level("INFO"):
-            run_once(make_config(tmp_path, site.url, [], actions_via_api=True))
+            run_once(make_config(tmp_path, site.url, []))
     assert [l["card_id"] for l in site.api_listings] == ["C"]
     assert "identifiant de la carte" in caplog.text
 
 
-def test_api_mode_opens_packs_and_bids_by_request(tmp_path, caplog):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, packs=2,
-                         auctions=eiffel_auctions()) as site:
-        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Gustave Eiffel", "max_price": 300}],
-                             actions_via_api=True, packs_hours=(0, 24), api_trace=True)
-        with caplog.at_level("INFO"):
-            run_once(config)
-    assert site.packs_opened == 2 and "★ UR — Tirage 1-3" in caplog.text
-    assert site.bids == [("e2", 150)]
-    posts = [json.loads(l) for l in config.api_trace_file.read_text().splitlines() if '"POST"' in l]
-    # Paquets, puis mise ; la tentative de mise en vente qui suit est refusée faute de place.
-    assert [p["path"] for p in posts][:3] == ["/api/packs/open", "/api/packs/open", "/api/marketplace/e2/bid"]
-
-
 def test_no_second_bid_while_leading_another_auction_of_the_card(tmp_path):
     auctions = eiffel_auctions()
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=auctions) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site:
         # Vous menez déjà e1 (mise à la main, ou suivi perdu) ; le suivi pointe ailleurs.
         site.bids.append(("e1", 200))
         site.auctions["e1"].update(current_bid=200, current_bidder_id=ME)
@@ -333,7 +256,7 @@ def test_card_won_elsewhere_is_not_bought_again(tmp_path):
     from datetime import datetime, timedelta, timezone
 
     auctions = eiffel_auctions()
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=auctions) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site:
         site.auctions["e1"].update(status="settled_sold", winner_id=ME, final_price=210,
                                    settled_at=datetime.now(timezone.utc).isoformat())
         since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -347,21 +270,11 @@ def test_card_won_elsewhere_is_not_bought_again(tmp_path):
     assert state["status"] == "won" and state["won"] == {"e1": 210}
 
 
-def test_api_packs_wait_for_rate_limit(tmp_path, caplog):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, pack_cooldown=3) as site:
-        from wiki_seller.main import open_site
-        with open_site(make_config(tmp_path, site.url, [], actions_via_api=True), debug=False) as wm:
-            with caplog.at_level("INFO"):
-                assert wm.open_packs_api(dry_run=False) == 3
-    assert site.packs_opened == 3 and site.rate_limited >= 1
-    assert "ouverture trop rapide, nouvel essai" in caplog.text
-
-
 def test_sale_price_follows_current_auctions_of_the_card(tmp_path, caplog):
     rivals = [market_auction("t1", "Tour Eiffel", 3000), market_auction("t2", "Tour Eiffel", 2000, current=4000),
               market_auction("t3", "Tour Eiffel (homonymie)", 1)]
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, auctions=rivals) as site:
-        config = make_config(tmp_path, site.url, [], actions_via_api=True, market_adjust=True)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1, auctions=rivals) as site:
+        config = make_config(tmp_path, site.url, [], market_adjust=True)
         with caplog.at_level("INFO"):
             run_once(config)
     # 70 % de 5000 = 3500, moyenne des enchères 3500 (3000 et 4000, pas l'homonyme) :
@@ -372,19 +285,19 @@ def test_sale_price_follows_current_auctions_of_the_card(tmp_path, caplog):
 
 def test_sale_price_lowered_when_above_current_auctions(tmp_path):
     rivals = [market_auction("t1", "Tour Eiffel", 3000), market_auction("t2", "Tour Eiffel", 2000)]
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1, auctions=rivals) as site:
-        run_once(make_config(tmp_path, site.url, [], actions_via_api=True, market_adjust=True))
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1, auctions=rivals) as site:
+        run_once(make_config(tmp_path, site.url, [], market_adjust=True))
     # 3500 au-dessus de la moyenne 2500 : moins l'écart type 500.
     assert site.api_listings[0]["base_amount"] == 3000
 
 
-def test_api_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
+def test_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
     from datetime import datetime, timedelta, timezone
 
     auction = market_auction("s1", "Victor Hugo", 50)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
-                             actions_via_api=True, snipe_lead=timedelta(seconds=6))
+                             snipe_lead=timedelta(seconds=6))
         run_once(config)
         assert site.bids == [("s1", 50)]
         site.outbid("s1", 70)
@@ -398,8 +311,8 @@ def test_api_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
 
 
 def test_night_sale_duration(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1) as site:
-        run_once(make_config(tmp_path, site.url, [], actions_via_api=True, night_durations=((0, 24, "12 h"),)))
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1) as site:
+        run_once(make_config(tmp_path, site.url, [], night_durations=((0, 24, "12 h"),)))
     assert site.api_listings[0]["duration_minutes"] == 720
 
 
@@ -408,9 +321,9 @@ def test_unsold_card_is_set_aside_then_retried(tmp_path):
 
     unsold = [{"id": f"h{i}", "seller_id": ME, "status": "expired", "winner_id": None, "final_price": None,
                "card": {"id": "C", "wikipedia_title": "Tour Eiffel"}} for i in range(3)]
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, max_auctions=1) as site:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1) as site:
         site.history = unsold
-        config = make_config(tmp_path, site.url, [], actions_via_api=True)
+        config = make_config(tmp_path, site.url, [])
         run_once(config)
         # Tour Eiffel (la plus chère) est invendue 3 fois : c'est Château de Versailles qui part.
         assert site.api_listings[0]["card_id"] == "b1"
@@ -424,60 +337,6 @@ def test_unsold_card_is_set_aside_then_retried(tmp_path):
         site.selling.clear()
         run_once(config)
     assert site.api_listings[-1]["card_id"] == "c1"
-
-
-def test_packs_paused_when_site_requires_human_verification(tmp_path, caplog, monkeypatch):
-    monkeypatch.setattr("wiki_seller.site.VERIFICATION_RETRY_WAIT", 0)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
-        site.packs_need_human = True
-        config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24))
-        with caplog.at_level("INFO"):
-            run_once(config)
-            run_once(config)
-    assert site.packs_opened == 0
-    # Un seul nouvel essai après rechargement, puis pas de nouvelle demande à la passe suivante.
-    assert site.pack_refusals == 2
-    assert "rechargement de la page" in caplog.text
-    assert "Vérification anti-bot requise" in caplog.text
-    assert "ouverture automatique suspendue" in caplog.text.lower()
-    assert (config.state_dir / "packs_pause.json").exists()
-
-
-def test_packs_retry_once_after_reload_when_verification_goes_away(tmp_path, monkeypatch):
-    monkeypatch.setattr("wiki_seller.site.VERIFICATION_RETRY_WAIT", 0)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=2, max_auctions=0) as site:
-        site.packs_need_human = 1  # demandée une seule fois
-        config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24))
-        run_once(config)
-    assert site.pack_refusals == 1
-    assert site.packs_opened == 2
-    assert not (config.state_dir / "packs_pause.json").exists()
-
-
-def test_await_pack_verification_waits_for_a_person(tmp_path):
-    import threading
-
-    from wiki_seller.main import open_site
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
-        site.packs_need_human = True
-        with open_site(make_config(tmp_path, site.url, []), debug=False) as wm:
-            assert wm.await_pack_verification(timeout_s=2) is False  # personne : délai dépassé
-            # La « personne » fait la vérification au bout d'une seconde.
-            threading.Timer(1, lambda: setattr(site, "packs_need_human", False)).start()
-            assert wm.await_pack_verification(timeout_s=20) is True
-    assert site.packs_opened == 1  # le paquet du clic, une fois la vérification faite
-
-
-def test_human_verification_wait_needs_a_visible_browser(tmp_path, caplog):
-    from datetime import timedelta
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, packs=3, max_auctions=0) as site:
-        site.packs_need_human = True
-        config = make_config(tmp_path, site.url, [], actions_via_api=True, packs_hours=(0, 24),
-                             packs_verify_wait=timedelta(minutes=5))
-        with caplog.at_level("INFO"):
-            run_once(config)
-    assert "HEADLESS=false" in caplog.text
-    assert (config.state_dir / "packs_pause.json").exists()  # repli : pause habituelle
 
 
 # ─────────────────────────── Défausse ───────────────────────────
@@ -502,13 +361,13 @@ def pages_read(site, page):
 
 
 def discard_site(**kwargs):
-    site = FakeWikiMasters(list(DISCARD_COLLECTION), DISCARD_AVERAGES, {}, max_auctions=5, **kwargs)
+    site = FakeWikiMasters(list(DISCARD_COLLECTION), DISCARD_AVERAGES, max_auctions=5, **kwargs)
     site.selling = list(FULL_SLOTS)  # aucune vente : on ne teste que la défausse
     return site
 
 
 def test_discard_runs_in_background_above_trigger(tmp_path):
-    from wiki_seller.main import DISCARDER
+    from wiki_seller.discard import DISCARDER
 
     with discard_site() as site:
         config = make_config(tmp_path, site.url, ["tour eiffel"], wanted=[{"name": "Victor Hugo", "max_price": 1}],
@@ -524,7 +383,7 @@ def test_discard_runs_in_background_above_trigger(tmp_path):
 
 
 def test_no_discard_at_or_below_trigger(tmp_path):
-    from wiki_seller.main import DISCARDER
+    from wiki_seller.discard import DISCARDER
 
     with discard_site() as site:
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=8)
@@ -533,8 +392,8 @@ def test_no_discard_at_or_below_trigger(tmp_path):
     assert site.discarded == []
 
 
-def test_discard_dry_run_clicks_nothing(tmp_path):
-    from wiki_seller.main import DISCARDER
+def test_discard_dry_run_sends_nothing(tmp_path):
+    from wiki_seller.discard import DISCARDER
 
     with discard_site() as site:
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
@@ -547,10 +406,10 @@ def test_pass_interrupts_discard_which_then_resumes(tmp_path, caplog):
     import logging
     import time
 
-    from wiki_seller.main import DISCARDER
+    from wiki_seller.discard import DISCARDER
 
     cheap = [entry(f"p{i}", f"P{i}", f"Galet {i}", "C") for i in range(6)]
-    with FakeWikiMasters(list(cheap), {f"P{i}": 2 for i in range(6)}, {}, max_auctions=5) as site:
+    with FakeWikiMasters(list(cheap), {f"P{i}": 2 for i in range(6)}, max_auctions=5) as site:
         site.selling = list(FULL_SLOTS)
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
         caplog.set_level(logging.INFO)
@@ -571,11 +430,11 @@ def test_pass_interrupts_discard_which_then_resumes(tmp_path, caplog):
 
 
 def test_collection_scan_pauses_between_pages_and_resumes(tmp_path):
-    from wiki_seller.main import open_site
+    from wiki_seller.session import open_site
     from wiki_seller.site import CollectionScan
 
     cards = [entry(f"s{i}", f"S{i}", f"Sable {i}", "C") for i in range(5)]
-    with FakeWikiMasters(list(cards), {}, {}, page_size=2) as site:
+    with FakeWikiMasters(list(cards), {}, page_size=2) as site:
         config = make_config(tmp_path, site.url, [])
         scan = CollectionScan()
         with open_site(config, False) as wm:
@@ -589,7 +448,7 @@ def test_collection_scan_pauses_between_pages_and_resumes(tmp_path):
 
 
 def test_finished_discard_is_not_restarted_right_away(tmp_path):
-    from wiki_seller.main import DISCARDER
+    from wiki_seller.discard import DISCARDER
 
     with discard_site() as site:
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=8)
@@ -604,7 +463,7 @@ def test_finished_discard_is_not_restarted_right_away(tmp_path):
 def test_discard_resumes_from_saved_progress_after_restart(tmp_path):
     from datetime import datetime, timezone
 
-    from wiki_seller.main import DISCARDER
+    from wiki_seller.discard import DISCARDER
 
     with discard_site() as site:
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
@@ -613,8 +472,10 @@ def test_discard_resumes_from_saved_progress_after_restart(tmp_path):
         (config.state_dir / "discard_progress.json").write_text(json.dumps({
             "started_at": datetime.now(timezone.utc).isoformat(), "position": 0, "copies_done": 1,
             "done": 1,
-            "cards": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2},
-                      {"card_id": "B", "title": "Feuille", "rarity": "PC", "average": None, "copies": 1}],
+            "cards": [{"card_id": "A", "title": "Caillou", "rarity": "C", "average": 5, "copies": 2,
+                       "copy_ids": ["a1", "a2"]},
+                      {"card_id": "B", "title": "Feuille", "rarity": "PC", "average": None, "copies": 1,
+                       "copy_ids": ["b1"]}],
         }), encoding="utf-8")
         run_once(config)
         DISCARDER.join(120)
@@ -625,7 +486,7 @@ def test_discard_resumes_from_saved_progress_after_restart(tmp_path):
 
 
 def test_discard_progress_saves_and_reloads_partial_scan(tmp_path):
-    from wiki_seller.main import DiscardProgress
+    from wiki_seller.discard import DiscardProgress
     from wiki_seller.site import CollectionScan
 
     config = make_config(tmp_path, "http://127.0.0.1:1", [])
@@ -637,7 +498,7 @@ def test_discard_progress_saves_and_reloads_partial_scan(tmp_path):
 
 
 def test_each_card_is_discarded_as_soon_as_its_price_is_read(tmp_path):
-    from wiki_seller.main import DISCARDER
+    from wiki_seller.discard import DISCARDER
 
     with discard_site() as site:
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
@@ -648,39 +509,14 @@ def test_each_card_is_discarded_as_soon_as_its_price_is_read(tmp_path):
     assert site.events.index(("défausse", "Caillou")) < site.events.index(("prix", "F"))
 
 
-def test_discard_through_api_skips_the_card_page(tmp_path, monkeypatch):
-    from wiki_seller.main import DISCARDER
-    from wiki_seller.site import WikiMasters
-
-    def no_page(*args, **kwargs):
-        raise AssertionError("défausse par la fiche au lieu de l'API")
-
-    monkeypatch.setattr(WikiMasters, "discard_card", no_page)
-    with discard_site() as site:
-        config = make_config(tmp_path, site.url, ["tour eiffel"], wanted=[{"name": "Victor Hugo", "max_price": 1}],
-                             discard_below=15, discard_trigger=7, actions_via_api=True)
-        run_once(config)
-        DISCARDER.join(120)
-    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Presque"]
-
-
-def test_discard_through_api_dry_run_sends_nothing(tmp_path):
-    from wiki_seller.main import DISCARDER
-
-    with discard_site() as site:
-        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1, actions_via_api=True)
-        run_once(config, dry_run=True)
-        DISCARDER.join(120)
-    assert site.discarded == [] and len(site.collection) == len(DISCARD_COLLECTION)
-
-
-def test_expired_session_is_renewed_through_telegram(tmp_path):
+def test_expired_session_is_renewed_through_telegram(tmp_path, monkeypatch):
     import threading
     import time
 
     from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
 
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES, challenge="manual") as site, FakeTelegram() as tg:
+    monkeypatch.setattr("wiki_seller.session.LOGIN_WAIT_HEADLESS", 2)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, challenge="manual") as site, FakeTelegram() as tg:
         config = make_config(tmp_path, site.url, [], session_cookies="session=expired",
                              telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
 
@@ -703,7 +539,7 @@ def test_telegram_report_with_sales_discards_and_balance(tmp_path):
     from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
 
     now = datetime.now(timezone.utc)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, UI_AVERAGES) as site, FakeTelegram() as tg:
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site, FakeTelegram() as tg:
         site.selling = list(FULL_SLOTS)  # aucune vente pendant la passe
         site.history = [{"id": "h1", "seller_id": ME, "status": "settled", "final_price": 40,
                          "settled_at": (now - timedelta(hours=1)).isoformat(), "card": {"id": "A"}}]

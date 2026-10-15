@@ -86,10 +86,11 @@ def test_plan_counts_copies_already_on_auction():
     assert plan.items == []  # b2 déjà en vente => il ne reste que l'exemplaire à garder
 
 
-def test_cards_with_unknown_api_price_come_last():
+def test_cards_with_unreadable_price_wait_for_the_next_pass():
     groups = parse_collection([entry("a1", "A", "Zèbre"), entry("b1", "B", "Abeille"), entry("c1", "C", "Connue")])
     plan = build_sale_plan(groups, set(), {"C": 50}, [], 0.7, unknown_prices={"A", "B"})
-    assert [(i.title, i.price) for i in plan.items] == [("Connue", 35), ("Abeille", None), ("Zèbre", None)]
+    assert [(i.title, i.price) for i in plan.items] == [("Connue", 35)]
+    assert sorted(plan.skipped) == [("Abeille", "prix illisible pour l'instant"), ("Zèbre", "prix illisible pour l'instant")]
 
 
 def test_adjust_to_market():

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from wiki_seller.report import maybe_send_report, record_discard, report_text, sales_between
+from wiki_seller.report import record_discard, report_text, send_report, sales_between
 
 from .test_end_to_end import make_config
 
@@ -40,33 +40,31 @@ class Stub:
 def test_report_every_two_hours_with_discards_counted(tmp_path):
     config = make_config(tmp_path, "http://127.0.0.1:1", [], report_every=timedelta(hours=2))
     stub = Stub()
-    assert not maybe_send_report(stub, config, stub, [], "me")  # premier lancement : point de départ
+    assert not send_report(stub, config, stub, [], "me")  # premier lancement : point de départ
     record_discard(config)
     record_discard(config)
-    assert not maybe_send_report(stub, config, stub, [], "me")  # moins de 2 h
+    assert not send_report(stub, config, stub, [], "me")  # moins de 2 h
     path = config.state_dir / "report.json"
     data = json.loads(path.read_text())
     data["since"] = (datetime.now(timezone.utc) - timedelta(hours=2, minutes=1)).isoformat()
     path.write_text(json.dumps(data))
-    assert maybe_send_report(stub, config, stub, [], "me")
+    assert send_report(stub, config, stub, [], "me")
     assert "Défausses : 2 exemplaire(s), +2" in stub.sent[0] and "Solde actuel : 500" in stub.sent[0]
     assert json.loads(path.read_text())["discarded"] == 0  # compteur remis à zéro
-    assert not maybe_send_report(stub, config, stub, [], "me")
+    assert not send_report(stub, config, stub, [], "me")
 
 
 def test_report_on_demand_keeps_the_two_hour_counter(tmp_path):
-    from wiki_seller.report import send_report_now
-
     config = make_config(tmp_path, "http://127.0.0.1:1", [], report_every=timedelta(hours=2))
     stub = Stub()
     record_discard(config)
-    send_report_now(stub, config, stub, [], "me")
+    send_report(stub, config, stub, [], "me", on_demand=True)
     assert "Défausses : 1 exemplaire(s), +1" in stub.sent[0]
     assert json.loads((config.state_dir / "report.json").read_text())["discarded"] == 1
 
 
 def test_sleep_wakes_up_for_a_report_request(tmp_path, monkeypatch):
-    import wiki_seller.main as main
+    import wiki_seller.scheduler as main
 
     calls = []
     monkeypatch.setattr(main, "report_now", lambda config, debug: calls.append(1))

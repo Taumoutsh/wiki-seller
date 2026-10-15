@@ -4,25 +4,16 @@ acheteur, la carte est mise de côté UNSOLD_COOLDOWN_DAYS jours, puis retentée
 Les échecs sont lus dans l'historique de vos ventes (/api/marketplace?mine=1, clé
 « history ») et notés dans state/unsold.json."""
 
-import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from .selection import normalize_name
+from .state import parse_time, read_json, write_json
 
 log = logging.getLogger(__name__)
 
 SEEN_LIMIT = 500  # enchères déjà comptées, gardées pour ne pas les compter deux fois
-
-
-def parse_time(value) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def card_key(auction: dict) -> tuple[str | None, str]:
@@ -44,10 +35,7 @@ def auction_outcome(auction: dict) -> str | None:
 class UnsoldTracker:
     def __init__(self, path: Path, max_tries: int, cooldown: timedelta):
         self.path, self.max_tries, self.cooldown = path, max_tries, cooldown
-        try:
-            self.data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            self.data = {}
+        self.data = read_json(path, {})
         self.data.setdefault("cards", {})
         self.data.setdefault("seen", [])
 
@@ -100,7 +88,4 @@ class UnsoldTracker:
         return None
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        write_json(self.path, self.data)
