@@ -28,9 +28,13 @@ def test_add_safe_card_keeps_the_format_and_ignores_duplicates(tmp_path):
 
 def test_parse_want():
     assert parse_want("Tour Eiffel 500") == ("Tour Eiffel", 500, None)
-    assert parse_want("Victor Hugo 120 2") == ("Victor Hugo", 120, 2)
-    assert parse_want("1984 (roman) 30") == ("1984 (roman)", 30, None)  # nombre dans le nom
-    for bad in ("", "Tour Eiffel", "500", "Tour Eiffel 0", "Tour Eiffel 10 0"):
+    assert parse_want("Victor Hugo 120 x2") == ("Victor Hugo", 120, 2)
+    assert parse_want("Victor Hugo x2 120") == ("Victor Hugo", 120, 2)
+    assert parse_want("Apollo 11 500") == ("Apollo 11", 500, None)  # le nom finit par un nombre
+    assert parse_want("Apollo 11 500 X3") == ("Apollo 11", 500, 3)
+    assert parse_want("1984 (roman) 30") == ("1984 (roman)", 30, None)
+    assert parse_want("X2 500") == ("X2", 500, None)  # le nom ressemble à « x2 »
+    for bad in ("", "Tour Eiffel", "500", "Tour Eiffel 0", "Tour Eiffel 10 x0", "Tour Eiffel x2"):
         with pytest.raises(WantedCardsError):
             parse_want(bad)
 

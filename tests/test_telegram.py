@@ -129,7 +129,7 @@ def test_safe_and_want_commands_edit_the_lists(tmp_path):
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())
             fake.say("/safe Victor Hugo")
             assert wait_for(lambda: len(fake.sent) == 1)
-            fake.say("/want Gustave Eiffel 300 2")
+            fake.say("/want Gustave Eiffel 300 x2")
             assert wait_for(lambda: len(fake.sent) == 2)
             fake.say("/want Gustave Eiffel")
             assert wait_for(lambda: len(fake.sent) == 3)

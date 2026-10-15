@@ -168,7 +168,7 @@ wikibidou par exemplaire (compteur dans `state/report.json`). Pas de bilan en `-
 |---|---|
 | `/update` (ou `/bilan`) | Bilan immédiat depuis le dernier bilan automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il part juste après |
 | `/safe Tour Eiffel` | Ajoute la carte à `safed_cards.json` : jamais défaussée, et toujours un exemplaire gardé. Une défausse en cours la respecte aussitôt |
-| `/want Tour Eiffel 500` | Ajoute la carte à `wanted_cards.json` avec son prix maximum, ou met à jour ce prix si elle y est déjà ; `/want Victor Hugo 120 2` pour 2 exemplaires. Prise en compte à la prochaine passe |
+| `/want Tour Eiffel 500` | Ajoute la carte à `wanted_cards.json` avec son prix maximum, ou met à jour ce prix si elle y est déjà ; `/want Victor Hugo 120 x2` pour 2 exemplaires. Le dernier nombre est toujours le prix : `/want Apollo 11 500` vise « Apollo 11 » à 500 au plus. Prise en compte à la prochaine passe |
 
 Les noms sont comparés sans majuscules, accents ni espaces en trop : écrivez-les comme
 sur le site. Tout autre message reçoit la liste des commandes.

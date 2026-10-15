@@ -4,13 +4,16 @@ conteneur, ce qui empêche de les remplacer), sous le verrou LISTS_LOCK que pren
 aussi leurs lecteurs : une passe ne lit jamais un fichier à moitié écrit."""
 
 import json
+import re
 from pathlib import Path
 
 from .buying import WantedCardsError, load_wanted_cards
 from .selection import SafeCardsError, normalize_name
 from .state import LISTS_LOCK
 
-WANT_USAGE = "Usage : /want <nom de la carte> <prix max> [exemplaires], ex. /want Tour Eiffel 500"
+WANT_USAGE = ("Usage : /want <nom de la carte> <prix max> [x<exemplaires>], ex. /want Tour Eiffel 500 "
+              "ou /want Victor Hugo 120 x2")
+COPIES = re.compile(r"[x×](\d+)", re.I)
 
 
 def _read_list(path: Path, error):
@@ -47,15 +50,20 @@ def add_safe_card(path: Path, name: str) -> tuple[bool, int]:
 
 
 def parse_want(args: str) -> tuple[str, int, int | None]:
-    """« Tour Eiffel 500 » → ("Tour Eiffel", 500, None) ; « Victor Hugo 120 2 » →
+    """Le dernier nombre est le prix maximum, « x2 » le nombre d'exemplaires (avant ou
+    après le prix) ; le reste est le nom, qui peut lui-même finir par un nombre :
+    « Apollo 11 500 » → ("Apollo 11", 500, None) ; « Victor Hugo 120 x2 » →
     ("Victor Hugo", 120, 2)."""
     words = args.split()
-    numbers = []
-    while words and words[-1].isdigit() and len(numbers) < 2:
-        numbers.insert(0, int(words.pop()))
-    if not words or not numbers or numbers[0] < 1 or (len(numbers) == 2 and numbers[1] < 1):
+    copies = None
+    for i in (-1, -2):
+        if len(words) >= 3 and (match := COPIES.fullmatch(words[i])):  # il reste un nom et un prix
+            copies = int(match.group(1))
+            del words[i]
+            break
+    if len(words) < 2 or not words[-1].isdigit() or int(words[-1]) < 1 or copies == 0:
         raise WantedCardsError(WANT_USAGE)
-    return " ".join(words), numbers[0], numbers[1] if len(numbers) == 2 else None
+    return " ".join(words[:-1]), int(words[-1]), copies
 
 
 def set_wanted_card(path: Path, name: str, max_price: int, copies: int | None = None) -> tuple[str, dict]:
