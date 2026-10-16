@@ -79,6 +79,13 @@ class FakeWikiMasters:
         self.collection_requests = []
         self.discarded = []  # titres des exemplaires défaussés, dans l'ordre
         self.events = []  # ("prix", carte) et ("défausse", titre), dans l'ordre
+        # Site qui bogue : les N prochaines mises restent sans réponse (503, non enregistrées),
+        # ou sont enregistrées mais leur réponse se perd ; les N prochaines lectures d'une
+        # enchère échouent.
+        self.bid_failures = 0
+        self.bid_lost_responses = 0
+        self.auction_read_failures = 0
+        self.bid_attempts = 0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -161,6 +168,9 @@ class FakeWikiMasters:
                         a for a in site.auctions.values() if q in a["card"]["wikipedia_title"].lower()]
                     return self._send(200, {"auctions": found, "page": 1, "limit": 50, "hasMore": False})
                 if url.path.startswith("/api/marketplace/") and url.path.split("/")[3] in site.auctions:
+                    if site.auction_read_failures:
+                        site.auction_read_failures -= 1
+                        return self._send(503, {"error": "Service Unavailable"})
                     return self._send(200, {"auction": site.auctions[url.path.split("/")[3]], "bids": []})
                 if url.path.startswith("/api/marketplace/cards/"):
                     if site.sales_forbidden:
@@ -186,11 +196,18 @@ class FakeWikiMasters:
                     return self._send(200, {"ok": True, "wikibidous": 1})
                 if self.path.startswith("/api/marketplace/") and self.path.endswith("/bid") and self._authed():
                     auction = site.auctions[self.path.split("/")[3]]
+                    site.bid_attempts += 1
+                    if site.bid_failures:
+                        site.bid_failures -= 1
+                        return self._send(503, {"error": "Service Unavailable"})
                     minimum = auction["base_amount"] if auction["current_bid"] is None else auction["current_bid"] + BID_STEP
                     if body.get("amount", 0) < minimum or auction["status"] != "active":
                         return self._send(400, {"error": "mise trop basse"})
                     site.bids.append((auction["id"], body["amount"]))
                     auction.update(current_bid=body["amount"], effective_bid=body["amount"], current_bidder_id=ME)
+                    if site.bid_lost_responses:
+                        site.bid_lost_responses -= 1
+                        return self._send(502, {"error": "Bad Gateway"})
                     return self._send(200, {"auction_id": auction["id"], "current_bid": body["amount"],
                                             "bidder_balance": 1747 - body["amount"]})
                 if self.path == "/auth/login":

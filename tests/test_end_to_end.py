@@ -670,3 +670,40 @@ def test_sell_list_dry_run_changes_nothing(tmp_path, caplog):
     assert result.listed == 1 and site.listings == []
     assert "Tour Eiffel à 4500 (prix demandé)" in caplog.text
     assert sell_file(config).read_text() == before and safe_names(config) == {"tour eiffel"}
+
+
+def test_bid_is_resent_until_the_site_answers(tmp_path):
+    auction = market_auction("s1", "Victor Hugo", 50)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        site.bid_failures = 2  # deux mises sans réponse, puis le site répond
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+        run_once(config)
+    assert site.bids == [("s1", 50)] and site.bid_attempts == 3
+
+
+def test_bid_whose_answer_is_lost_is_not_sent_twice(tmp_path):
+    auction = market_auction("s1", "Victor Hugo", 50)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        site.bid_lost_responses = 1  # mise enregistrée, mais la réponse se perd
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+        run_once(config)
+    assert site.bids == [("s1", 50)] and site.bid_attempts == 1
+    state = json.loads(config.wanted_state_file.read_text())["cards"]["victor hugo"]
+    assert state["status"] == "bidding" and state["my_bid"] == {"auction": "s1", "amount": 50}
+
+
+def test_snipe_keeps_watching_when_the_site_does_not_answer(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    end = (datetime.now(timezone.utc) + timedelta(seconds=40)).isoformat()
+    auction = market_auction("s1", "Victor Hugo", 50, end_at=end)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=30))
+        run_once(config)
+        site.outbid("s1", 70)
+        site.auction_read_failures = 6  # l'enchère est illisible quelques secondes
+        site.bid_failures = 1
+        run_snipe(config)
+    assert site.bids[-1] == ("s1", 80)
+    assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=31)

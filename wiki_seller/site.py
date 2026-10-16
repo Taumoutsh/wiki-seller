@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from urllib.parse import quote_plus
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
@@ -25,6 +26,10 @@ log = logging.getLogger(__name__)
 COLLECTION_PAGE_GUARD = 500
 DEFAULT_MAX_AUCTIONS = 5
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
+API_TIMEOUT = 60  # s : une requête à l'API sans réponse est abandonnée
+QUICK_TIMEOUT = 5  # s : lecture d'une enchère pendant sa fin
+BID_TIMEOUT = 8  # s : mise sans réponse, vérifiée puis renvoyée
+BID_RETRY_PAUSE = 1  # s entre deux essais de mise
 LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut être en vente ou en échange)
 
 SEARCH_PLACEHOLDER = re.compile(r"Rechercher", re.I)
@@ -172,31 +177,43 @@ class WikiMasters:
 
     # ─────────────────────────── API JSON ───────────────────────────
 
-    def api_get(self, path: str) -> tuple[int, object]:
+    def api_get(self, path: str, timeout: float = API_TIMEOUT) -> tuple[int, object]:
+        """GET depuis la page connectée ; une requête sans réponse est abandonnée au bout
+        de `timeout` secondes (exception)."""
         result = self.page.evaluate(
-            """async (path) => {
-                const res = await fetch(path, {credentials: 'include', headers: {accept: 'application/json'}});
-                let data = null;
-                try { data = await res.json(); } catch (e) {}
-                return {status: res.status, data};
+            """async ([path, timeout]) => {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), timeout);
+                try {
+                    const res = await fetch(path, {credentials: 'include', headers: {accept: 'application/json'},
+                                                   signal: ctrl.signal});
+                    let data = null;
+                    try { data = await res.json(); } catch (e) {}
+                    return {status: res.status, data};
+                } finally { clearTimeout(timer); }
             }""",
-            path,
+            [path, int(timeout * 1000)],
         )
         return result["status"], result["data"]
 
-    def api_post(self, path: str, body: dict | None = None) -> tuple[int, object, str]:
+    def api_post(self, path: str, body: dict | None = None, timeout: float = API_TIMEOUT) -> tuple[int, object, str]:
         """POST depuis la page connectée. Renvoie (code, JSON ou None, texte brut)."""
         result = self.page.evaluate(
-            """async ([path, body]) => {
-                const init = {method: 'POST', credentials: 'include', headers: {accept: 'application/json'}};
+            """async ([path, body, timeout]) => {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), timeout);
+                const init = {method: 'POST', credentials: 'include', headers: {accept: 'application/json'},
+                              signal: ctrl.signal};
                 if (body !== null) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
-                const res = await fetch(path, init);
-                const text = await res.text();
-                let data = null;
-                try { data = JSON.parse(text); } catch (e) {}
-                return {status: res.status, data, text: text.slice(0, 500)};
+                try {
+                    const res = await fetch(path, init);
+                    const text = await res.text();
+                    let data = null;
+                    try { data = JSON.parse(text); } catch (e) {}
+                    return {status: res.status, data, text: text.slice(0, 500)};
+                } finally { clearTimeout(timer); }
             }""",
-            [path, body],
+            [path, body, int(timeout * 1000)],
         )
         if result["status"] == 401 or (result["status"] == 403 and "Non autoris" in result["text"]):
             raise SessionExpired(f"{path} → HTTP {result['status']}")
@@ -421,36 +438,86 @@ class WikiMasters:
         auction = data.get("auction") if isinstance(data, dict) else None
         return auction if isinstance(auction, dict) else None
 
-    def post_bid(self, auction_id: str, amount: int) -> bool:
-        """Mise (POST /api/marketplace/<id>/bid {amount}) ; True si acceptée."""
-        status, data, text = self.api_post(f"/api/marketplace/{auction_id}/bid", {"amount": amount})
-        if 200 <= status < 300:
-            confirmed = data if isinstance(data, dict) and "current_bid" in data else self.fetch_auction(auction_id)
-            if (confirmed or {}).get("current_bid") and confirmed["current_bid"] >= amount:
-                return True
-        log.warning("Mise de %d refusée par le site (HTTP %d : %s).", amount, status, text[:200])
-        return False
+    def read_auction(self, auction_id: str) -> dict | None:
+        """Lecture rapide d'une enchère, en un seul essai (surveillance de fin d'enchère) :
+        None si le site ne répond pas à temps ou se trompe."""
+        try:
+            status, data = self.api_get(f"/api/marketplace/{auction_id}", timeout=QUICK_TIMEOUT)
+        except Exception as exc:
+            log.info("Enchère %s : pas de réponse du site (%s).", auction_id, str(exc).splitlines()[0][:100])
+            return None
+        if status in (401, 403):
+            raise SessionExpired(f"/api/marketplace/{auction_id} → HTTP {status}")
+        auction = data.get("auction") if 200 <= status < 300 and isinstance(data, dict) else None
+        return auction if isinstance(auction, dict) else None
+
+    def _bid_went_through(self, auction_id: str, amount: int, my_id: str | None) -> bool:
+        """La mise est-elle enregistrée (malgré une réponse perdue) ?"""
+        auction = self.read_auction(auction_id) or {}
+        current = auction.get("current_bid")
+        return (isinstance(current, (int, float)) and current >= amount
+                and (not my_id or auction.get("current_bidder_id") == my_id))
+
+    def post_bid(self, auction_id: str, amount: int, deadline: float | None = None,
+                 my_id: str | None = None) -> bool:
+        """Mise (POST /api/marketplace/<id>/bid {amount}) ; True si acceptée. Le site ne
+        répond pas toujours (délai dépassé, erreur 5xx) : on vérifie alors si la mise est
+        passée, sinon on la renvoie, jusqu'à une réponse ou jusqu'à `deadline`
+        (time.monotonic())."""
+        path = f"/api/marketplace/{auction_id}/bid"
+        tries = 0
+        while True:
+            tries += 1
+            try:
+                status, data, text = self.api_post(path, {"amount": amount}, timeout=BID_TIMEOUT)
+            except SessionExpired:
+                raise
+            except Exception as exc:
+                status, data, text = 0, None, str(exc).splitlines()[0][:200]
+            if 200 <= status < 300:
+                confirmed = data if isinstance(data, dict) and "current_bid" in data else self.read_auction(auction_id)
+                if (confirmed or {}).get("current_bid") and confirmed["current_bid"] >= amount:
+                    return True
+            answered = 400 <= status < 500 and status not in (408, 425, 429)
+            if (tries > 1 or not answered) and self._bid_went_through(auction_id, amount, my_id):
+                return True  # un essai précédent était passé sans que la réponse arrive
+            if answered:
+                log.warning("Mise de %d refusée par le site (HTTP %d : %s).", amount, status, text[:200])
+                return False
+            if deadline is None or time.monotonic() + BID_RETRY_PAUSE >= deadline:
+                log.warning("Mise de %d : pas de réponse du site après %d essai(s) (%s).", amount, tries,
+                            f"HTTP {status}" if status else text)
+                return False
+            log.info("Mise de %d : pas de réponse du site (%s), nouvel essai.", amount,
+                     f"HTTP {status}" if status else text)
+            time.sleep(BID_RETRY_PAUSE)
 
     def read_min_bid(self, auction_id: str) -> int | None:
         """Mise minimale exacte : le montant prérempli sur la page de l'enchère (l'API
-        ne donne pas le pas de surenchère)."""
+        ne donne pas le pas de surenchère). None si la page ne se charge pas."""
         page = self.page
-        page.goto(self.url(f"/marketplace/{auction_id}"), wait_until="domcontentloaded")
         field = page.locator(BID_INPUT).first
         try:
+            page.goto(self.url(f"/marketplace/{auction_id}"), wait_until="domcontentloaded", timeout=30000)
             field.wait_for(state="visible", timeout=30000)
             page.wait_for_function(
                 "(sel) => { const e = document.querySelector(sel); return e && e.value !== ''; }",
                 arg=BID_INPUT, timeout=10000)
-        except PlaywrightTimeout:
+        except PlaywrightError:  # délai dépassé, ou page qui ne répond pas
             self.snapshot(f"bid-{auction_id}")
             return None
         return parse_int(field.input_value())
 
-    def place_bid(self, auction_id: str, max_price: int, dry_run: bool) -> tuple[str, int | None]:
+    def place_bid(self, auction_id: str, max_price: int, dry_run: bool, deadline: float | None = None,
+                  my_id: str | None = None) -> tuple[str, int | None]:
         """Mise minimale (lue sur la page de l'enchère), si elle ne dépasse pas max_price
-        ni le solde. Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
+        ni le solde. Page ou mise sans réponse : nouvel essai jusqu'à `deadline`.
+        Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
         amount = self.read_min_bid(auction_id)
+        while amount is None and deadline is not None and time.monotonic() + BID_RETRY_PAUSE < deadline:
+            log.info("Enchère %s : page sans réponse, nouvel essai.", auction_id)
+            time.sleep(BID_RETRY_PAUSE)
+            amount = self.read_min_bid(auction_id)
         if amount is None:
             return "failed", None
         if amount > max_price:
@@ -461,7 +528,7 @@ class WikiMasters:
         self.step(f"bid-ready-{auction_id}")
         if dry_run:
             return "dry_run", amount
-        if self.post_bid(auction_id, amount):
+        if self.post_bid(auction_id, amount, deadline, my_id):
             return "bid", amount
         self.snapshot(f"bid-refused-{auction_id}")
         return "failed", amount

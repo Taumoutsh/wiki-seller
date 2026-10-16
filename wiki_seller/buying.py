@@ -14,6 +14,7 @@ from pathlib import Path
 from .config import Config
 from .lists import BuyCard, buy_cards, complete_purchase
 from .selection import normalize_name
+from .site import SiteError
 from .state import parse_time, read_json, write_json
 from .telegram import notify
 
@@ -23,11 +24,20 @@ log = logging.getLogger(__name__)
 TOO_LATE = timedelta(seconds=5)
 # Réveil avant l'heure de mise : lancer le navigateur et se connecter prend du temps.
 SNIPE_STARTUP = timedelta(seconds=45)
-# Surveillance de la fin d'enchère : à partir de WATCH_START avant la fin, l'enchère est
-# relue toutes les WATCH_POLL secondes ; on surenchérit à SNIPE_LEAD de la fin.
+# Surveillance de la fin d'enchère : à partir de watch_start() avant la fin, l'enchère est
+# relue toutes les WATCH_POLL secondes ; on surenchérit à SNIPE_LEAD de la fin, puis à
+# chaque fois qu'on est dépassé, jusqu'à la vraie fin.
 WATCH_START = timedelta(seconds=60)
 WATCH_POLL = 1  # secondes entre deux vérifications pendant la fin d'enchère
 WATCH_GUARD = timedelta(minutes=60)  # guerre d'enchères : chaque mise ajoute une minute
+# Le site ne répond pas toujours : une mise est renvoyée jusqu'à la fin de l'enchère, et
+# au plus BID_RETRY_LIMIT pendant une passe.
+BID_RETRY_LIMIT = timedelta(minutes=2)
+
+
+def watch_start(lead: timedelta) -> timedelta:
+    """Début de la surveillance : au moins 30 s avant l'heure de la surenchère."""
+    return max(WATCH_START, lead + timedelta(seconds=30))
 
 
 def auction_title(auction: dict) -> str:
@@ -114,7 +124,7 @@ class WantedState:
         ends = [e - offset for e in ends if e and e - offset > now]
         if not ends:
             return None
-        return max(min(ends) - max(lead, WATCH_START) - SNIPE_STARTUP, now)
+        return max(min(ends) - watch_start(lead) - SNIPE_STARTUP, now)
 
 
 def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> None:
@@ -161,7 +171,14 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                 auction_id = leading_here[0]["id"]
             elif not auction_id and mine_for_card:  # enchère misée à la main ?
                 auction_id = mine_for_card[0]["id"]
-            auction = site.fetch_auction(auction_id) if auction_id else None
+            try:
+                auction = site.fetch_auction(auction_id) if auction_id else None
+            except SiteError as exc:  # le site ne répond pas pour cette enchère
+                if not snipe_only:
+                    log.warning("Achat : « %s » — enchère illisible (%s) ; nouvel essai plus tard.", card.name, exc)
+                    continue
+                # Fin d'enchère : on la surveille quand même, elle sera relue chaque seconde.
+                auction = {"id": auction_id, "end_at": entry.get("end_at"), "status": "active"}
 
             if auction and auction.get("status") != "active":
                 if state.my_id and auction.get("winner_id") == state.my_id:
@@ -262,6 +279,13 @@ class _Buyer:
         log.info("Achat : %s", message)
         notify(self.config, message)
 
+    def deadline(self, auction: dict) -> float:
+        """Jusqu'à quand renvoyer une mise sans réponse (time.monotonic()) : la fin de
+        l'enchère, au plus BID_RETRY_LIMIT."""
+        end = parse_time(auction.get("end_at"))
+        left = (end - self.now()).total_seconds() if end else BID_RETRY_LIMIT.total_seconds()
+        return time.monotonic() + max(0.0, min(left, BID_RETRY_LIMIT.total_seconds()))
+
     def leading(self, auction: dict) -> bool:
         return bool(self.state.my_id) and auction.get("current_bidder_id") == self.state.my_id
 
@@ -280,12 +304,13 @@ class _Buyer:
                      self.budget_used, card.name)
             return
 
-        result, amount = self.site.place_bid(auction["id"], card.max_price, self.dry_run)
+        result, amount = self.site.place_bid(auction["id"], card.max_price, self.dry_run,
+                                             self.deadline(auction), self.state.my_id)
         if result == "bid":
             self.budget_used += amount
             entry["placed"] = auction["id"]
             entry["my_bid"] = {"auction": auction["id"], "amount": amount}  # pour le bilan (/update)
-            refreshed = self.site.fetch_auction(auction["id"]) or {}
+            refreshed = self.site.read_auction(auction["id"]) or {}
             if not self.state.my_id and refreshed.get("current_bid") == amount:
                 self.state.my_id = refreshed.get("current_bidder_id")
             entry["end_at"] = refreshed.get("end_at") or entry.get("end_at")  # fin repoussée ?
@@ -304,26 +329,34 @@ class _Buyer:
             log.warning("Achat : la mise sur « %s » n'a pas été confirmée par le site.", card.name)
 
     def watch_until_end(self, card: BuyCard, entry: dict, auction: dict) -> None:
-        """Surveille l'enchère de près à partir de WATCH_START avant la fin (relue chaque
+        """Surveille l'enchère de près à partir de watch_start() avant la fin (relue chaque
         seconde) et surenchérit dès que vous n'êtes plus en tête à SNIPE_LEAD de la fin,
-        dans la limite. Une mise des 10 dernières secondes prolonge l'enchère de 60 s :
-        on continue jusqu'à la fin réelle."""
+        dans la limite, puis à chaque fois que vous êtes dépassé. Une mise des 10
+        dernières secondes prolonge l'enchère de 60 s : on continue jusqu'à la fin réelle.
+        Une lecture sans réponse est simplement refaite la seconde suivante."""
         lead = self.config.snipe_lead
+        start = watch_start(lead)
         end = parse_time(auction.get("end_at"))
-        if not end or end - self.now() > WATCH_START + SNIPE_STARTUP + timedelta(minutes=2):
+        if not end or end - self.now() > start + SNIPE_STARTUP + timedelta(minutes=2):
             return  # pas encore l'heure : la boucle reviendra
         self._learn_step(entry, auction)
         deadline = time.monotonic() + WATCH_GUARD.total_seconds()
         announced = False
         while time.monotonic() < deadline:
-            wait = (end - WATCH_START - self.now()).total_seconds()
+            wait = (end - start - self.now()).total_seconds()
             if wait > 0:
                 time.sleep(wait)
             if not announced:
                 log.info("Achat : surveillance de « %s » jusqu'à la fin (%s), surenchère à %d s de la fin.",
                          card.name, auction.get("end_at"), lead.total_seconds())
                 announced = True
-            auction = self.site.fetch_auction(auction["id"]) or auction
+            fresh = self.site.read_auction(auction["id"])
+            if fresh is None:  # le site ne répond pas : on relit dans une seconde
+                if end - self.now() < -timedelta(minutes=2):
+                    return  # la passe suivante verra si elle est gagnée
+                time.sleep(WATCH_POLL)
+                continue
+            auction = fresh
             if auction.get("status") != "active":
                 return  # la passe suivante verra si elle est gagnée
             end = parse_time(auction.get("end_at")) or end
@@ -366,7 +399,7 @@ class _Buyer:
             log.info("Simulation : surenchère de %d sur « %s ».", amount, card.name)
             _forget(entry)
             return
-        if self.site.post_bid(auction["id"], amount):
+        if self.site.post_bid(auction["id"], amount, self.deadline(auction), self.state.my_id):
             entry["placed"] = auction["id"]
             entry["my_bid"] = {"auction": auction["id"], "amount": amount}
             log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,

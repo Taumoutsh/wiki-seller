@@ -95,10 +95,17 @@ rappellent). Le conteneur ne les monte plus.
   minimale reste dans la limite, il attend la fin de l'enchère ; sinon il en cherche
   une autre ;
 - la boucle se réveille pour la **dernière minute** de l'enchère, la relit **chaque
-  seconde** et, si vous n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (5)
-  de la fin**, dans la limite ; une mise des 10 dernières secondes prolonge l'enchère
-  de 60 s : la surveillance continue jusqu'à la vraie fin ;
+  seconde** et, si vous n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (30)
+  de la fin**, dans la limite, puis **à chaque fois que vous êtes dépassé** ; une mise
+  des 10 dernières secondes prolonge l'enchère de 60 s : la surveillance continue
+  jusqu'à la vraie fin ;
 - **une seule enchère à la fois par carte**.
+
+Le site ne répond pas toujours pendant les enchères. Une mise sans réponse (au bout de
+8 s, ou erreur du site) est vérifiée sur l'enchère : si elle est passée malgré tout, elle
+n'est pas renvoyée ; sinon elle repart chaque seconde, jusqu'à la fin de l'enchère (au
+plus 2 min pendant une passe). Une lecture de l'enchère sans réponse est refaite la
+seconde suivante, sans interrompre la surveillance.
 
 Chaque exemplaire obtenu est annoncé par le bot (« 🛒 Obtenue : Tour Eiffel pour 480 »).
 Une fois tous les exemplaires obtenus, la carte **quitte la liste d'achat et devient
@@ -247,7 +254,7 @@ chaque étape dans `state/debug/`. Le journal est dans `state/seller.log`.
 | `DISCARD_BELOW` | `15` | Défausse des cartes valant moins que ce prix moyen ; `0` = désactivée |
 | `DISCARD_TRIGGER` | `150` | Exemplaires dans la collection au-delà desquels la défausse est lancée |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
-| `SNIPE_LEAD` | `5` | Secondes avant la fin d'une enchère pour surenchérir |
+| `SNIPE_LEAD` | `30` | Secondes avant la fin d'une enchère pour surenchérir |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(vide)* | Bot Telegram (voir « Bot Telegram ») |
 | `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse quand la session a expiré |
 | `REPORT_HOURS` | `2` | Bilan Telegram toutes les N heures ; `0` = jamais |

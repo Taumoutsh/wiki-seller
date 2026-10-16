@@ -133,7 +133,7 @@ class Config:
     # avance avant la fin.
     wanted_cards_file: Path = Path("wanted_cards.json")
     max_total_bids: int | None = None
-    snipe_lead: timedelta = timedelta(seconds=5)
+    snipe_lead: timedelta = timedelta(seconds=30)
     # Cartes invendues : mises de côté après unsold_max_tries échecs, pendant unsold_cooldown.
     unsold_max_tries: int = 3
     unsold_cooldown: timedelta = timedelta(days=5)
@@ -237,7 +237,7 @@ def load_config() -> Config:
         run_interval=run_interval,
         wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),
-        snipe_lead=snipe_lead or timedelta(seconds=5),
+        snipe_lead=snipe_lead or timedelta(seconds=30),
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         telegram_wait=timedelta(minutes=_positive_int("TELEGRAM_WAIT") or 60),
