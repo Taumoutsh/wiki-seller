@@ -107,7 +107,10 @@ n'est pas renvoyée ; sinon elle repart chaque seconde, jusqu'à la fin de l'enc
 plus 2 min pendant une passe). Une lecture de l'enchère sans réponse est refaite la
 seconde suivante, sans interrompre la surveillance.
 
-Chaque exemplaire obtenu est annoncé par le bot (« 🛒 Obtenue : Tour Eiffel pour 480 »).
+Le bot annonce chaque résultat : « 🛒 Obtenue : Tour Eiffel pour 480 », ou « ❌ Perdue :
+Tour Eiffel, remportée à 520 par un autre (max 500) » (aussi quand l'enchère où vous aviez
+misé monte au-dessus de votre max). Pour une enchère surveillée jusqu'à la fin, le
+résultat part dès que le site désigne le gagnant ; sinon, au réveil suivant.
 Une fois tous les exemplaires obtenus, la carte **quitte la liste d'achat et devient
 protégée**. Avec `/buyandsell Tour Eiffel 500 800`, elle part à la place dans les
 ventes à 800 (voir ci-dessous). Le suivi des enchères est dans `state/wanted_state.json`.

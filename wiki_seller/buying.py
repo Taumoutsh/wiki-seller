@@ -33,6 +33,10 @@ WATCH_GUARD = timedelta(minutes=60)  # guerre d'enchères : chaque mise ajoute u
 # Le site ne répond pas toujours : une mise est renvoyée jusqu'à la fin de l'enchère, et
 # au plus BID_RETRY_LIMIT pendant une passe.
 BID_RETRY_LIMIT = timedelta(minutes=2)
+# Fin d'une enchère surveillée : le site met parfois un moment à désigner le gagnant ;
+# l'enchère est relue toutes les OUTCOME_POLL s, au plus OUTCOME_WAIT.
+OUTCOME_WAIT = timedelta(minutes=3)
+OUTCOME_POLL = 3
 
 
 def watch_start(lead: timedelta) -> timedelta:
@@ -187,6 +191,8 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                         continue
                 else:
                     log.info("Achat : enchère perdue pour « %s » ; recherche d'une autre.", card.name)
+                    if state.my_id and auction.get("winner_id"):
+                        buyer.lost(card, entry, auction, force=True)
                 auction = None
             if auction is None:
                 _forget(entry)
@@ -212,6 +218,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                     continue
                 log.info("Achat : « %s » dépasse la limite (%d > %d) ; abandon de cette enchère.",
                          card.name, minimum, card.max_price)
+                buyer.lost(card, entry, auction)
                 abandoned.add(auction["id"])
                 _forget(entry)
                 auction = None
@@ -247,11 +254,11 @@ class _Buyer:
         won = dict(entry.get("won") or {})
         for auction in wins:
             if auction.get("id") and auction["id"] not in won:
-                won[auction["id"]] = auction.get("final_price")
-                log.info("Achat : « %s » obtenue pour %s (%d/%d).", card.name, auction.get("final_price"),
-                         len(won), card.copies)
+                price = auction.get("final_price") or auction.get("current_bid")
+                won[auction["id"]] = price
+                log.info("Achat : « %s » obtenue pour %s (%d/%d).", card.name, price, len(won), card.copies)
                 if not self.dry_run:
-                    notify(self.config, f"🛒 Obtenue : {card.name} pour {auction.get('final_price')}"
+                    notify(self.config, f"🛒 Obtenue : {card.name} pour {price}"
                                         + (f" ({len(won)}/{card.copies})" if card.copies > 1 else ""))
         entry["won"] = won
         if len(won) >= card.copies:
@@ -279,6 +286,47 @@ class _Buyer:
         log.info("Achat : %s", message)
         notify(self.config, message)
 
+    def lost(self, card: BuyCard, entry: dict, auction: dict, force: bool = False) -> None:
+        """Enchère perdue (remportée par un autre, ou montée au-dessus de votre max) :
+        annoncée une fois, si vous y aviez misé (force : enchère suivie terminée)."""
+        if not force and entry.get("placed") != auction.get("id"):
+            return
+        entry.pop("placed", None)
+        if auction.get("winner_id"):
+            price = auction.get("final_price") or auction.get("current_bid")
+            why = f"remportée à {price} par un autre"
+        else:
+            why = f"montée à {auction.get('current_bid') or min_next_bid(auction)}, au-dessus de votre max"
+        if not self.dry_run:
+            notify(self.config, f"❌ Perdue : {card.name}, {why} (max {card.max_price}) ; "
+                                "recherche d'une autre enchère.")
+
+    def settle(self, card: BuyCard, entry: dict, auction: dict) -> None:
+        """Fin de l'enchère surveillée : gagnée ou perdue, annoncée tout de suite. Si le
+        gagnant n'est pas encore connu au bout d'OUTCOME_WAIT, la passe suivante s'en charge."""
+        deadline = time.monotonic() + OUTCOME_WAIT.total_seconds()
+        while True:
+            status = str(auction.get("status") or "active").lower()
+            winner = auction.get("winner_id")
+            if status != "active" and "cancel" in status:
+                log.info("Achat : enchère de « %s » annulée ; recherche d'une autre.", card.name)
+                _forget(entry)
+                return
+            if status != "active" and winner and self.state.my_id:
+                if winner == self.state.my_id:
+                    if self.count_wins(card, entry, [auction]):
+                        self.complete(card)
+                else:
+                    log.info("Achat : enchère perdue pour « %s » ; recherche d'une autre.", card.name)
+                    self.lost(card, entry, auction, force=True)
+                    _forget(entry)
+                return
+            if time.monotonic() + OUTCOME_POLL > deadline:
+                log.info("Achat : résultat de « %s » pas encore connu ; vu à la prochaine passe.", card.name)
+                return
+            time.sleep(OUTCOME_POLL)
+            auction = self.site.read_auction(auction["id"]) or auction
+
     def deadline(self, auction: dict) -> float:
         """Jusqu'à quand renvoyer une mise sans réponse (time.monotonic()) : la fin de
         l'enchère, au plus BID_RETRY_LIMIT."""
@@ -297,6 +345,7 @@ class _Buyer:
         if min_next_bid(auction) > card.max_price:
             log.info("Achat : « %s » dépasse la limite (%d > %d) ; abandon de cette enchère.",
                      card.name, min_next_bid(auction), card.max_price)
+            self.lost(card, entry, auction)
             _forget(entry)
             return
         if self.config.max_total_bids and self.budget_used + min_next_bid(auction) > self.config.max_total_bids:
@@ -322,6 +371,7 @@ class _Buyer:
         elif result == "too_high":
             log.info("Achat : la mise minimale de « %s » est %d, au-dessus de la limite %d ; "
                      "abandon de cette enchère.", card.name, amount, card.max_price)
+            self.lost(card, entry, auction)
             _forget(entry)
         elif result == "no_funds":
             log.warning("Achat : solde insuffisant pour miser %d sur « %s ».", amount, card.name)
@@ -358,7 +408,8 @@ class _Buyer:
                 continue
             auction = fresh
             if auction.get("status") != "active":
-                return  # la passe suivante verra si elle est gagnée
+                self.settle(card, entry, auction)
+                return
             end = parse_time(auction.get("end_at")) or end
             entry["end_at"] = auction.get("end_at")
             remaining = end - self.now()
@@ -368,6 +419,7 @@ class _Buyer:
                     return
                 continue  # relire tout de suite
             if remaining < -timedelta(seconds=5):
+                self.settle(card, entry, auction)
                 return
             time.sleep(WATCH_POLL)
 
@@ -393,6 +445,7 @@ class _Buyer:
         if amount > card.max_price:
             log.info("Achat : « %s » — mise minimale %d au-dessus de la limite %d ; abandon.",
                      card.name, amount, card.max_price)
+            self.lost(card, entry, auction)
             _forget(entry)
             return
         if self.dry_run:

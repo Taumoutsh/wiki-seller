@@ -707,3 +707,53 @@ def test_snipe_keeps_watching_when_the_site_does_not_answer(tmp_path):
         run_snipe(config)
     assert site.bids[-1] == ("s1", 80)
     assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=31)
+
+
+def test_watched_auction_result_is_announced_right_away(tmp_path):
+    import threading
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    end = datetime.now(timezone.utc) + timedelta(seconds=35)
+    auction = market_auction("s1", "Victor Hugo", 50, end_at=end.isoformat())
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site, \
+            FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=10), telegram_token=TOKEN, telegram_chat_id=CHAT_ID,
+                             telegram_api_url=tg.url)
+        run_once(config)
+        assert site.bids == [("s1", 50)]
+
+        def close_auction():  # le site désigne le gagnant un peu après la fin
+            time.sleep(max(0.0, (end - datetime.now(timezone.utc)).total_seconds()) + 2)
+            site.settle("s1")
+
+        threading.Thread(target=close_auction, daemon=True).start()
+        run_snipe(config)
+    assert "🛒 Obtenue : Victor Hugo pour 50" in tg.sent
+    assert any("achat terminé" in t for t in tg.sent) and buy_cards(config) == []
+
+
+def test_lost_auctions_are_announced(tmp_path):
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    auctions = [market_auction("s1", "Victor Hugo", 50), market_auction("s2", "Victor Hugo", 60)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site, \
+            FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+        run_once(config)
+        assert site.bids == [("s1", 50)]
+        # Enchère suivie terminée, remportée par un autre : annoncée, puis une autre est cherchée.
+        site.auctions["s1"].update(status="settled_sold", winner_id="rival", final_price=120)
+        run_once(config)
+        assert site.bids[-1] == ("s2", 60)
+        # Dépassé au-delà du max : abandon annoncé.
+        site.outbid("s2", 150)
+        run_once(config)
+    lost = [t for t in tg.sent if t.startswith("❌ Perdue")]
+    assert lost == ["❌ Perdue : Victor Hugo, remportée à 120 par un autre (max 100) ; recherche d'une autre enchère.",
+                    "❌ Perdue : Victor Hugo, montée à 150, au-dessus de votre max (max 100) ; "
+                    "recherche d'une autre enchère."]
