@@ -11,7 +11,15 @@ from .buying import WantedState, my_user_id, run_bids
 from .config import Config, ConfigError
 from .discard import check_discard
 from .lists import ListError, safe_names
-from .report import history_text, send_report
+from .report import (
+    ending_soon,
+    history_text,
+    remember_selling,
+    report_due,
+    report_overdue,
+    send_report,
+    settling,
+)
 from .selling import RunResult, sell
 from .session import open_site
 from .site import SessionExpired, WikiMasters
@@ -68,19 +76,35 @@ def _buy(site: WikiMasters, config: Config, dry_run: bool) -> None:
         log.warning("Achats interrompus : %s", str(exc).splitlines()[0])
 
 
-def _send_report(site: WikiMasters, config: Config, bot, on_demand: bool) -> None:
-    market = site.fetch_market_state()
+def _send_report(site: WikiMasters, config: Config, bot, on_demand: bool, market=None) -> None:
+    market = market or site.fetch_market_state()
     my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
     send_report(site, config, bot, market.history, my_id, on_demand, market.mine)
 
 
 def _report(site: WikiMasters, config: Config, dry_run: bool) -> None:
-    """Bilan automatique toutes les REPORT_HOURS (au premier réveil après l'échéance)."""
+    """Bilan automatique toutes les REPORT_HOURS, en fin de passe, une fois les enchères
+    placées : au premier réveil après l'échéance où aucune de vos ventes ne se termine
+    dans les REPORT_QUIET minutes (sinon, au réveil suivant)."""
     bot = telegram_bot(config)
     if dry_run or bot is None or not config.report_every:
         return
     try:
-        _send_report(site, config, bot, on_demand=False)
+        market = site.fetch_market_state()
+        now = now_utc()
+        try:
+            if not report_due(config):
+                return
+            soon = ending_soon(market.selling, now)
+            settled = settling(config, market.selling, market.history, now)
+            if (soon or settled) and not report_overdue(config, now):
+                log.info("Bilan reporté au prochain réveil : %s.",
+                         f"une vente se termine à {soon.astimezone():%H:%M:%S}" if soon else
+                         f"une vente terminée à {settled.astimezone():%H:%M:%S} n'est pas encore réglée")
+                return
+            _send_report(site, config, bot, on_demand=False, market=market)
+        finally:
+            remember_selling(config, market.selling)
     except SessionExpired:
         raise
     except Exception as exc:

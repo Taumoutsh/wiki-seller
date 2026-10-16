@@ -140,3 +140,76 @@ def test_history_text_shows_what_the_site_returns():
         f"👤 Rhône · vendeur différent · {(NOW - timedelta(hours=3)).astimezone():%H:%M}",
         f"⏸️ Pomme · cancelled · {first:%d/%m %H:%M}"]
     assert "aucune enchère terminée" in history_text([], "me", now)
+
+
+def test_sale_that_shows_up_late_counts_in_the_next_report_once(tmp_path):
+    # Vente conclue à 18:19, absente de l'historique au bilan de 18:20 : elle compte au suivant.
+    config = make_config(tmp_path, "http://127.0.0.1:1", [], report_every=timedelta(hours=2))
+    stub = Stub()
+    now = datetime.now(timezone.utc)
+    path = config.state_dir / "report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = {**sale(40, 0), "id": "old", "settled_at": (now - timedelta(hours=3)).isoformat()}
+    path.write_text(json.dumps({"since": (now - timedelta(hours=2, minutes=1)).isoformat()}))
+    assert send_report(stub, config, stub, [old], "me")  # ancienne vente : déjà comptée avant
+    assert "Ventes" not in stub.sent[-1]
+
+    late = {**sale(150, 0), "id": "late", "title": "x", "settled_at": (now - timedelta(minutes=1)).isoformat()}
+    data = json.loads(path.read_text())
+    data["since"] = (now - timedelta(hours=2, minutes=1) + timedelta(seconds=30)).isoformat()
+    path.write_text(json.dumps(data))
+    assert send_report(stub, config, stub, [old, late], "me")
+    assert "Ventes · 1 carte · +150" in stub.sent[-1]
+
+    data = json.loads(path.read_text())
+    data["since"] = (now - timedelta(hours=2, minutes=1)).isoformat()
+    path.write_text(json.dumps(data))
+    assert send_report(stub, config, stub, [old, late], "me")
+    assert "Ventes" not in stub.sent[-1]  # comptée une seule fois
+
+
+class MarketStub(Stub):
+    def __init__(self, selling, history=()):
+        super().__init__()
+        self.selling, self.history = selling, list(history)
+
+    def fetch_market_state(self):
+        from wiki_seller.site import MarketState
+
+        return MarketState(selling=self.selling, max_auctions=5, history=self.history, mine={})
+
+
+def test_automatic_report_waits_until_no_sale_is_ending_or_settling(tmp_path, monkeypatch):
+    import wiki_seller.scheduler as scheduler
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", [], report_every=timedelta(hours=2),
+                         telegram_token="t", telegram_chat_id="1")
+    stub = MarketStub([])
+    monkeypatch.setattr(scheduler, "telegram_bot", lambda config: stub)
+    now = datetime.now(timezone.utc)
+    path = config.state_dir / "report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def due(minutes_late=1):
+        data = json.loads(path.read_text()) if path.exists() else {}
+        data["since"] = (now - timedelta(hours=2, minutes=minutes_late)).isoformat()
+        path.write_text(json.dumps(data))
+
+    due()
+    stub.selling = [{"id": "s1", "end_at": (now + timedelta(minutes=2)).isoformat()}]
+    scheduler._report(stub, config, dry_run=False)
+    assert stub.sent == []  # une vente se termine dans 2 min
+
+    stub.selling = []  # s1 vient de se terminer, pas encore dans l'historique
+    scheduler._report(stub, config, dry_run=False)
+    assert stub.sent == []
+
+    stub.history = [{"id": "s1", "seller_id": "me", "status": "settled", "final_price": 150,
+                     "settled_at": now.isoformat(), "card": {"wikipedia_title": "Taormine"}}]
+    scheduler._report(stub, config, dry_run=False)
+    assert len(stub.sent) == 1 and "Taormine · 150" in stub.sent[0]
+
+    due(minutes_late=40)  # très en retard : part même si une vente se termine bientôt
+    stub.selling = [{"id": "s2", "end_at": (now + timedelta(minutes=2)).isoformat()}]
+    scheduler._report(stub, config, dry_run=False)
+    assert len(stub.sent) == 2

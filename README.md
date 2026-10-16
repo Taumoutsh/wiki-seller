@@ -200,11 +200,19 @@ essaie la session et confirme (✅) ou en demande une autre (❌). Le script att
 - **En haut :** le solde et le gain depuis le dernier bilan automatique ; « Rien de neuf »
   s'il ne s'est rien passé. Les sections vides sont omises.
 - **Ventes :** prix finaux de vos enchères conclues (historique du site), 30 au plus.
+  Chaque vente est comptée une seule fois : une vente qui apparaît en retard dans
+  l'historique compte au bilan suivant.
 - **Défausses :** 1 wikibidou par exemplaire (compteur dans `state/report.json`).
 - **Achats en cours :** les enchères des cartes à acheter (`/buy`) : ✅ vous menez ;
   ⚠️ dépassé (votre mise → prix actuel), surenchère prévue juste avant la fin, avec son
   montant une fois le pas du site appris ; ❌ abandonnée, au-dessus du max. Fin : l'heure
   seule si c'est aujourd'hui.
+
+Le bilan automatique part en fin de passe, une fois les enchères placées, et attend
+qu'aucune de vos ventes ne se termine dans les 5 minutes ni ne soit en cours de
+règlement (terminée, mais pas encore dans l'historique) : sinon le solde compterait une
+vente que le bilan ne montre pas. Il part au réveil suivant, et quoi qu'il arrive au-delà
+de 30 minutes de retard.
 
 Le bilan est mis en forme (titres en gras) ; si Telegram refuse la mise en forme, il part
 en texte brut. Pas de bilan en `--dry-run`.

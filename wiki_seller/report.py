@@ -8,7 +8,7 @@ défausses sont comptées au fil de l'eau dans state/report.json (1 wikibidou ch
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 
 from .buying import auction_title
@@ -21,8 +21,19 @@ log = logging.getLogger(__name__)
 
 DISCARD_REWARD = 1  # wikibidou par exemplaire défaussé (fenêtre « Défausser cette carte ? »)
 INDENT = "   "
-MAX_SALES_LISTED = 30
-MAX_HISTORY_LISTED = 40  # enchères détaillées par /ventes  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
+# Le bilan automatique attend qu'aucune de vos ventes ne se termine dans les REPORT_QUIET
+# minutes, ni ne soit en cours de règlement (terminée depuis moins de SETTLING, mais pas
+# encore dans l'historique : le solde la compte déjà, le bilan pas encore). Au-delà de
+# REPORT_MAX_DELAY de retard, il part quand même.
+REPORT_QUIET = timedelta(minutes=5)
+SETTLING = timedelta(minutes=10)
+REPORT_MAX_DELAY = timedelta(minutes=30)
+# Les ventes sont comptées une fois chacune (identifiants gardés dans state/report.json) :
+# une vente qui arrive en retard dans l'historique compte au bilan suivant.
+LATE_SALES = timedelta(hours=6)
+COUNTED_LIMIT = 500
+MAX_SALES_LISTED = 30  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
+MAX_HISTORY_LISTED = 40  # enchères détaillées par /ventes
 _LOCK = threading.Lock()  # la défausse (thread) et les passes écrivent le même fichier
 
 
@@ -39,18 +50,28 @@ def record_discard(config) -> None:
         write_json(_file(config), data)
 
 
-def sales_between(history: list, my_id: str | None, start: datetime, end: datetime) -> list[tuple[str, int]]:
-    """(carte, prix final) de vos ventes conclues entre start et end, dans l'ordre."""
+def _sales(history: list, my_id: str | None, start: datetime, end: datetime,
+           counted: set[str] = frozenset(), start_without_id: datetime | None = None) -> list[dict]:
+    """Vos ventes conclues entre start et end, pas encore comptées, dans l'ordre. Une vente
+    sans identifiant (impossible à dédoublonner) compte à partir de start_without_id."""
     sales = []
     for auction in sorted((a for a in history or [] if isinstance(a, dict)),
                           key=lambda a: a.get("settled_at") or a.get("end_at") or ""):
-        if my_id and auction.get("seller_id") != my_id:
+        if (my_id and auction.get("seller_id") != my_id) or auction.get("id") in counted:
             continue
         price = auction.get("final_price")
         settled = parse_time(auction.get("settled_at") or auction.get("end_at"))
-        if isinstance(price, (int, float)) and price > 0 and settled and start <= settled < end:
-            sales.append((auction_title(auction) or "carte inconnue", int(price)))
+        first = start if auction.get("id") else max(start, start_without_id or start)
+        if isinstance(price, (int, float)) and price > 0 and settled and first <= settled < end:
+            sales.append(auction)
     return sales
+
+
+def sales_between(history: list, my_id: str | None, start: datetime, end: datetime,
+                  counted: set[str] = frozenset()) -> list[tuple[str, int]]:
+    """(carte, prix final) de vos ventes conclues entre start et end, dans l'ordre."""
+    return [(auction_title(a) or "carte inconnue", int(a["final_price"]))
+            for a in _sales(history, my_id, start, end, counted)]
 
 
 def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None) -> list[str]:
@@ -164,6 +185,46 @@ def history_text(history: list, my_id: str | None, now: datetime | None = None) 
     return "\n".join(lines)
 
 
+def report_due(config) -> bool:
+    """Le bilan automatique est-il à envoyer (REPORT_HOURS passées, ou premier lancement) ?"""
+    if not config.report_every:
+        return False
+    since = parse_time(read_json(_file(config), {}).get("since"))
+    return since is None or now_utc() - since >= config.report_every
+
+
+def report_overdue(config, now: datetime) -> bool:
+    """Bilan automatique en retard de plus de REPORT_MAX_DELAY : il part quoi qu'il arrive."""
+    since = parse_time(read_json(_file(config), {}).get("since"))
+    return since is None or now - since - config.report_every > REPORT_MAX_DELAY
+
+
+def settling(config, selling: list[dict], history: list, now: datetime) -> datetime | None:
+    """Fin d'une vente terminée depuis moins de SETTLING qui a quitté vos ventes en cours
+    (relevées en fin de passe précédente) sans être encore dans l'historique, sinon None."""
+    previous = read_json(_file(config), {}).get("selling") or {}
+    known = {a.get("id") for a in [*selling, *(history or [])] if isinstance(a, dict)}
+    ends = [e for auction_id, end in previous.items()
+            if auction_id not in known and (e := parse_time(end)) and now - SETTLING <= e <= now + REPORT_QUIET]
+    return max(ends) if ends else None
+
+
+def remember_selling(config, selling: list[dict]) -> None:
+    """Vos ventes en cours, pour repérer au réveil suivant celles en cours de règlement."""
+    with _LOCK:
+        data = read_json(_file(config), {})
+        data["selling"] = {a["id"]: a.get("end_at") for a in selling if isinstance(a, dict) and a.get("id")}
+        write_json(_file(config), data)
+
+
+def ending_soon(selling: list[dict], now: datetime) -> datetime | None:
+    """Fin de la première de vos ventes qui se termine avant now + REPORT_QUIET (ou qui
+    est terminée mais pas encore réglée), sinon None."""
+    ends = [e for a in selling if isinstance(a, dict) and (e := parse_time(a.get("end_at")))]
+    soon = [e for e in ends if e < now + REPORT_QUIET]
+    return min(soon) if soon else None
+
+
 def send_report(site, config, bot, history: list, my_id: str | None, on_demand: bool = False,
                 mine: dict | None = None) -> bool:
     """Envoie le bilan. Automatique (on_demand=False) : seulement si REPORT_HOURS sont
@@ -183,11 +244,17 @@ def send_report(site, config, bot, history: list, my_id: str | None, on_demand: 
         elif not on_demand and now - since < config.report_every:
             return False
         discarded = data.get("discarded", 0)
-        log.info("Bilan : l'historique du site contient %d enchère(s) terminée(s).", len(history or []))
-        text = report_text(since, now, sales_between(history, my_id, since, now), discarded, site.fetch_balance(),
-                           bid_lines(config, mine or {}, my_id))
+        counted = data.get("counted")
+        if counted is None:  # avant le suivi par identifiant : les ventes d'avant `since` sont comptées
+            counted = [a.get("id") for a in _sales(history, my_id, since - LATE_SALES, since)]
+        sold = _sales(history, my_id, since - LATE_SALES, now, set(counted), start_without_id=since)
+        log.info("Bilan : l'historique du site contient %d enchère(s) terminée(s), %d vente(s) à compter.",
+                 len(history or []), len(sold))
+        sales = [(auction_title(a) or "carte inconnue", int(a["final_price"])) for a in sold]
+        text = report_text(since, now, sales, discarded, site.fetch_balance(), bid_lines(config, mine or {}, my_id))
         if not on_demand:
-            write_json(_file(config), {"since": now.isoformat(), "discarded": 0})
+            counted = [*counted, *(a.get("id") for a in sold if a.get("id"))][-COUNTED_LIMIT:]
+            write_json(_file(config), {**data, "since": now.isoformat(), "discarded": 0, "counted": counted})
     bot.send(text, html=True)
     log.info("Bilan %s sur Telegram.", "demandé envoyé" if on_demand else "envoyé")
     return True
