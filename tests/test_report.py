@@ -25,8 +25,8 @@ def test_report_text():
     assert text == (f"<b>📊 Bilan · {start:%H:%M} → {end:%H:%M}</b>\n"
                     "👛 1 234 wikibidous  (+1 185 depuis le dernier bilan)\n\n"
                     "<b>💰 Ventes · 2 cartes · +1 065</b>\n"
-                    "<pre>Tour Eiffel      25\n"
-                    "Loire &amp; Cher  1 040</pre>\n\n"
+                    "• Tour Eiffel · 25\n"
+                    "• Loire &amp; Cher · 1 040\n\n"
                     "<b>🗑️ Défausses · 120 exemplaires · +120</b>")
     quiet = report_text(NOW, NOW, [], 0, None)
     assert quiet.endswith("👛 Solde illisible\nRien de neuf") and "Ventes" not in quiet and "Défausses" not in quiet

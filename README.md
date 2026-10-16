@@ -174,8 +174,8 @@ essaie la session et confirme (✅) ou en demande une autre (❌). Le script att
 👛 1 234 wikibidous  (+207 depuis le dernier bilan)
 
 💰 Ventes · 2 cartes · +87
-   Loire     40
-   Rhône     47
+• Loire · 40
+• Rhône · 47
 
 🗑️ Défausses · 120 exemplaires · +120
 
@@ -192,15 +192,14 @@ essaie la session et confirme (✅) ou en demande une autre (❌). Le script att
 
 - **En haut :** le solde et le gain depuis le dernier bilan automatique ; « Rien de neuf »
   s'il ne s'est rien passé. Les sections vides sont omises.
-- **Ventes :** prix finaux de vos enchères conclues (historique du site), en colonnes
-  (30 au plus).
+- **Ventes :** prix finaux de vos enchères conclues (historique du site), 30 au plus.
 - **Défausses :** 1 wikibidou par exemplaire (compteur dans `state/report.json`).
 - **Achats en cours :** les enchères des cartes à acheter (`/buy`) : ✅ vous menez ;
   ⚠️ dépassé (votre mise → prix actuel), surenchère prévue juste avant la fin, avec son
   montant une fois le pas du site appris ; ❌ abandonnée, au-dessus du max. Fin : l'heure
   seule si c'est aujourd'hui.
 
-Le bilan est mis en forme (gras, colonnes) ; si Telegram refuse la mise en forme, il part
+Le bilan est mis en forme (titres en gras) ; si Telegram refuse la mise en forme, il part
 en texte brut. Pas de bilan en `--dry-run`.
 
 **Commandes** (en mode `--loop`) :

@@ -19,7 +19,6 @@ from .state import now_utc, parse_time, read_json, write_json
 log = logging.getLogger(__name__)
 
 DISCARD_REWARD = 1  # wikibidou par exemplaire défaussé (fenêtre « Défausser cette carte ? »)
-MAX_TITLE = 24  # au-delà, le nom est coupé pour garder les prix alignés sur un téléphone
 INDENT = "   "
 MAX_SALES_LISTED = 30  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
 _LOCK = threading.Lock()  # la défausse (thread) et les passes écrivent le même fichier
@@ -119,23 +118,15 @@ def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], di
     sections = [f"<b>📊 Bilan · {start.astimezone():%H:%M} → {end.astimezone():%H:%M}</b>\n{head}"
                 + ("" if sales or discarded or bids else "\nRien de neuf")]
     if sales:
-        shown = [(_short(title), money(price)) for title, price in sales[:MAX_SALES_LISTED]]
-        width = max(len(t) for t, _ in shown)
-        digits = max(len(p) for _, p in shown)
-        rows = [f"{escape(t.ljust(width))}  {p.rjust(digits)}" for t, p in shown]
+        rows = [f"• {escape(title)} · {money(price)}" for title, price in sales[:MAX_SALES_LISTED]]
         if len(sales) > MAX_SALES_LISTED:
             rows.append(f"… et {plural(len(sales) - MAX_SALES_LISTED, 'autre')}")
-        sections.append(f"<b>💰 Ventes · {plural(len(sales), 'carte')} · +{money(earned)}</b>\n"
-                        "<pre>" + "\n".join(rows) + "</pre>")
+        sections.append(f"<b>💰 Ventes · {plural(len(sales), 'carte')} · +{money(earned)}</b>\n" + "\n".join(rows))
     if discarded:
         sections.append(f"<b>🗑️ Défausses · {plural(discarded, 'exemplaire')} · +{money(gained)}</b>")
     if bids:
         sections.append("<b>🛒 Achats en cours</b>\n" + "\n".join(bids))
     return "\n\n".join(sections)
-
-
-def _short(title: str) -> str:
-    return title if len(title) <= MAX_TITLE else title[:MAX_TITLE - 1] + "…"
 
 
 def send_report(site, config, bot, history: list, my_id: str | None, on_demand: bool = False,
