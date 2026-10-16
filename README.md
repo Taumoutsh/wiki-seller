@@ -170,24 +170,38 @@ essaie la session et confirme (✅) ou en demande une autre (❌). Le script att
 **Bilan toutes les 2 h** (`REPORT_HOURS`, `0` pour le couper) :
 
 ```
-📊 Bilan WikiMasters (14:00 → 16:02)
-💰 Ventes : 2 carte(s), +87
-• Loire : 40
-• Rhône : 47
-🗑️ Défausses : 120 exemplaire(s), +120
-Total gagné : +207
-👛 Solde actuel : 1 234 wikibidous
-🛒 Enchères en cours (achats) :
-• Tour Eiffel : vous menez à 300 (max 500), fin 15/10 18:42
-• Victor Hugo : dépassé, votre mise 80, renchérie à 100, surenchère à 110 prévue avant la fin (max 120), fin 15/10 19:05
+📊 Bilan · 14:00 → 16:02
+👛 1 234 wikibidous  (+207 depuis le dernier bilan)
+
+💰 Ventes · 2 cartes · +87
+   Loire     40
+   Rhône     47
+
+🗑️ Défausses · 120 exemplaires · +120
+
+🛒 Achats en cours
+✅ Tour Eiffel
+   en tête à 300 · max 500 · fin 18:42
+⚠️ Victor Hugo
+   dépassé : 80 → 100 · max 120 · fin 19:05
+   ↳ surenchère à 110 juste avant la fin
+❌ Loire
+   dépassé : 90 → 100 · max 100
+   ↳ abandonnée (au-dessus du max)
 ```
 
-Ventes : prix finaux de vos enchères conclues (historique du site), détaillées carte par
-carte (30 au plus) ; défausses : 1 wikibidou par exemplaire (compteur dans
-`state/report.json`). Enchères en cours : celles des cartes à acheter (`/buy`), avec
-votre mise et, si vous êtes dépassé, le prix actuel et ce que fera le script (le
-montant de la surenchère s'affiche une fois le pas du site appris). Pas de bilan en
-`--dry-run`.
+- **En haut :** le solde et le gain depuis le dernier bilan automatique ; « Rien de neuf »
+  s'il ne s'est rien passé. Les sections vides sont omises.
+- **Ventes :** prix finaux de vos enchères conclues (historique du site), en colonnes
+  (30 au plus).
+- **Défausses :** 1 wikibidou par exemplaire (compteur dans `state/report.json`).
+- **Achats en cours :** les enchères des cartes à acheter (`/buy`) : ✅ vous menez ;
+  ⚠️ dépassé (votre mise → prix actuel), surenchère prévue juste avant la fin, avec son
+  montant une fois le pas du site appris ; ❌ abandonnée, au-dessus du max. Fin : l'heure
+  seule si c'est aujourd'hui.
+
+Le bilan est mis en forme (gras, colonnes) ; si Telegram refuse la mise en forme, il part
+en texte brut. Pas de bilan en `--dry-run`.
 
 **Commandes** (en mode `--loop`) :
 

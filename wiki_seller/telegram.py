@@ -7,10 +7,13 @@ est supprimé dès qu'il est lu. API HTTP de Telegram, sans dépendance."""
 
 import json
 import logging
+import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from pathlib import Path
 
 from .commands import HELP_TEXT, LIST_COMMANDS, run_list_command
@@ -65,8 +68,17 @@ class TelegramBot:
             raise RuntimeError(data.get("description") or f"{method} refusé")
         return data.get("result")
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, html: bool = False) -> None:
+        """html : mise en forme (<b>, <pre>) ; si Telegram la refuse, le texte part brut."""
         try:
+            if html:
+                try:
+                    self.call("sendMessage", chat_id=self.chat_id, text=text, parse_mode="HTML",
+                              disable_web_page_preview=True)
+                    return
+                except (RuntimeError, urllib.error.HTTPError) as exc:  # 400 « can't parse entities »
+                    log.warning("Telegram : mise en forme refusée (%s) ; message envoyé sans.", exc)
+                    text = unescape(re.sub(r"</?(b|pre)>", "", text))
             self.call("sendMessage", chat_id=self.chat_id, text=text, disable_web_page_preview=True)
         except Exception as exc:
             log.warning("Telegram : message non envoyé (%s).", exc)

@@ -549,8 +549,10 @@ def test_telegram_report_with_sales_discards_and_balance(tmp_path):
             {"since": (now - timedelta(hours=2, minutes=5)).isoformat(), "discarded": 3}))
         run_once(config)
     assert len(tg.sent) == 1
-    assert "Ventes : 1 carte(s), +40" in tg.sent[0] and "Défausses : 3 exemplaire(s), +3" in tg.sent[0]
-    assert "Total gagné : +43" in tg.sent[0] and "Solde actuel : 100 wikibidous" in tg.sent[0]
+    assert "Ventes · 1 carte · +40</b>\n<pre>carte inconnue  40</pre>" in tg.sent[0]
+    assert "Défausses · 3 exemplaires · +3" in tg.sent[0]
+    assert "👛 100 wikibidous  (+43 depuis le dernier bilan)" in tg.sent[0]
+    assert tg.parse_modes == ["HTML"]
 
 
 def test_progress_without_copy_ids_is_discarded_and_the_collection_reread(tmp_path):

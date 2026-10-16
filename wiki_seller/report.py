@@ -9,6 +9,7 @@ défausses sont comptées au fil de l'eau dans state/report.json (1 wikibidou ch
 import logging
 import threading
 from datetime import datetime
+from html import escape
 
 from .buying import auction_title
 from .lists import ListError, buy_cards
@@ -18,6 +19,8 @@ from .state import now_utc, parse_time, read_json, write_json
 log = logging.getLogger(__name__)
 
 DISCARD_REWARD = 1  # wikibidou par exemplaire défaussé (fenêtre « Défausser cette carte ? »)
+MAX_TITLE = 24  # au-delà, le nom est coupé pour garder les prix alignés sur un téléphone
+INDENT = "   "
 MAX_SALES_LISTED = 30  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
 _LOCK = threading.Lock()  # la défausse (thread) et les passes écrivent le même fichier
 
@@ -49,15 +52,16 @@ def sales_between(history: list, my_id: str | None, start: datetime, end: dateti
     return sales
 
 
-def bid_lines(config, mine: dict, my_id: str | None) -> list[str]:
-    """Enchères en cours sur les cartes à acheter : mise, et prix actuel si vous êtes
-    dépassé (surenchère prévue juste avant la fin si elle reste dans la limite)."""
+def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None) -> list[str]:
+    """Enchères en cours sur les cartes à acheter, une par bloc (HTML Telegram) : ✅ vous
+    menez, ⚠️ dépassé avec surenchère prévue avant la fin, ❌ abandonnée (au-dessus du max)."""
     try:
         cards = {c.key: c for c in buy_cards(config)}
     except ListError:
         return []
     tracked = read_json(config.wanted_state_file, {}).get("cards", {})
-    lines = []
+    now = now or now_utc()
+    blocks = []
     for auction in mine.get("bidding") or []:
         if not isinstance(auction, dict) or auction.get("status", "active") != "active":
             continue
@@ -67,49 +71,71 @@ def bid_lines(config, mine: dict, my_id: str | None) -> list[str]:
         entry = tracked.get(card.key) or {}
         current = auction.get("current_bid")
         end = parse_time(auction.get("end_at"))
-        ends = f", fin {end.astimezone():%d/%m %H:%M}" if end else ""
+        details = [f"max {money(card.max_price)}"] + ([f"fin {when(end, now)}"] if end else [])
+        name = escape(card.name)
         if my_id and auction.get("current_bidder_id") == my_id:
-            lines.append(f"• {card.name} : vous menez à {money(current)} (max {money(card.max_price)}){ends}")
+            blocks.append(f"✅ {name}\n{INDENT}" + " · ".join([f"en tête à {money(current)}", *details]))
             continue
         mine_bid = entry.get("my_bid") or {}
-        placed = (f"votre mise {money(mine_bid['amount'])}" if mine_bid.get("auction") == auction.get("id")
-                  else "votre mise inconnue")
-        if isinstance(current, int):
-            step = entry.get("step")  # pas de surenchère, appris à la fin d'une enchère
-            following = current + int(step or 1)
-            plan = (", au-dessus de votre max : abandonnée" if following > card.max_price
-                    else f", surenchère à {money(following)} prévue avant la fin" if step
-                    else ", surenchère prévue avant la fin")
-            outbid = f"renchérie à {money(current)}{plan}"
+        placed = mine_bid.get("amount") if mine_bid.get("auction") == auction.get("id") else None
+        if not isinstance(current, int):
+            blocks.append(f"⚠️ {name}\n{INDENT}" + " · ".join(["dépassé (prix actuel illisible)", *details]))
+            continue
+        outbid = f"dépassé : {money(placed)} → {money(current)}" if placed else f"dépassé à {money(current)}"
+        step = entry.get("step")  # pas de surenchère, appris à la fin d'une enchère
+        following = current + int(step or 1)
+        if following > card.max_price:
+            icon, plan = "❌", "abandonnée (au-dessus du max)"
         else:
-            outbid = "prix actuel illisible"
-        lines.append(f"• {card.name} : dépassé, {placed}, {outbid} (max {money(card.max_price)}){ends}")
-    return lines
+            icon, plan = "⚠️", (f"surenchère à {money(following)} juste avant la fin" if step
+                                else "surenchère juste avant la fin")
+        blocks.append(f"{icon} {name}\n{INDENT}" + " · ".join([outbid, *details]) + f"\n{INDENT}↳ {plan}")
+    return blocks
+
+
+def when(moment: datetime, now: datetime) -> str:
+    """Heure seule si c'est aujourd'hui (heure locale), sinon date et heure."""
+    local = moment.astimezone()
+    return f"{local:%H:%M}" if local.date() == now.astimezone().date() else f"{local:%d/%m %H:%M}"
 
 
 def money(n) -> str:
     return f"{n:,}".replace(",", " ") if isinstance(n, int) else str(n)
 
 
+def plural(n: int, word: str) -> str:
+    return f"{money(n)} {word}{'s' if n > 1 else ''}"
+
+
 def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], discarded: int,
                 balance: int | None, bids: list[str] = ()) -> str:
+    """Bilan au format HTML de Telegram : l'essentiel en haut, une section par sujet,
+    les sections vides omises."""
     earned = sum(price for _, price in sales)
     gained = discarded * DISCARD_REWARD
-    lines = [f"📊 Bilan WikiMasters ({start.astimezone():%H:%M} → {end.astimezone():%H:%M})",
-             f"💰 Ventes : {len(sales)} carte(s), +{money(earned)}" if sales else "💰 Ventes : aucune"]
-    lines += [f"• {title} : {money(price)}" for title, price in sales[:MAX_SALES_LISTED]]
-    if len(sales) > MAX_SALES_LISTED:
-        lines.append(f"… et {len(sales) - MAX_SALES_LISTED} autre(s)")
-    lines.append(f"🗑️ Défausses : {discarded} exemplaire(s), +{money(gained)}" if discarded
-                 else "🗑️ Défausses : aucune")
-    if sales or discarded:
-        lines.append(f"Total gagné : +{money(earned + gained)}")
-    lines.append(f"👛 Solde actuel : {money(balance)} wikibidous" if balance is not None
-                 else "👛 Solde actuel : illisible")
+    head = f"👛 {money(balance)} wikibidous" if balance is not None else "👛 Solde illisible"
+    if earned + gained:
+        head += f"  (+{money(earned + gained)} depuis le dernier bilan)"
+    sections = [f"<b>📊 Bilan · {start.astimezone():%H:%M} → {end.astimezone():%H:%M}</b>\n{head}"
+                + ("" if sales or discarded or bids else "\nRien de neuf")]
+    if sales:
+        shown = [(_short(title), money(price)) for title, price in sales[:MAX_SALES_LISTED]]
+        width = max(len(t) for t, _ in shown)
+        digits = max(len(p) for _, p in shown)
+        rows = [f"{escape(t.ljust(width))}  {p.rjust(digits)}" for t, p in shown]
+        if len(sales) > MAX_SALES_LISTED:
+            rows.append(f"… et {plural(len(sales) - MAX_SALES_LISTED, 'autre')}")
+        sections.append(f"<b>💰 Ventes · {plural(len(sales), 'carte')} · +{money(earned)}</b>\n"
+                        "<pre>" + "\n".join(rows) + "</pre>")
+    if discarded:
+        sections.append(f"<b>🗑️ Défausses · {plural(discarded, 'exemplaire')} · +{money(gained)}</b>")
     if bids:
-        lines.append("🛒 Enchères en cours (achats) :")
-        lines += bids
-    return "\n".join(lines)
+        sections.append("<b>🛒 Achats en cours</b>\n" + "\n".join(bids))
+    return "\n\n".join(sections)
+
+
+def _short(title: str) -> str:
+    return title if len(title) <= MAX_TITLE else title[:MAX_TITLE - 1] + "…"
 
 
 def send_report(site, config, bot, history: list, my_id: str | None, on_demand: bool = False,
@@ -135,6 +161,6 @@ def send_report(site, config, bot, history: list, my_id: str | None, on_demand: 
                            bid_lines(config, mine or {}, my_id))
         if not on_demand:
             write_json(_file(config), {"since": now.isoformat(), "discarded": 0})
-    bot.send(text)
+    bot.send(text, html=True)
     log.info("Bilan %s sur Telegram.", "demandé envoyé" if on_demand else "envoyé")
     return True

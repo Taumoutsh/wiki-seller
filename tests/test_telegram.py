@@ -152,3 +152,13 @@ def test_list_commands_edit_the_lists(tmp_path):
         {"name": "Gustave Eiffel", "max_price": 300, "copies": 2},
         {"name": "Apollo 11", "max_price": 500, "sell_price": 900}]
     assert [(c["name"], c["price"]) for c in json.loads(sell_file(config).read_text())] == [("Tour Eiffel", 800)]
+
+
+def test_formatting_refused_by_telegram_falls_back_to_plain_text(tmp_path):
+    with FakeTelegram() as fake:
+        telegram = bot(tmp_path, fake)
+        telegram.send("<b>Bilan</b>\n<pre>Loire &amp; Cher  40</pre>", html=True)
+        fake.reject_html = True
+        telegram.send("<b>Bilan</b>\n<pre>Loire &amp; Cher  40</pre>", html=True)
+    assert fake.sent == ["<b>Bilan</b>\n<pre>Loire &amp; Cher  40</pre>", "Bilan\nLoire & Cher  40"]
+    assert fake.parse_modes == ["HTML", None]

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from wiki_seller.report import record_discard, report_text, send_report, sales_between
+from wiki_seller.report import bid_lines, record_discard, report_text, sales_between, send_report
 
 from .test_end_to_end import make_config
 
@@ -20,12 +20,17 @@ def test_sales_between_lists_my_sales_in_the_window():
 
 
 def test_report_text():
-    text = report_text(NOW - timedelta(hours=2), NOW, [("Tour Eiffel", 25), ("Loire", 40)], 120, 1234)
-    assert "Ventes : 2 carte(s), +65\n• Tour Eiffel : 25\n• Loire : 40\n" in text
-    assert "Défausses : 120 exemplaire(s), +120" in text
-    assert "Total gagné : +185" in text and "Solde actuel : 1 234 wikibidous" in text
-    assert "Enchères en cours" not in text
-    assert "Ventes : aucune" in report_text(NOW, NOW, [], 0, None)
+    text = report_text(NOW - timedelta(hours=2), NOW, [("Tour Eiffel", 25), ("Loire & Cher", 1040)], 120, 1234)
+    start, end = (NOW - timedelta(hours=2)).astimezone(), NOW.astimezone()
+    assert text == (f"<b>📊 Bilan · {start:%H:%M} → {end:%H:%M}</b>\n"
+                    "👛 1 234 wikibidous  (+1 185 depuis le dernier bilan)\n\n"
+                    "<b>💰 Ventes · 2 cartes · +1 065</b>\n"
+                    "<pre>Tour Eiffel      25\n"
+                    "Loire &amp; Cher  1 040</pre>\n\n"
+                    "<b>🗑️ Défausses · 120 exemplaires · +120</b>")
+    quiet = report_text(NOW, NOW, [], 0, None)
+    assert quiet.endswith("👛 Solde illisible\nRien de neuf") and "Ventes" not in quiet and "Défausses" not in quiet
+    assert "1 exemplaire ·" in report_text(NOW, NOW, [], 1, 5)
 
 
 def test_report_details_auctions_of_the_cards_to_buy(tmp_path):
@@ -47,22 +52,26 @@ def test_report_details_auctions_of_the_cards_to_buy(tmp_path):
         {"id": "l1", "card": {"wikipedia_title": "Loire"}, "current_bid": 100, "current_bidder_id": "rival",
          "status": "active", "end_at": end},
         {"id": "x1", "card": {"wikipedia_title": "Pas voulue"}, "current_bid": 5, "status": "active"}]}
+    hm = datetime.fromisoformat(end).astimezone().strftime("%H:%M")
+    text = "\n".join(bid_lines(config, mine, "me", now=datetime.fromisoformat(end)))
+    assert text == (f"✅ Tour Eiffel\n   en tête à 300 · max 500 · fin {hm}\n"
+                    f"⚠️ Victor Hugo\n   dépassé : 80 → 100 · max 120 · fin {hm}\n"
+                    "   ↳ surenchère à 110 juste avant la fin\n"
+                    f"❌ Loire\n   dépassé : 90 → 100 · max 100 · fin {hm}\n"
+                    "   ↳ abandonnée (au-dessus du max)")
+    later = datetime.fromisoformat(end) + timedelta(days=2)
+    assert "fin " + datetime.fromisoformat(end).astimezone().strftime("%d/%m %H:%M") in bid_lines(
+        config, mine, "me", now=later)[0]
     stub = Stub()
     send_report(stub, config, stub, [], "me", on_demand=True, mine=mine)
-    text = stub.sent[0]
-    when = datetime.fromisoformat(end).astimezone().strftime("%d/%m %H:%M")
-    assert f"🛒 Enchères en cours (achats) :\n• Tour Eiffel : vous menez à 300 (max 500), fin {when}" in text
-    assert (f"• Victor Hugo : dépassé, votre mise 80, renchérie à 100, surenchère à 110 prévue avant la fin "
-            f"(max 120), fin {when}") in text
-    assert "• Loire : dépassé, votre mise 90, renchérie à 100, au-dessus de votre max : abandonnée" in text
-    assert "Pas voulue" not in text
+    assert "\n\n<b>🛒 Achats en cours</b>\n✅ Tour Eiffel\n" in stub.sent[0] and "Pas voulue" not in stub.sent[0]
 
 
 class Stub:
     def __init__(self):
         self.sent = []
 
-    def send(self, text):
+    def send(self, text, html=False):
         self.sent.append(text)
 
     def fetch_balance(self):
@@ -81,7 +90,7 @@ def test_report_every_two_hours_with_discards_counted(tmp_path):
     data["since"] = (datetime.now(timezone.utc) - timedelta(hours=2, minutes=1)).isoformat()
     path.write_text(json.dumps(data))
     assert send_report(stub, config, stub, [], "me")
-    assert "Défausses : 2 exemplaire(s), +2" in stub.sent[0] and "Solde actuel : 500" in stub.sent[0]
+    assert "Défausses · 2 exemplaires · +2" in stub.sent[0] and "👛 500 wikibidous" in stub.sent[0]
     assert json.loads(path.read_text())["discarded"] == 0  # compteur remis à zéro
     assert not send_report(stub, config, stub, [], "me")
 
@@ -91,7 +100,7 @@ def test_report_on_demand_keeps_the_two_hour_counter(tmp_path):
     stub = Stub()
     record_discard(config)
     send_report(stub, config, stub, [], "me", on_demand=True)
-    assert "Défausses : 1 exemplaire(s), +1" in stub.sent[0]
+    assert "Défausses · 1 exemplaire · +1" in stub.sent[0]
     assert json.loads((config.state_dir / "report.json").read_text())["discarded"] == 1
 
 
