@@ -63,7 +63,7 @@ def _buy(site: WikiMasters, config: Config, dry_run: bool) -> None:
 def _send_report(site: WikiMasters, config: Config, bot, on_demand: bool) -> None:
     market = site.fetch_market_state()
     my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
-    send_report(site, config, bot, market.history, my_id, on_demand)
+    send_report(site, config, bot, market.history, my_id, on_demand, market.mine)
 
 
 def _report(site: WikiMasters, config: Config, dry_run: bool) -> None:

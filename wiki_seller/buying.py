@@ -212,6 +212,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
 
 
 def _forget(entry: dict) -> None:
+    entry.pop("my_bid", None)
     entry.pop("auction_id", None)
     entry.pop("end_at", None)
     entry["status"] = "searching"
@@ -283,6 +284,7 @@ class _Buyer:
         if result == "bid":
             self.budget_used += amount
             entry["placed"] = auction["id"]
+            entry["my_bid"] = {"auction": auction["id"], "amount": amount}  # pour le bilan (/update)
             refreshed = self.site.fetch_auction(auction["id"]) or {}
             if not self.state.my_id and refreshed.get("current_bid") == amount:
                 self.state.my_id = refreshed.get("current_bidder_id")
@@ -366,6 +368,7 @@ class _Buyer:
             return
         if self.site.post_bid(auction["id"], amount):
             entry["placed"] = auction["id"]
+            entry["my_bid"] = {"auction": auction["id"], "amount": amount}
             log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
                      (parse_time(auction.get("end_at")) - self.now()).total_seconds())
             return

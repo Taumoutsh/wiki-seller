@@ -171,14 +171,23 @@ essaie la session et confirme (✅) ou en demande une autre (❌). Le script att
 
 ```
 📊 Bilan WikiMasters (14:00 → 16:02)
-💰 Ventes : 4 carte(s), +87
+💰 Ventes : 2 carte(s), +87
+• Loire : 40
+• Rhône : 47
 🗑️ Défausses : 120 exemplaire(s), +120
 Total gagné : +207
 👛 Solde actuel : 1 234 wikibidous
+🛒 Enchères en cours (achats) :
+• Tour Eiffel : vous menez à 300 (max 500), fin 15/10 18:42
+• Victor Hugo : dépassé, votre mise 80, renchérie à 100, surenchère à 110 prévue avant la fin (max 120), fin 15/10 19:05
 ```
 
-Ventes : prix finaux de vos enchères conclues (historique du site) ; défausses : 1
-wikibidou par exemplaire (compteur dans `state/report.json`). Pas de bilan en `--dry-run`.
+Ventes : prix finaux de vos enchères conclues (historique du site), détaillées carte par
+carte (30 au plus) ; défausses : 1 wikibidou par exemplaire (compteur dans
+`state/report.json`). Enchères en cours : celles des cartes à acheter (`/buy`), avec
+votre mise et, si vous êtes dépassé, le prix actuel et ce que fera le script (le
+montant de la surenchère s'affiche une fois le pas du site appris). Pas de bilan en
+`--dry-run`.
 
 **Commandes** (en mode `--loop`) :
 
