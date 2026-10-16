@@ -56,7 +56,7 @@ def remind_legacy_files(config: Config, dry_run: bool) -> None:
         return
     names = " et ".join(p.name for p in legacy)
     text = (f"🧹 {names} : repris dans state/ et modifiés désormais par le bot (/list). Ces anciens fichiers "
-            "ne servent plus : à supprimer, avec leurs lignes dans docker-compose.yml, à la prochaine mise à jour.")
+            "ne servent plus : vous pouvez les supprimer.")
     log.warning("%s", text)
     if not dry_run:
         notify(config, text)

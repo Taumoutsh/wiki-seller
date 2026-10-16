@@ -77,9 +77,9 @@ relues à chaque passe :
 Sans liste de cartes protégées, aucune passe ne tourne (le script vendrait tout) :
 envoyez `/safe <carte>`, ou écrivez `[]` dans `state/safe_cards.json` pour tout vendre.
 
-Au premier démarrage, les anciens `safed_cards.json` et `wanted_cards.json` sont repris
-dans `state/` ; ils ne servent plus ensuite (le journal et le bot le rappellent) et
-seront retirés de `docker-compose.yml` à la prochaine mise à jour.
+Hors Docker, les anciens `safed_cards.json` et `wanted_cards.json` sont repris dans
+`state/` au premier démarrage ; ils ne servent plus ensuite (le journal et le bot le
+rappellent). Le conteneur ne les monte plus.
 
 ## Achats
 
