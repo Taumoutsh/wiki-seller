@@ -213,6 +213,7 @@ en texte brut. Pas de bilan en `--dry-run`.
 
 | Commande | Effet |
 |---|---|
+| `/ventes` (ou `/historique`) | Vos enchères terminées telles que le site les renvoie (les 40 plus récentes) : ✅ vendue, ❌ invendue, et la période couverte |
 | `/update` (ou `/bilan`) | Bilan immédiat depuis le dernier bilan automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il part juste après |
 | `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
 | `/safe Tour Eiffel` · `/unsafe Tour Eiffel` | Protège la carte (jamais défaussée, toujours un exemplaire gardé), ou la retire des protégées. Une défausse en cours la respecte aussitôt |

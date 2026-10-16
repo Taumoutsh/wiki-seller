@@ -11,7 +11,7 @@ from .buying import WantedState, my_user_id, run_bids
 from .config import Config, ConfigError
 from .discard import check_discard
 from .lists import ListError, safe_names
-from .report import send_report
+from .report import history_text, send_report
 from .selling import RunResult, sell
 from .session import open_site
 from .site import SessionExpired, WikiMasters
@@ -25,8 +25,16 @@ RETRY_AFTER_ERROR = timedelta(minutes=10)
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 REPORT_GUARD_SECONDS = 90  # pas de bilan demandé juste avant un réveil
 
-# Bilan demandé par /update sur Telegram : réveille la boucle.
+# Demandes du bot Telegram (/update : "report", /ventes : "history") : réveillent la boucle.
 REPORT_REQUEST = threading.Event()
+_PENDING: set[str] = set()
+_PENDING_LOCK = threading.Lock()
+
+
+def request(kind: str) -> None:
+    with _PENDING_LOCK:
+        _PENDING.add(kind)
+    REPORT_REQUEST.set()
 
 
 def run_once(config: Config, dry_run: bool = False, debug: bool = False) -> RunResult:
@@ -79,17 +87,23 @@ def _report(site: WikiMasters, config: Config, dry_run: bool) -> None:
         log.warning("Bilan Telegram non envoyé : %s", str(exc).splitlines()[0])
 
 
-def report_now(config: Config, debug: bool) -> None:
-    """Bilan demandé par /update : ouvre la session (une passe en cours passe avant)."""
+def report_now(config: Config, debug: bool, kinds: set[str] = frozenset({"report"})) -> None:
+    """Bilan (/update) ou historique des ventes (/ventes) demandé : ouvre la session (une
+    passe en cours passe avant)."""
     bot = telegram_bot(config)
     if bot is None:
         return
     try:
         with open_site(config, debug) as site:
-            _send_report(site, config, bot, on_demand=True)
+            if "report" in kinds:
+                _send_report(site, config, bot, on_demand=True)
+            if "history" in kinds:
+                market = site.fetch_market_state()
+                my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
+                bot.send(history_text(market.history, my_id), html=True)
     except Exception as exc:
-        log.warning("Bilan demandé non envoyé : %s", str(exc).splitlines()[0])
-        bot.send(f"❌ Bilan impossible pour l'instant : {str(exc).splitlines()[0][:200]}")
+        log.warning("Demande Telegram non traitée : %s", str(exc).splitlines()[0])
+        bot.send(f"❌ Impossible pour l'instant : {str(exc).splitlines()[0][:200]}")
 
 
 def sleep_until(wake: datetime, config: Config, debug: bool) -> None:
@@ -104,7 +118,10 @@ def sleep_until(wake: datetime, config: Config, debug: bool) -> None:
             return
         if REPORT_REQUEST.wait(remaining - REPORT_GUARD_SECONDS):
             REPORT_REQUEST.clear()
-            report_now(config, debug)
+            with _PENDING_LOCK:
+                kinds = set(_PENDING) or {"report"}
+                _PENDING.clear()
+            report_now(config, debug, kinds)
 
 
 def next_run_at(result: RunResult, config: Config, now: datetime) -> datetime:
@@ -139,7 +156,7 @@ def loop(config: Config, dry_run: bool, debug: bool) -> None:
     snipe = False
     bot = telegram_bot(config)
     if bot is not None:
-        CommandListener(bot, REPORT_REQUEST.set, config).start()
+        CommandListener(bot, request, config).start()
     list_error = None
     while True:
         try:

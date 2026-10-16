@@ -77,18 +77,21 @@ def test_update_command_asks_for_a_report(tmp_path):
 
     requested = []
     with FakeTelegram() as fake:
-        listener = CommandListener(bot(tmp_path, fake), lambda: requested.append(1)).start()
+        listener = CommandListener(bot(tmp_path, fake), requested.append).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())  # écoute prête
             fake.say("/update")
-            assert wait_for(lambda: requested)
+            assert wait_for(lambda: requested == ["report"])
+            fake.say("/ventes")
+            assert wait_for(lambda: requested == ["report", "history"])
             fake.say("salut")
-            assert wait_for(lambda: len(fake.sent) == 2)
+            assert wait_for(lambda: len(fake.sent) == 3)
             message_id = fake.say(COOKIES)  # aucune session demandée : supprimé
             assert wait_for(lambda: message_id in fake.deleted)
         finally:
             listener.stop()
-    assert fake.sent[0].startswith("⏳") and "/update" in fake.sent[1]
+    assert fake.sent[0].startswith("⏳ Bilan") and fake.sent[1].startswith("⏳ Historique")
+    assert "/update" in fake.sent[2] and "/ventes" in fake.sent[2]
     assert "aucune n'est demandée" in fake.sent[-1]
 
 
@@ -100,7 +103,7 @@ def test_session_reply_reaches_the_request_while_commands_are_listened(tmp_path)
     tried = []
     with FakeTelegram() as fake:
         telegram = bot(tmp_path, fake)
-        listener = CommandListener(telegram, lambda: None).start()
+        listener = CommandListener(telegram, lambda kind: None).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())
 
@@ -127,7 +130,7 @@ def test_list_commands_edit_the_lists(tmp_path):
     commands = ["/safe Victor Hugo", "/want Gustave Eiffel 300 x2", "/buy Gustave Eiffel", "/sell Tour Eiffel 800",
                 "/buyandsell Apollo 11 500 900", "/unsell Pomme", "/unsafe Victor Hugo", "/list"]
     with FakeTelegram() as fake:
-        listener = CommandListener(bot(tmp_path, fake), lambda: None, config).start()
+        listener = CommandListener(bot(tmp_path, fake), lambda kind: None, config).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())
             for n, command in enumerate(commands, 1):

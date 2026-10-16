@@ -15,12 +15,14 @@ from .buying import auction_title
 from .lists import ListError, buy_cards
 from .selection import normalize_name
 from .state import now_utc, parse_time, read_json, write_json
+from .unsold import auction_outcome
 
 log = logging.getLogger(__name__)
 
 DISCARD_REWARD = 1  # wikibidou par exemplaire défaussé (fenêtre « Défausser cette carte ? »)
 INDENT = "   "
-MAX_SALES_LISTED = 30  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
+MAX_SALES_LISTED = 30
+MAX_HISTORY_LISTED = 40  # enchères détaillées par /ventes  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
 _LOCK = threading.Lock()  # la défausse (thread) et les passes écrivent le même fichier
 
 
@@ -129,6 +131,39 @@ def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], di
     return "\n\n".join(sections)
 
 
+def history_text(history: list, my_id: str | None, now: datetime | None = None) -> str:
+    """/ventes : vos enchères terminées telles que le site les renvoie (les plus récentes
+    d'abord), pour vérifier ce que le bilan compte."""
+    now = now or now_utc()
+    ended = sorted((a for a in history or [] if isinstance(a, dict)),
+                   key=lambda a: a.get("settled_at") or a.get("end_at") or "", reverse=True)
+    if not ended:
+        return "<b>📜 Historique des ventes</b>\nLe site ne renvoie aucune enchère terminée."
+    times = [t for a in ended if (t := parse_time(a.get("settled_at") or a.get("end_at")))]
+    sold = [a for a in ended if auction_outcome(a) == "sold" and (not my_id or a.get("seller_id") == my_id)]
+    earned = sum(int(a["final_price"]) for a in sold if isinstance(a.get("final_price"), (int, float)))
+    lines = [f"<b>📜 Historique des ventes · {plural(len(sold), 'vendue')} · +{money(earned)}</b>",
+             f"Le site renvoie {plural(len(ended), 'enchère')} terminée{'s' if len(ended) > 1 else ''}"
+             + (f", du {when(min(times), now)} au {when(max(times), now)}." if times else ".")]
+    for auction in ended[:MAX_HISTORY_LISTED]:
+        title = escape(auction_title(auction) or "carte inconnue")
+        moment = parse_time(auction.get("settled_at") or auction.get("end_at"))
+        at = f" · {when(moment, now)}" if moment else ""
+        outcome = auction_outcome(auction)
+        if my_id and auction.get("seller_id") != my_id:
+            lines.append(f"👤 {title} · vendeur différent{at}")
+        elif outcome == "sold":
+            price = auction.get("final_price") or auction.get("current_bid")
+            lines.append(f"✅ {title} · {money(price) if price else 'prix ?'}{at}")
+        elif outcome == "unsold":
+            lines.append(f"❌ {title} · invendue{at}")
+        else:
+            lines.append(f"⏸️ {title} · {escape(str(auction.get('status') or 'état inconnu'))}{at}")
+    if len(ended) > MAX_HISTORY_LISTED:
+        lines.append(f"… et {plural(len(ended) - MAX_HISTORY_LISTED, 'autre')}")
+    return "\n".join(lines)
+
+
 def send_report(site, config, bot, history: list, my_id: str | None, on_demand: bool = False,
                 mine: dict | None = None) -> bool:
     """Envoie le bilan. Automatique (on_demand=False) : seulement si REPORT_HOURS sont
@@ -148,6 +183,7 @@ def send_report(site, config, bot, history: list, my_id: str | None, on_demand: 
         elif not on_demand and now - since < config.report_every:
             return False
         discarded = data.get("discarded", 0)
+        log.info("Bilan : l'historique du site contient %d enchère(s) terminée(s).", len(history or []))
         text = report_text(since, now, sales_between(history, my_id, since, now), discarded, site.fetch_balance(),
                            bid_lines(config, mine or {}, my_id))
         if not on_demand:

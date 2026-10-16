@@ -194,11 +194,12 @@ class TelegramBot:
 
 
 REPORT_COMMANDS = ("/update", "/bilan")
+HISTORY_COMMANDS = ("/ventes", "/historique")
 
 
 class CommandListener:
     """Écoute les commandes envoyées au bot (en mode --loop) : /update demande un bilan
-    tout de suite. Thread à part ; la demande de session reste prioritaire (même fil)."""
+    tout de suite, /ventes l'historique des ventes (on_report("report" | "history")). Thread à part ; la demande de session reste prioritaire (même fil)."""
 
     def __init__(self, bot: TelegramBot, on_report, config=None):
         self.bot, self.on_report, self.config = bot, on_report, config
@@ -231,7 +232,10 @@ class CommandListener:
                     self._cookies(message)
                 elif command in REPORT_COMMANDS:
                     self.bot.send("⏳ Bilan en préparation…")
-                    self.on_report()
+                    self.on_report("report")
+                elif command in HISTORY_COMMANDS:
+                    self.bot.send("⏳ Historique en préparation…")
+                    self.on_report("history")
                 elif command in LIST_COMMANDS and self.config is not None:
                     self.bot.send(run_list_command(self.config, command, text.strip().partition(" ")[2]))
                 else:

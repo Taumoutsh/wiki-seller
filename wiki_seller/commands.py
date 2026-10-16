@@ -20,6 +20,7 @@ from .state import read_json
 
 HELP_TEXT = ("Commandes :\n"
              "/update : bilan maintenant (ventes, défausses, solde)\n"
+             "/ventes : historique de vos ventes, tel que le site le donne\n"
              "/list : cartes protégées, à acheter et à vendre\n"
              "/safe <carte> · /unsafe <carte> : protéger une carte (jamais défaussée, un exemplaire "
              "toujours gardé)\n"

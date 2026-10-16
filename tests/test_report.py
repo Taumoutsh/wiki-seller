@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from wiki_seller.report import bid_lines, record_discard, report_text, sales_between, send_report
+from wiki_seller.report import bid_lines, history_text, record_discard, report_text, sales_between, send_report
 
 from .test_end_to_end import make_config
 
@@ -108,13 +108,35 @@ def test_sleep_wakes_up_for_a_report_request(tmp_path, monkeypatch):
     import wiki_seller.scheduler as main
 
     calls = []
-    monkeypatch.setattr(main, "report_now", lambda config, debug: calls.append(1))
+    monkeypatch.setattr(main, "report_now", lambda config, debug, kinds: calls.append(kinds))
     monkeypatch.setattr(main, "REPORT_GUARD_SECONDS", 0.5)
-    main.REPORT_REQUEST.set()
+    main.request("report")
+    main.request("history")
     main.sleep_until(main.now_utc() + timedelta(seconds=1.5), None, False)
-    assert calls == [1] and not main.REPORT_REQUEST.is_set()
+    assert calls == [{"report", "history"}] and not main.REPORT_REQUEST.is_set()
+    calls[:] = [1]
     # Juste avant un réveil : le bilan attend la fin du réveil.
     main.REPORT_REQUEST.set()
     main.sleep_until(main.now_utc() + timedelta(seconds=0.3), None, False)
     assert calls == [1] and main.REPORT_REQUEST.is_set()
     main.REPORT_REQUEST.clear()
+
+
+def test_history_text_shows_what_the_site_returns():
+    now = NOW
+    history = [sale(14, 1, title="Trois-Pistoles"),
+               {"seller_id": "me", "status": "settled", "final_price": None, "card": {"wikipedia_title": "Loire"},
+                "settled_at": (NOW - timedelta(hours=2)).isoformat()},
+               sale(30, 3, seller="other", title="Rhône"),
+               {"seller_id": "me", "status": "cancelled", "card": {"wikipedia_title": "Pomme"},
+                "end_at": (NOW - timedelta(days=2)).isoformat()}]
+    text = history_text(history, "me", now)
+    first, last = (NOW - timedelta(days=2)).astimezone(), (NOW - timedelta(hours=1)).astimezone()
+    assert text.splitlines() == [
+        "<b>📜 Historique des ventes · 1 vendue · +14</b>",
+        f"Le site renvoie 4 enchères terminées, du {first:%d/%m %H:%M} au {last:%H:%M}.",
+        f"✅ Trois-Pistoles · 14 · {last:%H:%M}",
+        f"❌ Loire · invendue · {(NOW - timedelta(hours=2)).astimezone():%H:%M}",
+        f"👤 Rhône · vendeur différent · {(NOW - timedelta(hours=3)).astimezone():%H:%M}",
+        f"⏸️ Pomme · cancelled · {first:%d/%m %H:%M}"]
+    assert "aucune enchère terminée" in history_text([], "me", now)
