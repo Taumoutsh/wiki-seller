@@ -109,7 +109,7 @@ class _Listings:
     def list(self, item: SaleItem, copy_index: int) -> bool:
         """Met en vente un exemplaire ; False s'il faut passer à la carte suivante."""
         result = list_item(self.site, self.config, item, self.dry_run, copy_index, self.my_ids)
-        if result.status is ListingStatus.FAILED:  # souvent passager
+        if result.status is ListingStatus.FAILED and "pas de réponse" not in result.detail:  # souvent passager
             log.info("%s : échec (%s), nouvel essai.", item.title, result.detail)
             time.sleep(RETRY_LISTING_AFTER)
             result = list_item(self.site, self.config, item, self.dry_run, copy_index, self.my_ids)

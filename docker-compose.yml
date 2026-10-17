@@ -2,14 +2,11 @@ services:
   wiki-seller:
     build: .
     restart: unless-stopped
-    # MAIL et PASSWORD (et les réglages optionnels) sont lus depuis .env.
+    # Réglages (optionnels) lus depuis .env.
     env_file: .env
-    # Ressources maximales : la moitié du serveur (4 cœurs) et 2 Go de RAM par défaut,
-    # réglables dans .env avec CPU_LIMIT et MEM_LIMIT.
-    cpus: ${CPU_LIMIT:-2}
-    mem_limit: ${MEM_LIMIT:-2g}
-    # Chromium utilise /dev/shm ; les 64 Mo par défaut de Docker le font planter.
-    shm_size: 512m
+    # Ressources maximales, réglables dans .env avec CPU_LIMIT et MEM_LIMIT.
+    cpus: ${CPU_LIMIT:-1}
+    mem_limit: ${MEM_LIMIT:-512m}
     volumes:
       # Fichiers d'état, dont les listes de cartes (state/safe_cards.json, buy_cards.json,
       # sell_cards.json) modifiées par le bot Telegram (/safe, /buy, /sell, /list…).

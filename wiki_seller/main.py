@@ -1,7 +1,6 @@
 """Ligne de commande : une passe, ou la boucle (--loop) utilisée par le conteneur."""
 
 import argparse
-import dataclasses
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
@@ -66,8 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wiki_seller", description="Ventes, achats et défausse automatiques sur WikiMasters.")
     parser.add_argument("--dry-run", action="store_true", help="tout simuler : ni mise en vente, ni mise, ni défausse")
     parser.add_argument("--loop", action="store_true", help="tourner en continu (relance RUN_INTERVAL après la dernière vente)")
-    parser.add_argument("--headed", action="store_true", help="afficher le navigateur (pour cocher la vérification Cloudflare)")
-    parser.add_argument("--debug", action="store_true", help="captures d'écran à chaque étape dans state/debug/")
+    parser.add_argument("--debug", action="store_true", help="réponses du site enregistrées dans state/debug/ en cas d'échec")
     args = parser.parse_args(argv)
 
     try:
@@ -75,8 +73,6 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"Configuration invalide : {exc}", file=sys.stderr)
         return 2
-    if args.headed:
-        config = dataclasses.replace(config, headless=False)
     setup_logging(config)
     log_startup(config, args.dry_run)
 
@@ -90,7 +86,6 @@ def main(argv: list[str] | None = None) -> int:
         log.error("%s", exc)
         return 2
     except SessionExpired as exc:
-        config.storage_state_file.unlink(missing_ok=True)
         log.error("Session expirée (%s) : relancez le script pour vous reconnecter.", exc)
         return 1
     except Exception:

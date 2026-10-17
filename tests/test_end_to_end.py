@@ -1,7 +1,6 @@
 """Parcours complet avec un vrai Chromium contre le faux site local (tests/fake_site.py)."""
 
 import json
-import os
 
 import pytest
 
@@ -10,7 +9,7 @@ from wiki_seller.lists import buy_cards, safe_names
 from wiki_seller.scheduler import run_once, run_snipe
 from wiki_seller.site import SiteError
 
-from .fake_site import ME, FakeWikiMasters, market_auction
+from .fake_site import ME, RUNNING, FakeWikiMasters, market_auction
 
 
 def entry(copy_id, card_id, title, rarity="R"):
@@ -35,11 +34,12 @@ def make_config(tmp_path, url, safe, wanted=None, **extra):
     wanted_file = tmp_path / "wanted_cards.json"
     if wanted is not None:
         wanted_file.write_text(json.dumps(wanted), encoding="utf-8")
-    extra = {"wanted_cards_file": wanted_file, **extra}
+    extra = {"wanted_cards_file": wanted_file, "supabase_url": url, **extra}
+    if "session_cookies" not in extra and url in RUNNING:  # session neuve du faux site
+        extra["session_cookies"] = RUNNING[url].session_cookies()
     return Config(
-        mail="me@example.com", password="secret", base_url=url, safe_cards_file=safe_file,
-        state_dir=tmp_path / "state", price_ratio=0.7, auction_duration_label="1 h",
-        headless=True, chromium_executable=os.getenv("CHROMIUM_EXECUTABLE") or None, **extra,
+        base_url=url, safe_cards_file=safe_file, state_dir=tmp_path / "state", price_ratio=0.7,
+        auction_duration_label="1 h", **extra,
     )
 
 
@@ -56,16 +56,15 @@ def test_full_run_lists_most_expensive_first(tmp_path):
         ("Loire", "105", "1 h"),
         ("Rhône", "70", "1 h"),
     ]
-    assert site.logins == 1
+    assert json.loads(config.session_file.read_text())["cookie"] == "sb-fakeproj-auth-token"
 
 
-def test_login_blocked_by_antibot_check_fails_cleanly(tmp_path, monkeypatch):
-    monkeypatch.setattr("wiki_seller.session.LOGIN_WAIT_HEADLESS", 2)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, challenge="manual") as site:
-        config = make_config(tmp_path, site.url, [])
-        with pytest.raises(SiteError, match="anti-bot"):
+def test_without_a_valid_session_nothing_is_done(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [], session_cookies="sb-fakeproj-auth-token.0=base64-abc")
+        with pytest.raises(SiteError, match="Aucune session valide"):
             run_once(config)
-    assert site.logins == 0 and site.listings == []
+    assert site.listings == [] and not config.session_file.exists()
 
 
 def test_second_run_reuses_session_and_respects_slots(tmp_path):
@@ -77,7 +76,7 @@ def test_second_run_reuses_session_and_respects_slots(tmp_path):
         assert first.listed == 2
         second = run_once(config)
     assert second.listed == 0 and second.slots_full
-    assert site.logins == 1  # la session sauvegardée a été réutilisée
+    assert site.refreshes == 0  # la session enregistrée a été réutilisée telle quelle
     assert [l["title"] for l in site.listings] == ["Tour Eiffel", "Château de Versailles"]
 
 
@@ -109,11 +108,30 @@ def test_only_selected_rarities_are_loaded_and_sold(tmp_path):
     assert rarities == {"L", "SR"}
 
 
-def test_session_cookies_skip_the_login_page(tmp_path):
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, challenge="manual") as site:
-        config = make_config(tmp_path, site.url, [], session_cookies="other=1; session=ok")
+def test_session_is_renewed_before_it_expires_and_saved(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setattr("wiki_seller.auth.REFRESH_MARGIN", 2)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, token_lifetime=4) as site:
+        config = make_config(tmp_path, site.url, [])
+        run_once(config, dry_run=True)
+        first = json.loads(config.session_file.read_text())["session"]["refresh_token"]
+        time.sleep(2.5)  # le jeton expire dans moins de 2 s : renouvelé avant la requête suivante
         result = run_once(config, dry_run=True)
-    assert result.listed == 5 and site.logins == 0
+        saved = json.loads(config.session_file.read_text())["session"]["refresh_token"]
+    assert result.listed == 5 and site.refreshes >= 1 and saved != first and saved in site.refresh_tokens
+    assert json.loads((config.state_dir / "site.json").read_text())["anon_key"].startswith("eyJ")
+
+
+def test_session_of_the_old_browser_is_taken_over(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [], session_cookies="")
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        cookies = [{"name": name, "value": value, "domain": "www.wiki-masters.com"}
+                   for name, value in (p.split("=", 1) for p in site.session_cookies().split("; "))]
+        config.storage_state_file.write_text(json.dumps({"cookies": [{"name": "autre", "value": "1"}, *cookies]}))
+        result = run_once(config, dry_run=True)
+    assert result.listed == 5 and config.session_file.exists() and not config.storage_state_file.exists()
 
 
 def eiffel_auctions():
@@ -140,7 +158,7 @@ def test_bids_once_then_rebids_only_at_the_end_or_moves_on(tmp_path):
         # Réveil de fin d'enchère : surenchère, dans la limite.
         site.auctions["e2"]["end_at"] = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
         run_snipe(config)
-        assert site.bids[-1] == ("e2", 260)
+        assert site.bids[-1] == ("e2", 275)  # 250 × 1,1
 
         # Dépassé au-delà de la limite : abandon, et mise sur une autre enchère de la carte.
         site.auctions["e2"]["end_at"] = "2030-01-01T10:00:00+00:00"
@@ -202,7 +220,7 @@ def test_snipe_bids_just_before_the_end(tmp_path):
         site.outbid("s1", 70)
         run_snipe(config)
         # La surenchère n'est partie qu'une fois arrivé à 25 s de la fin.
-        assert site.bids[-1] == ("s1", 80)
+        assert site.bids[-1] == ("s1", 77)  # 70 × 1,1
         assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=26)
 
 
@@ -289,7 +307,7 @@ def test_sale_price_lowered_when_above_current_auctions(tmp_path):
     assert site.api_listings[0]["base_amount"] == 3000
 
 
-def test_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
+def test_snipe_rebids_at_the_site_minimum(tmp_path, caplog):
     from datetime import datetime, timedelta, timezone
 
     auction = market_auction("s1", "Victor Hugo", 50)
@@ -303,9 +321,9 @@ def test_snipe_rebids_fast_with_learned_step(tmp_path, caplog):
         site.auctions["s1"]["end_at"] = end.isoformat()
         with caplog.at_level("INFO"):
             run_snipe(config)
-    # Surenchère au pas du site (70 + 10), partie dans les 6 dernières secondes.
-    assert site.bids[-1] == ("s1", 80)
-    assert "surenchère de 80 sur « Victor Hugo »" in caplog.text
+    # Surenchère à la mise minimale du site (70 × 1,1), partie dans les 6 dernières secondes.
+    assert site.bids[-1] == ("s1", 77)  # 70 × 1,1
+    assert "surenchère de 77 sur « Victor Hugo »" in caplog.text
 
 
 def test_night_sale_duration(tmp_path):
@@ -508,28 +526,28 @@ def test_each_card_is_discarded_as_soon_as_its_price_is_read(tmp_path):
     assert site.events.index(("défausse", "Caillou")) < site.events.index(("prix", "F"))
 
 
-def test_expired_session_is_renewed_through_telegram(tmp_path, monkeypatch):
+def test_expired_session_is_renewed_through_telegram(tmp_path):
     import threading
     import time
 
     from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
 
-    monkeypatch.setattr("wiki_seller.session.LOGIN_WAIT_HEADLESS", 2)
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, challenge="manual") as site, FakeTelegram() as tg:
-        config = make_config(tmp_path, site.url, [], session_cookies="session=expired",
-                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site, FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], telegram_token=TOKEN, telegram_chat_id=CHAT_ID,
+                             telegram_api_url=tg.url)
+        run_once(config, dry_run=True)
+        site.expire_all()  # déconnecté ailleurs : la session enregistrée ne vaut plus rien
 
         def answer():  # la personne répond une fois la demande reçue
             while not tg.sent:
                 time.sleep(0.1)
-            tg.say("sb-x-auth-token.0=base64-abc; session=ok")
+            tg.say(site.session_cookies())
 
         threading.Thread(target=answer, daemon=True).start()
         result = run_once(config, dry_run=True)
-    assert result.listed == 5 and site.logins == 0  # jamais bloqué sur la page /login
+    assert result.listed == 5
     assert site.url in tg.sent[0] and tg.sent[-1].startswith("✅") and len(tg.deleted) == 1
-    saved = (config.state_dir / "session_cookies.txt").read_text(encoding="utf-8")
-    assert "auth-token.0=base64-abc" in saved  # gardée pour les redémarrages
+    assert json.loads(config.session_file.read_text())["session"]["access_token"] in site.access_tokens
 
 
 def test_telegram_report_with_sales_discards_and_balance(tmp_path):
@@ -551,7 +569,7 @@ def test_telegram_report_with_sales_discards_and_balance(tmp_path):
     assert len(tg.sent) == 1
     assert "Ventes · 1 carte · +40</b>\n• carte inconnue · 40" in tg.sent[0]
     assert "Défausses · 3 exemplaires · +3" in tg.sent[0]
-    assert "👛 100 wikibidous  (+43 depuis le dernier bilan)" in tg.sent[0]
+    assert "👛 1 747 wikibidous  (+43 depuis le dernier bilan)" in tg.sent[0]
     assert tg.parse_modes == ["HTML"]
 
 
@@ -705,7 +723,7 @@ def test_snipe_keeps_watching_when_the_site_does_not_answer(tmp_path):
         site.auction_read_failures = 6  # l'enchère est illisible quelques secondes
         site.bid_failures = 1
         run_snipe(config)
-    assert site.bids[-1] == ("s1", 80)
+    assert site.bids[-1] == ("s1", 77)  # 70 × 1,1
     assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=31)
 
 

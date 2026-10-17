@@ -1,22 +1,25 @@
-"""Client de wiki-masters.com : l'API JSON que le site appelle lui-même, exécutée dans
-une page connectée (mêmes cookies que le navigateur). La page ne sert qu'à garder la
-session et à lire la mise minimale d'une enchère ; la connexion est dans session.py."""
+"""Client de wiki-masters.com : l'API JSON que le site appelle lui-même, en HTTP simple,
+avec les cookies de la session (auth.py ; la connexion est dans session.py)."""
 
 import dataclasses
+import http.client
+import json
 import logging
+import math
 import re
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.message import Message
 from email.utils import parsedate_to_datetime
 from enum import Enum
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page
-from playwright.sync_api import TimeoutError as PlaywrightTimeout
-
+from .auth import USER_AGENT, RefreshUnavailable, SessionDead, SessionStore, decode_session
 from .config import Config, parse_duration
 from .selection import normalize_name, sale_price
 from .state import parse_time
@@ -32,15 +35,105 @@ BID_TIMEOUT = 8  # s : mise sans réponse, vérifiée puis renvoyée
 BID_RETRY_PAUSE = 1  # s entre deux essais de mise
 LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut être en vente ou en échange)
 
-SEARCH_PLACEHOLDER = re.compile(r"Rechercher", re.I)
-COOKIE_ACCEPT = re.compile(r"tout accepter|accepter|j.accepte", re.I)
-BID_INPUT = 'input[aria-label="Montant de la mise"]'
 SLOTS_FULL_TEXT = re.compile(r"maximum|limite|trop d.ench|max.*ench|concurrent", re.I)
-BALANCE_TEXT = re.compile(r"Votre solde\s*:\s*(\d[\d   ]*)", re.I)
+# Erreurs réseau (délai dépassé, connexion coupée) : le site bogue parfois.
+NETWORK_ERRORS = (OSError, http.client.HTTPException)
 
 
 class SessionExpired(Exception):
     pass
+
+
+def min_bid(auction: dict) -> int:
+    """Mise minimale, calculée comme la page de l'enchère : la mise de départ s'il n'y a
+    pas encore de mise, sinon max(⌈1,1 × mise actuelle⌉, mise actuelle + 1)."""
+    current = auction.get("current_bid")
+    if isinstance(current, (int, float)) and not isinstance(current, bool):
+        return max(math.ceil(round(1.1 * current, 6)), int(current) + 1)
+    return int(auction.get("base_amount") or auction.get("effective_bid") or 0)
+
+
+@dataclass
+class Response:
+    status: int
+    data: object
+    text: str
+    headers: Message
+
+
+class SiteClient:
+    """Requêtes HTTP au site avec les cookies de la session. La session est renouvelée
+    avant son expiration (et une fois après un refus 401) ; une session renvoyée par le
+    site dans ses cookies est adoptée aussitôt."""
+
+    def __init__(self, base_url: str, store: SessionStore):
+        self.base_url, self.store = base_url.rstrip("/"), store
+        self.cookies: dict[str, str] = {}  # autres cookies posés par le site
+        self.last: Response | None = None  # dernière réponse (--debug)
+
+    def request(self, method: str, path: str, body: dict | None = None, timeout: float = 60,
+                accept: str = "application/json") -> Response:
+        for attempt in (1, 2):
+            self._fresh()
+            headers = {"User-Agent": USER_AGENT, "Accept": accept, "Accept-Language": "fr-FR,fr;q=0.9",
+                       "Referer": f"{self.base_url}/marketplace"}
+            cookie = "; ".join(f"{k}={v}" for k, v in [*self.store.cookies(), *self.cookies.items()])
+            if cookie:
+                headers["Cookie"] = cookie
+            data = None
+            if method != "GET":
+                headers["Origin"] = self.base_url
+                data = b""
+                if body is not None:
+                    headers["Content-Type"] = "application/json"
+                    data = json.dumps(body).encode()
+            request = urllib.request.Request(self.base_url + path, data=data, method=method, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    status, raw, reply_headers = response.status, response.read(), response.headers
+            except urllib.error.HTTPError as exc:
+                status, raw, reply_headers = exc.code, exc.read(), exc.headers
+            self._take_cookies(reply_headers)
+            if status == 401 and attempt == 1 and self.store.has_session():
+                if self._fresh(force=True):
+                    continue  # jeton refusé : renouvelé, on réessaie une fois
+            break
+        text = raw.decode("utf-8", "replace")
+        try:
+            parsed = json.loads(text) if text else None
+        except ValueError:
+            parsed = None
+        self.last = Response(status, parsed, text, reply_headers)
+        return self.last
+
+    def _fresh(self, force: bool = False) -> bool:
+        try:
+            self.store.ensure_fresh(force)
+            return True
+        except SessionDead as exc:
+            raise SessionExpired(str(exc)) from exc
+        except RefreshUnavailable as exc:
+            log.warning("Session non renouvelée pour l'instant (%s).", exc)
+            return False
+
+    def _take_cookies(self, headers: Message) -> None:
+        auth: list[tuple[str, str]] = []
+        for line in headers.get_all("Set-Cookie") or []:
+            try:
+                parsed = SimpleCookie(line)
+            except CookieError:
+                continue
+            for name, morsel in parsed.items():
+                if name.startswith("sb-") and "auth-token" in name:
+                    if morsel.value and morsel["max-age"] != "0":
+                        auth.append((name, morsel.value))
+                elif morsel["max-age"] == "0" or not morsel.value:
+                    self.cookies.pop(name, None)
+                else:
+                    self.cookies[name] = morsel.value
+        decoded = decode_session(auth) if auth else None
+        if decoded and decoded[1].get("refresh_token") != (self.store.session or {}).get("refresh_token"):
+            self.store.adopt(*decoded)  # le site a renouvelé la session lui-même
 
 
 class SiteError(Exception):
@@ -138,19 +231,11 @@ def search_queries(name: str) -> list[str]:
 
 
 class WikiMasters:
-    def __init__(self, page: Page, config: Config, debug: bool = False):
-        self.page = page
+    def __init__(self, client: SiteClient, config: Config, debug: bool = False):
+        self.client = client
         self.config = config
         self.debug = debug
         self.retries = 0  # nouveaux essais après « trop de requêtes » ou panne du site
-        # Bandeau des cookies : accepté automatiquement s'il gêne une action.
-        banner = (
-            page.locator("[role=dialog], .fixed, [id*=cookie i], [class*=cookie i]")
-            .filter(has_text=re.compile(r"cookie", re.I))
-            .filter(has=page.get_by_role("button", name=COOKIE_ACCEPT))
-            .first
-        )
-        page.add_locator_handler(banner, lambda popup: popup.get_by_role("button", name=COOKIE_ACCEPT).first.click())
 
     # ─────────────────────────── Utilitaires ───────────────────────────
 
@@ -158,17 +243,19 @@ class WikiMasters:
         return f"{self.config.base_url}{path}"
 
     def snapshot(self, name: str) -> Path | None:
-        """Capture d'écran + HTML, pour comprendre un problème après coup."""
+        """Dernière réponse du site, enregistrée pour comprendre un problème après coup."""
+        last = self.client.last
+        if last is None:
+            return None
         try:
             self.config.debug_dir.mkdir(parents=True, exist_ok=True)
             stem = f"{datetime.now():%Y%m%d-%H%M%S}-{re.sub(r'[^a-zA-Z0-9]+', '_', name)[:60]}"
-            png = self.config.debug_dir / f"{stem}.png"
-            self.page.screenshot(path=str(png), full_page=True)
-            (self.config.debug_dir / f"{stem}.html").write_text(self.page.content(), encoding="utf-8")
-            log.info("Capture de débogage : %s", png)
-            return png
-        except Exception as exc:  # une capture ratée ne doit jamais faire échouer une action
-            log.warning("Capture impossible (%s)", exc)
+            path = self.config.debug_dir / f"{stem}.txt"
+            path.write_text(f"HTTP {last.status}\n\n{last.text}", encoding="utf-8")
+            log.info("Réponse enregistrée : %s", path)
+            return path
+        except Exception as exc:  # un enregistrement raté ne doit jamais faire échouer une action
+            log.warning("Enregistrement impossible (%s)", exc)
             return None
 
     def step(self, name: str) -> None:
@@ -178,69 +265,57 @@ class WikiMasters:
     # ─────────────────────────── API JSON ───────────────────────────
 
     def api_get(self, path: str, timeout: float = API_TIMEOUT) -> tuple[int, object]:
-        """GET depuis la page connectée ; une requête sans réponse est abandonnée au bout
-        de `timeout` secondes (exception)."""
-        result = self.page.evaluate(
-            """async ([path, timeout]) => {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), timeout);
-                try {
-                    const res = await fetch(path, {credentials: 'include', headers: {accept: 'application/json'},
-                                                   signal: ctrl.signal});
-                    let data = null;
-                    try { data = await res.json(); } catch (e) {}
-                    return {status: res.status, data};
-                } finally { clearTimeout(timer); }
-            }""",
-            [path, int(timeout * 1000)],
-        )
-        return result["status"], result["data"]
+        """GET ; une requête sans réponse au bout de `timeout` secondes lève une exception."""
+        response = self.client.request("GET", path, timeout=timeout)
+        return response.status, response.data
 
     def api_post(self, path: str, body: dict | None = None, timeout: float = API_TIMEOUT) -> tuple[int, object, str]:
-        """POST depuis la page connectée. Renvoie (code, JSON ou None, texte brut)."""
-        result = self.page.evaluate(
-            """async ([path, body, timeout]) => {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), timeout);
-                const init = {method: 'POST', credentials: 'include', headers: {accept: 'application/json'},
-                              signal: ctrl.signal};
-                if (body !== null) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
-                try {
-                    const res = await fetch(path, init);
-                    const text = await res.text();
-                    let data = null;
-                    try { data = JSON.parse(text); } catch (e) {}
-                    return {status: res.status, data, text: text.slice(0, 500)};
-                } finally { clearTimeout(timer); }
-            }""",
-            [path, body, int(timeout * 1000)],
-        )
-        if result["status"] == 401 or (result["status"] == 403 and "Non autoris" in result["text"]):
-            raise SessionExpired(f"{path} → HTTP {result['status']}")
-        return result["status"], result["data"], result["text"]
+        """POST. Renvoie (code, JSON ou None, texte brut)."""
+        response = self.client.request("POST", path, body, timeout=timeout)
+        if response.status == 401 or (response.status == 403 and "Non autoris" in response.text):
+            raise SessionExpired(f"{path} → HTTP {response.status}")
+        return response.status, response.data, response.text[:500]
 
     def api_get_ok(self, path: str) -> object:
         """GET avec trois essais (2 s puis 4 s) sur « trop de requêtes » ou panne du site."""
         for attempt in range(3):
-            status, data = self.api_get(path)
+            try:
+                status, data = self.api_get(path)
+            except NETWORK_ERRORS as exc:  # pas de réponse : comme une panne
+                log.info("%s : pas de réponse du site (%s).", path, str(exc).splitlines()[0][:100] if str(exc) else exc)
+                status, data = 0, None
             if status in (401, 403):
                 raise SessionExpired(f"{path} → HTTP {status}")
             if 200 <= status < 300:
                 return data
             if status == 404:
                 return None
-            if status != 429 and status < 500:
+            if status and status != 429 and status < 500:
                 raise SiteError(f"{path} → HTTP {status}")
             self.retries += 1
             time.sleep(2 * (attempt + 1))
         raise SiteError(f"{path} indisponible")
 
     def is_logged_in(self) -> bool:
-        try:
-            status, _ = self.api_get("/api/wikibidous")
-        except Exception:  # page en cours de navigation
+        """True si le site accepte la session, False s'il la refuse. Site injoignable ou
+        en panne : SiteError (la session n'est pas en cause, elle est gardée)."""
+        if not self.client.store.has_session():
             return False
-        return 200 <= status < 300
+        for attempt in range(3):
+            try:
+                status, _ = self.api_get("/api/wikibidous", timeout=QUICK_TIMEOUT * 4)
+            except SessionExpired:
+                return False
+            except NETWORK_ERRORS as exc:
+                status, detail = 0, str(exc).splitlines()[0][:100] if str(exc) else type(exc).__name__
+            else:
+                detail = f"HTTP {status}"
+            if 200 <= status < 300:
+                return True
+            if status in (401, 403):
+                return False
+            time.sleep(2 * (attempt + 1))
+        raise SiteError(f"le site ne répond pas ({detail}) ; nouvel essai plus tard")
 
     # ─────────────────────────── Collection ───────────────────────────
 
@@ -349,21 +424,16 @@ class WikiMasters:
     def refresh_market(self) -> None:
         """Recharge le Marché : après la fin d'une enchère, le site ne la compte pas
         toujours comme terminée tant que la page n'a pas été rechargée."""
-        page = self.page
         try:
-            for load in (lambda: page.goto(self.url("/marketplace"), wait_until="domcontentloaded"),
-                         lambda: page.reload(wait_until="domcontentloaded")):
-                load()
-                page.get_by_placeholder(SEARCH_PLACEHOLDER).first.wait_for(state="visible", timeout=30000)
-        except PlaywrightTimeout:
-            log.warning("Le Marché a mis trop de temps à se recharger ; on continue.")
+            self.client.request("GET", "/marketplace", accept="text/html", timeout=API_TIMEOUT)
+        except NETWORK_ERRORS:
+            log.warning("Le Marché n'a pas répondu à temps ; on continue.")
 
     def server_clock_offset(self) -> timedelta:
         """Écart entre l'horloge du site (en-tête Date) et la nôtre, pour viser juste
         avant la fin d'une enchère."""
         try:
-            date = self.page.evaluate(
-                "async () => (await fetch('/api/wikibidous', {credentials: 'include'})).headers.get('date')")
+            date = self.client.request("GET", "/api/wikibidous", timeout=QUICK_TIMEOUT).headers.get("Date")
             server = parsedate_to_datetime(date) if date else None
         except Exception:
             server = None
@@ -394,7 +464,10 @@ class WikiMasters:
         status, text = 0, ""
         for candidate in (*copy_ids[:LISTING_COPY_TRIES], card_id):
             body = {"card_id": candidate, "base_amount": price, "duration_minutes": duration}
-            status, _, text = self.api_post("/api/marketplace", body)
+            try:
+                status, _, text = self.api_post("/api/marketplace", body)
+            except NETWORK_ERRORS as exc:  # réponse perdue : la passe suivante verra si elle est en vente
+                return ListingResult(ListingStatus.FAILED, price, average, f"pas de réponse ({exc})")
             if 200 <= status < 300:
                 if candidate == card_id and copy_ids:
                     log.info("Mise en vente acceptée avec l'identifiant de la carte (%s).", title)
@@ -411,7 +484,10 @@ class WikiMasters:
         path = f"/api/user-cards/{copy_id}/discard"
         if dry_run:
             return DiscardStatus.DRY_RUN, ""
-        status, _, text = self.api_post(path)
+        try:
+            status, _, text = self.api_post(path)
+        except NETWORK_ERRORS as exc:
+            return DiscardStatus.FAILED, f"POST {path} → pas de réponse ({exc})"
         if 200 <= status < 300:
             return DiscardStatus.DISCARDED, f"POST {path}"
         return DiscardStatus.FAILED, f"POST {path} → HTTP {status} : {text[:200]}"
@@ -492,40 +568,23 @@ class WikiMasters:
                      f"HTTP {status}" if status else text)
             time.sleep(BID_RETRY_PAUSE)
 
-    def read_min_bid(self, auction_id: str) -> int | None:
-        """Mise minimale exacte : le montant prérempli sur la page de l'enchère (l'API
-        ne donne pas le pas de surenchère). None si la page ne se charge pas."""
-        page = self.page
-        field = page.locator(BID_INPUT).first
-        try:
-            page.goto(self.url(f"/marketplace/{auction_id}"), wait_until="domcontentloaded", timeout=30000)
-            field.wait_for(state="visible", timeout=30000)
-            page.wait_for_function(
-                "(sel) => { const e = document.querySelector(sel); return e && e.value !== ''; }",
-                arg=BID_INPUT, timeout=10000)
-        except PlaywrightError:  # délai dépassé, ou page qui ne répond pas
-            self.snapshot(f"bid-{auction_id}")
-            return None
-        return parse_int(field.input_value())
-
     def place_bid(self, auction_id: str, max_price: int, dry_run: bool, deadline: float | None = None,
                   my_id: str | None = None) -> tuple[str, int | None]:
-        """Mise minimale (lue sur la page de l'enchère), si elle ne dépasse pas max_price
-        ni le solde. Page ou mise sans réponse : nouvel essai jusqu'à `deadline`.
+        """Mise minimale (calculée sur l'enchère relue), si elle ne dépasse pas max_price ni
+        le solde. Enchère ou mise sans réponse : nouvel essai jusqu'à `deadline`.
         Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
-        amount = self.read_min_bid(auction_id)
-        while amount is None and deadline is not None and time.monotonic() + BID_RETRY_PAUSE < deadline:
-            log.info("Enchère %s : page sans réponse, nouvel essai.", auction_id)
+        auction = self.read_auction(auction_id)
+        while auction is None and deadline is not None and time.monotonic() + BID_RETRY_PAUSE < deadline:
             time.sleep(BID_RETRY_PAUSE)
-            amount = self.read_min_bid(auction_id)
-        if amount is None:
+            auction = self.read_auction(auction_id)
+        if auction is None:
             return "failed", None
+        amount = min_bid(auction)
         if amount > max_price:
             return "too_high", amount
-        balance = BALANCE_TEXT.search(self.page.locator("body").inner_text())
-        if balance and amount > parse_int(balance.group(1)):
+        balance = self.fetch_balance()
+        if balance is not None and amount > balance:
             return "no_funds", amount
-        self.step(f"bid-ready-{auction_id}")
         if dry_run:
             return "dry_run", amount
         if self.post_bid(auction_id, amount, deadline, my_id):

@@ -198,8 +198,8 @@ def loop(config: Config, dry_run: bool, debug: bool) -> None:
             list_error = str(exc)
             next_pass = now_utc() + RETRY_AFTER_ERROR
         except SessionExpired as exc:
-            log.warning("Session expirée (%s) : nouvelle connexion à la prochaine passe.", exc)
-            config.storage_state_file.unlink(missing_ok=True)
+            log.warning("Session expirée (%s) : vérifiée à la prochaine passe (nouveaux cookies demandés "
+                        "si besoin).", exc)
             next_pass = now_utc() + timedelta(minutes=1)
         except Exception:
             log.exception("Erreur pendant la passe ; nouvel essai dans 10 minutes.")

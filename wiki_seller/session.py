@@ -1,34 +1,27 @@
-"""Session du site : un seul navigateur à la fois, et connexion dans cet ordre :
-session enregistrée (state/), cookies reçus par Telegram, SESSION_COOKIES, MAIL/PASSWORD,
-puis demande de nouveaux cookies par le bot Telegram.
+"""Session du site, sans navigateur : la session enregistrée (state/session.json, tenue
+à jour par auth.py), sinon des cookies copiés d'un navigateur connecté (anciens fichiers
+de session, SESSION_COOKIES), sinon le bot Telegram en demande de nouveaux.
 
-Le script ne contourne jamais une vérification humaine (Cloudflare) : il attend qu'elle
-passe seule, ou qu'une personne la fasse (--headed), ou demande une session copiée."""
+La connexion par mot de passe n'est pas possible : la page /login attend une case
+Cloudflare cochée par une personne, que le script ne contourne jamais."""
 
+import json
 import logging
 import re
 import threading
-import time
 from contextlib import contextmanager
 
-from playwright.sync_api import sync_playwright
-
+from .auth import SessionStore, decode_session
 from .config import Config
-from .site import SiteError, WikiMasters
-from .state import SITE_TIMEZONE
+from .site import SiteClient, SiteError, WikiMasters
 
 log = logging.getLogger(__name__)
 
-SESSION_COOKIES_FILE = "session_cookies.txt"  # dans state/ : dernière session reçue par Telegram
-LOGIN_SUBMIT = re.compile(r"^\s*(connexion|se connecter)\s*$", re.I)
-# Attente de la vérification anti-bot avant de pouvoir cliquer sur « Connexion ».
-LOGIN_WAIT_HEADLESS = 30
-LOGIN_WAIT_HEADED = 300
+SESSION_COOKIES_FILE = "session_cookies.txt"  # ancienne version : dernière session reçue par Telegram
 
 
 class SessionGate:
-    """Un seul navigateur à la fois sur la session : deux navigateurs qui la renouvellent
-    en même temps peuvent la faire annuler. Les passes (prioritaires) passent avant la
+    """Une seule tâche à la fois sur la session du site. Les passes (prioritaires) passent avant la
     défausse, qui vérifie should_yield() entre deux étapes."""
 
     def __init__(self):
@@ -73,30 +66,30 @@ class SessionGate:
 
 
 GATE = SessionGate()
+_STORES: dict = {}
+_STORES_LOCK = threading.Lock()
+
+
+def session_store(config: Config) -> SessionStore:
+    """Session du compte, partagée par les passes et la défausse (un seul renouvellement
+    à la fois)."""
+    path = config.session_file
+    with _STORES_LOCK:
+        store = _STORES.get(path)
+        if store is None:
+            store = _STORES[path] = SessionStore(path, config.base_url, config.supabase_url, config.supabase_anon_key)
+        return store
 
 
 @contextmanager
 def open_site(config: Config, debug: bool = False, background: bool = False):
-    """Navigateur connecté au site ; la session est enregistrée à la sortie. Un seul à la
-    fois : une tâche de fond (background) attend et cède la place aux passes."""
+    """Client connecté au site. Une seule tâche à la fois : une tâche de fond (background)
+    attend et cède la place aux passes."""
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    with GATE.background() if background else GATE.priority(), sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=config.headless, executable_path=config.chromium_executable)
-        storage = str(config.storage_state_file) if config.storage_state_file.exists() else None
-        context = browser.new_context(storage_state=storage, locale="fr-FR", timezone_id=SITE_TIMEZONE,
-                                      viewport={"width": 1440, "height": 900})
-        context.set_default_timeout(20000)
-        site = WikiMasters(context.new_page(), config, debug=debug)
-        try:
-            ensure_logged_in(site)
-            context.storage_state(path=str(config.storage_state_file))
-            yield site
-        finally:
-            try:
-                context.storage_state(path=str(config.storage_state_file))
-            except Exception:
-                pass
-            browser.close()
+    with GATE.background() if background else GATE.priority():
+        site = WikiMasters(SiteClient(config.base_url, session_store(config)), config, debug=debug)
+        ensure_logged_in(site)
+        yield site
 
 
 def parse_cookies(text: str) -> list[tuple[str, str]]:
@@ -110,103 +103,66 @@ def parse_cookies(text: str) -> list[tuple[str, str]]:
 
 
 def ensure_logged_in(site: WikiMasters) -> None:
-    config = site.config
-    site.page.goto(site.url("/collection"), wait_until="domcontentloaded")
-    if site.is_logged_in():
-        log.info("Session existante réutilisée.")
-        return
-    received = received_session_cookies(config)
-    if received and received != config.session_cookies and import_session_cookies(site, received, "reçue par Telegram"):
-        return
-    if config.session_cookies and import_session_cookies(site, config.session_cookies):
-        return
+    config, store = site.config, site.client.store
+    if store.has_session():
+        if site.is_logged_in():
+            return
+        log.warning("La session enregistrée ne fonctionne plus.")
+        store.clear()
+    for source, text, path in _saved_cookies(config):
+        if import_session_cookies(site, text, source):
+            if path is not None:
+                path.unlink(missing_ok=True)  # reprise dans state/session.json
+            return
+    if not session_from_telegram(site):
+        raise SiteError("Aucune session valide : envoyez au bot Telegram les cookies d'un navigateur connecté "
+                        "(voir le README), ou réglez SESSION_COOKIES.")
+
+
+def _saved_cookies(config: Config):
+    """Cookies à essayer quand il n'y a pas de session enregistrée : ceux du navigateur des
+    anciennes versions, la dernière session reçue par Telegram, puis SESSION_COOKIES."""
     try:
-        login(site)
-    except SiteError:  # vérification Cloudflare, identifiants refusés… : on demande par Telegram
-        if not session_from_telegram(site):
-            raise
+        cookies = json.loads(config.storage_state_file.read_text(encoding="utf-8")).get("cookies") or []
+        text = "; ".join(f"{c['name']}={c['value']}" for c in cookies if "auth-token" in c.get("name", ""))
+        if text:
+            yield "de l'ancien navigateur", text, config.storage_state_file
+    except (OSError, ValueError, KeyError, AttributeError):
+        pass
+    try:
+        text = (config.state_dir / SESSION_COOKIES_FILE).read_text(encoding="utf-8").strip()
+        if text:
+            yield "reçue par Telegram", text, config.state_dir / SESSION_COOKIES_FILE
+    except OSError:
+        pass
+    if config.session_cookies:
+        yield "SESSION_COOKIES", config.session_cookies, None
 
 
 def import_session_cookies(site: WikiMasters, text: str, source: str = "SESSION_COOKIES") -> bool:
-    """Session copiée depuis un navigateur connecté : évite la vérification Cloudflare de
-    /login. Le site la renouvelle ensuite tout seul, et la version à jour est enregistrée."""
-    cookies = parse_cookies(text)
-    if not cookies:
-        log.warning("La session %s ne contient aucun cookie « nom=valeur ».", source)
+    """Session copiée depuis un navigateur connecté (cookies « sb-…-auth-token… »). Elle
+    est ensuite renouvelée par le script, et enregistrée à chaque fois."""
+    decoded = decode_session(parse_cookies(text))
+    if decoded is None:
+        log.warning("La session %s ne contient pas de cookie « sb-…-auth-token » lisible.", source)
         return False
-    context = site.page.context
-    context.add_cookies([{"name": name, "value": value, "url": site.config.base_url} for name, value in cookies])
-    site.page.goto(site.url("/collection"), wait_until="domcontentloaded")
+    store = site.client.store
+    store.adopt(*decoded)
     if site.is_logged_in():
-        log.info("Connecté avec la session %s (%d cookie(s)).", source, len(cookies))
+        log.info("Connecté avec la session %s.", source)
         return True
     log.warning("La session %s est expirée ou invalide.", source)
-    context.clear_cookies()
+    store.clear()
     return False
 
 
-def received_session_cookies(config: Config) -> str:
-    try:
-        return (config.state_dir / SESSION_COOKIES_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
 def session_from_telegram(site: WikiMasters) -> bool:
-    """Le bot Telegram demande de nouveaux cookies et attend la réponse (TELEGRAM_WAIT).
-    Les cookies acceptés sont gardés pour les redémarrages."""
+    """Le bot Telegram demande de nouveaux cookies et attend la réponse (TELEGRAM_WAIT)."""
     from .telegram import telegram_bot
 
     config = site.config
     bot = telegram_bot(config)
     if bot is None:
         return False
-
-    def try_cookies(cookies: str) -> bool:
-        if not import_session_cookies(site, cookies, "reçue par Telegram"):
-            return False
-        path = config.state_dir / SESSION_COOKIES_FILE
-        path.write_text(cookies, encoding="utf-8")
-        path.chmod(0o600)
-        return True
-
-    return bot.request_session(config.base_url, try_cookies, config.telegram_wait)
-
-
-def login(site: WikiMasters) -> None:
-    """Connexion par /login. « Connexion » reste désactivé tant que la vérification
-    Cloudflare Turnstile n'est pas validée : on attend qu'elle passe seule, ou qu'une
-    personne coche la case dans le navigateur ouvert avec --headed."""
-    config, page = site.config, site.page
-    log.info("Connexion à %s avec %s", config.base_url, config.mail)
-    page.goto(site.url("/login"), wait_until="domcontentloaded")
-    password = page.locator("input[type=password]:visible").first
-    password.wait_for(state="visible", timeout=20000)
-    page.locator("input[type=email]:visible, input[autocomplete=email]:visible").first.fill(config.mail)
-    password.fill(config.password)
-    site.step("login-filled")
-
-    submit = page.get_by_role("button", name=LOGIN_SUBMIT).first
-    wait_s = LOGIN_WAIT_HEADLESS if config.headless else LOGIN_WAIT_HEADED
-    if not submit.is_enabled():
-        log.info("Bouton « Connexion » désactivé : attente de la vérification anti-bot Cloudflare "
-                 "(jusqu'à %d s)%s.", wait_s, "" if config.headless else " ; cochez la case dans le navigateur")
-    deadline = time.monotonic() + wait_s
-    while not submit.is_enabled():
-        if time.monotonic() > deadline:
-            site.snapshot("login-blocked")
-            raise SiteError(
-                "Connexion bloquée par la vérification anti-bot Cloudflare. Renouvelez la session par "
-                "Telegram, ou lancez une fois `python -m wiki_seller --dry-run --headed` sur une machine "
-                "avec écran et cochez la case vous-même.")
-        page.wait_for_timeout(500)
-
-    submit.click()
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        page.wait_for_timeout(1000)
-        if site.is_logged_in():
-            log.info("Connecté.")
-            return
-    site.snapshot("login-failed")
-    raise SiteError("Connexion échouée (identifiants refusés ou formulaire différent ?)")
+    return bot.request_session(config.base_url, lambda cookies: import_session_cookies(
+        site, cookies, "reçue par Telegram"), config.telegram_wait)

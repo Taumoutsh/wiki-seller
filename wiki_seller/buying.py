@@ -14,16 +14,16 @@ from pathlib import Path
 from .config import Config
 from .lists import BuyCard, buy_cards, complete_purchase
 from .selection import normalize_name
-from .site import SiteError
+from .site import SiteError, min_bid
 from .state import parse_time, read_json, write_json
 from .telegram import notify
 
 log = logging.getLogger(__name__)
 
-# Enchère qu'on laisse passer : trop proche de la fin pour ouvrir la page et miser.
+# Enchère qu'on laisse passer : trop proche de la fin pour miser à temps.
 TOO_LATE = timedelta(seconds=5)
-# Réveil avant l'heure de mise : lancer le navigateur et se connecter prend du temps.
-SNIPE_STARTUP = timedelta(seconds=45)
+# Réveil avant l'heure de mise : vérifier la session et relire les enchères prend un peu de temps.
+SNIPE_STARTUP = timedelta(seconds=15)
 # Surveillance de la fin d'enchère : à partir de watch_start() avant la fin, l'enchère est
 # relue toutes les WATCH_POLL secondes ; on surenchérit à SNIPE_LEAD de la fin, puis à
 # chaque fois qu'on est dépassé, jusqu'à la vraie fin.
@@ -50,11 +50,8 @@ def auction_title(auction: dict) -> str:
 
 
 def min_next_bid(auction: dict) -> int:
-    """Estimation basse de la prochaine mise (la vraie valeur est lue sur la page)."""
-    current = auction.get("current_bid")
-    if isinstance(current, (int, float)):
-        return int(current) + 1
-    return int(auction.get("effective_bid") or auction.get("base_amount") or 0)
+    """Mise minimale exacte, calculée comme la page de l'enchère."""
+    return min_bid(auction)
 
 
 def choose_auction(auctions: list[dict], card: BuyCard, my_id: str | None, now: datetime,
@@ -206,11 +203,8 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
             if auction is not None and not buyer.leading(auction) \
                     and (auction["id"] in bidding_ids or entry.get("placed") == auction["id"]):
                 # Déjà misé et dépassé : pas de surenchère maintenant, seulement à la fin
-                # (réveil SNIPE_LEAD avant), tant que la limite le permet. La limite est
-                # vérifiée avec la vraie mise minimale (champ prérempli de la page).
+                # (réveil SNIPE_LEAD avant), tant que la limite le permet.
                 minimum = min_next_bid(auction)
-                if minimum <= card.max_price:
-                    minimum = site.read_min_bid(auction["id"]) or minimum
                 if minimum <= card.max_price:
                     entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
                     log.info("Achat : « %s » — dépassé (%s), surenchère juste avant la fin (%s).",
@@ -389,7 +383,6 @@ class _Buyer:
         end = parse_time(auction.get("end_at"))
         if not end or end - self.now() > start + SNIPE_STARTUP + timedelta(minutes=2):
             return  # pas encore l'heure : la boucle reviendra
-        self._learn_step(entry, auction)
         deadline = time.monotonic() + WATCH_GUARD.total_seconds()
         announced = False
         while time.monotonic() < deadline:
@@ -423,25 +416,11 @@ class _Buyer:
                 return
             time.sleep(WATCH_POLL)
 
-    def _learn_step(self, entry: dict, auction: dict) -> None:
-        """Pas de surenchère du site : mise minimale (champ prérempli) - mise actuelle."""
-        if entry.get("step") or not isinstance(auction.get("current_bid"), int):
-            return
-        minimum = self.site.read_min_bid(auction["id"])
-        if minimum and minimum > auction["current_bid"]:
-            entry["step"] = minimum - auction["current_bid"]
-
     def fast_bid(self, card: BuyCard, entry: dict, auction: dict) -> None:
-        """Surenchère de dernière seconde : montant calculé avec le pas appris, envoyé
-        directement par l'API ; la page n'est relue que si le pas est inconnu ou refusé."""
-        current = auction.get("current_bid")
-        step = entry.get("step")
-        if isinstance(current, int) and not step:
-            self.bid_if_needed(card, entry, auction)  # lecture de la page
-            self._learn_step(entry, auction)
-            return
-        amount = int(current) + int(step) if isinstance(current, int) else int(
-            auction.get("base_amount") or auction.get("effective_bid") or 0)
+        """Surenchère de dernière seconde : la mise minimale, calculée sur l'enchère qu'on
+        vient de relire, envoyée directement par l'API ; si elle est refusée (l'enchère a
+        bougé), l'enchère est relue et la mise refaite."""
+        amount = min_next_bid(auction)
         if amount > card.max_price:
             log.info("Achat : « %s » — mise minimale %d au-dessus de la limite %d ; abandon.",
                      card.name, amount, card.max_price)
@@ -458,7 +437,5 @@ class _Buyer:
             log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
                      (parse_time(auction.get("end_at")) - self.now()).total_seconds())
             return
-        entry.pop("step", None)  # pas erroné ? on repasse par la page
         self.bid_if_needed(card, entry, auction)
-        self._learn_step(entry, auction)
 

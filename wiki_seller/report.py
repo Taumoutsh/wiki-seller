@@ -14,6 +14,7 @@ from html import escape
 from .buying import auction_title
 from .lists import ListError, buy_cards
 from .selection import normalize_name
+from .site import min_bid
 from .state import now_utc, parse_time, read_json, write_json
 from .unsold import auction_outcome
 
@@ -104,13 +105,11 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
             blocks.append(f"⚠️ {name}\n{INDENT}" + " · ".join(["dépassé (prix actuel illisible)", *details]))
             continue
         outbid = f"dépassé : {money(placed)} → {money(current)}" if placed else f"dépassé à {money(current)}"
-        step = entry.get("step")  # pas de surenchère, appris à la fin d'une enchère
-        following = current + int(step or 1)
+        following = min_bid(auction)
         if following > card.max_price:
             icon, plan = "❌", "abandonnée (au-dessus du max)"
         else:
-            icon, plan = "⚠️", (f"surenchère à {money(following)} juste avant la fin" if step
-                                else "surenchère juste avant la fin")
+            icon, plan = "⚠️", f"surenchère à {money(following)} juste avant la fin"
         blocks.append(f"{icon} {name}\n{INDENT}" + " · ".join([outbid, *details]) + f"\n{INDENT}↳ {plan}")
     return blocks
 

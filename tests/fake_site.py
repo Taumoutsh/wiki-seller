@@ -1,54 +1,37 @@
-"""Faux wiki-masters.com minimal pour tester le parcours complet en local : page /login
-dont le bouton attend une vérification anti-bot, API JSON (collection, prix, enchères,
-mise en vente, défausse, mises), et page d'enchère avec la mise minimale préremplie."""
+"""Faux wiki-masters.com minimal pour tester le parcours complet en local : session
+Supabase dans les cookies « sb-fakeproj-auth-token.N » (renouvelable par
+/auth/v1/token), clé publique dans le code JavaScript de /login, et API JSON (collection,
+prix, enchères, mise en vente, défausse, mises)."""
 
+import base64
+import itertools
 import json
+import math
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-# /login : « Connexion » reste désactivé tant que la vérification anti-bot (Cloudflare
-# Turnstile sur le vrai site) n'est pas validée. __CHALLENGE__ : "auto" la valide seule
-# au bout d'une seconde, "manual" jamais (il faudrait qu'une personne coche la case).
-LOGIN_HTML = """<!doctype html><html><body>
-<form id="login">
-  <label for="email">Adresse courriel</label><input id="email" type="email">
-  <label for="password">Mot de passe</label><input id="password" type="password">
-  <div id="challenge">Vérifiez que vous êtes humain.</div>
-  <button type="submit" id="do-login" disabled>Connexion</button>
-</form>
-<script>
-if ('__CHALLENGE__' === 'auto') setTimeout(() => document.getElementById('do-login').disabled = false, 1000);
-document.getElementById('login').onsubmit = async (e) => {
-  e.preventDefault();
-  const mail = document.getElementById('email').value, pwd = document.getElementById('password').value;
-  const r = await fetch('/auth/login', {method: 'POST', body: JSON.stringify({mail, pwd})});
-  if (r.ok) location.href = '/collection';
-};
-</script></body></html>"""
+from wiki_seller.auth import decode_session, encode_session
 
-COLLECTION_HTML = "<!doctype html><html><body><h1>Collection</h1></body></html>"
+PROJECT = "fakeproj"
+COOKIE = f"sb-{PROJECT}-auth-token"
 
-MARKET_HTML = """<!doctype html><html><body>
-<input type="search" placeholder="Rechercher une carte…"><button disabled>Rechercher</button>
-</body></html>"""
 
-# /marketplace/<id> : champ « Montant de la mise » prérempli avec la mise minimale.
-AUCTION_HTML = """<!doctype html><html><body><div id="a"></div>
-<script>
-async function load() {
-  const a = (await (await fetch('/api/marketplace/__ID__')).json()).auction;
-  const min = a.current_bid === null ? a.base_amount : a.current_bid + __STEP__;
-  document.getElementById('a').innerHTML = `<h1>${a.card.wikipedia_title}</h1>
-    <p>Votre solde : 1 747 wikibidous</p>
-    <input type="number" aria-label="Montant de la mise" value="${min}">`;
-}
-setTimeout(load, 300);
-</script></body></html>"""
+def _jwt(claims: dict) -> str:
+    part = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")  # noqa: E731
+    return f"{part({'alg': 'HS256', 'typ': 'JWT'})}.{part(claims)}.c2lnbmF0dXJl"
+
+
+ANON_KEY = _jwt({"iss": "supabase", "ref": PROJECT, "role": "anon"})
+LOGIN_HTML = '<!doctype html><html><head><script src="/_next/static/chunks/app-1a2b.js?dpl=dpl_x" async=""></script></head></html>'
+APP_JS = f'const e="https://{PROJECT}.supabase.co",t="{ANON_KEY}";'
+MARKET_HTML = "<!doctype html><html><body>Marché</body></html>"
+_TOKENS = itertools.count(1)
+RUNNING: dict[str, "FakeWikiMasters"] = {}  # adresse → faux site (pour make_config)
 
 ME = "me-id"
-BID_STEP = 10
 
 
 def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", seller="other", current=None):
@@ -58,24 +41,25 @@ def market_auction(auction_id, title, base, end_at="2030-01-01T10:00:00+00:00", 
 
 
 class FakeWikiMasters:
-    def __init__(self, collection, averages, selling=None, max_auctions=5, mail="me@example.com",
-                 password="secret", sales_forbidden=False, challenge="auto", auctions=None,
-                 listing_id="copy", page_size=None):
+    def __init__(self, collection, averages, selling=None, max_auctions=5, sales_forbidden=False, auctions=None,
+                 listing_id="copy", page_size=None, token_lifetime=3600):
         self.collection = collection
         self.page_size = page_size  # None : toute la collection sur la page 0
         self.averages = averages  # card_id -> moyenne API
         self.selling = list(selling or [])
         self.max_auctions = max_auctions
-        self.mail, self.password = mail, password
         self.sales_forbidden = sales_forbidden
         self.listings = []
-        self.challenge = challenge
         self.history = []  # vos ventes terminées (onglet « Historique »)
         self.listing_id = listing_id  # identifiant attendu par POST /api/marketplace
         self.api_listings = []  # corps des mises en vente reçues par l'API
         self.auctions = {a["id"]: a for a in auctions or []}
         self.bids = []  # (auction_id, montant) misés par nous
-        self.logins = 0
+        self.token_lifetime = token_lifetime  # s de validité d'un jeton d'accès
+        self.access_tokens: dict[str, float] = {}  # jeton → expiration (epoch)
+        self.refresh_tokens: set[str] = set()
+        self.refreshes = 0  # sessions renouvelées par /auth/v1/token
+        self.balance = 1747  # solde en wikibidous
         self.collection_requests = []
         self.discarded = []  # titres des exemplaires défaussés, dans l'ordre
         self.events = []  # ("prix", carte) et ("défausse", titre), dans l'ordre
@@ -95,10 +79,30 @@ class FakeWikiMasters:
 
     def __enter__(self):
         self._thread.start()
+        RUNNING[self.url] = self
         return self
 
     def __exit__(self, *exc):
+        RUNNING.pop(self.url, None)
         self._server.shutdown()
+
+    def issue_session(self) -> dict:
+        n = next(_TOKENS)
+        access, refresh = f"at-{n}", f"rt-{n}"
+        expires_at = int(time.time()) + self.token_lifetime
+        self.access_tokens[access] = expires_at
+        self.refresh_tokens.add(refresh)
+        return {"access_token": access, "token_type": "bearer", "expires_in": self.token_lifetime,
+                "expires_at": expires_at, "refresh_token": refresh, "user": {"id": ME}}
+
+    def session_cookies(self) -> str:
+        """Ligne de cookies d'une session neuve, comme la copie le favori du README."""
+        return "; ".join(f"{k}={v}" for k, v in encode_session(COOKIE, self.issue_session()))
+
+    def expire_all(self) -> None:
+        """Toutes les sessions deviennent invalides (déconnexion, jeton révoqué)."""
+        self.access_tokens.clear()
+        self.refresh_tokens.clear()
 
     def _handler(self):
         site = self
@@ -118,30 +122,27 @@ class FakeWikiMasters:
                 self.wfile.write(data)
 
             def _authed(self):
-                return "session=ok" in (self.headers.get("Cookie") or "")
+                pairs = [p.strip().partition("=")[::2] for p in (self.headers.get("Cookie") or "").split(";")]
+                decoded = decode_session([(k, v) for k, v in pairs if k])
+                if decoded is None:
+                    return False
+                return site.access_tokens.get(decoded[1]["access_token"], 0) > time.time()
 
             def do_GET(self):
                 url = urlparse(self.path)
                 qs = parse_qs(url.query)
                 if url.path == "/login":
-                    html = LOGIN_HTML.replace("__CHALLENGE__", site.challenge)
-                    return self._send(200, html, "text/html; charset=utf-8")
-                if url.path == "/collection":
-                    return self._send(200, COLLECTION_HTML, "text/html; charset=utf-8")
+                    return self._send(200, LOGIN_HTML, "text/html; charset=utf-8")
+                if url.path.endswith(".js") and url.path.startswith("/_next/static/"):
+                    return self._send(200, APP_JS, "application/javascript")
                 if url.path == "/marketplace":
                     return self._send(200, MARKET_HTML, "text/html; charset=utf-8")
-                if url.path.startswith("/marketplace/"):
-                    auction_id = url.path.split("/")[2]
-                    if auction_id in site.auctions:
-                        html = AUCTION_HTML.replace("__ID__", auction_id).replace("__STEP__", str(BID_STEP))
-                        return self._send(200, html, "text/html; charset=utf-8")
-                    return self._send(200, "<html><body>Enchère créée</body></html>", "text/html")
                 if not url.path.startswith("/api/"):
                     return self._send(404, "<html>404</html>", "text/html")
                 if not self._authed():
                     return self._send(401, {"error": "unauthorized"})
                 if url.path == "/api/wikibidous":
-                    return self._send(200, {"balance": 100})
+                    return self._send(200, {"balance": site.balance})
                 if url.path == "/api/my-collection":
                     page = int(qs.get("page", ["0"])[0])
                     rarity = qs.get("rarity", [None])[0]
@@ -185,6 +186,15 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path.startswith("/auth/v1/token"):
+                    if self.headers.get("apikey") != ANON_KEY:
+                        return self._send(401, {"message": "Invalid API key"})
+                    if body.get("refresh_token") not in site.refresh_tokens:
+                        return self._send(400, {"error": "invalid_grant",
+                                                "error_description": "Invalid Refresh Token: Refresh Token Not Found"})
+                    site.refresh_tokens.discard(body["refresh_token"])
+                    site.refreshes += 1
+                    return self._send(200, site.issue_session())
                 discard = re.fullmatch(r"/api/user-cards/([^/]+)/discard", self.path)
                 if discard and self._authed():
                     copy = next((c for c in site.collection if c["id"] == discard.group(1)), None)
@@ -200,7 +210,8 @@ class FakeWikiMasters:
                     if site.bid_failures:
                         site.bid_failures -= 1
                         return self._send(503, {"error": "Service Unavailable"})
-                    minimum = auction["base_amount"] if auction["current_bid"] is None else auction["current_bid"] + BID_STEP
+                    current = auction["current_bid"]
+                    minimum = auction["base_amount"] if current is None else max(math.ceil(1.1 * current), current + 1)
                     if body.get("amount", 0) < minimum or auction["status"] != "active":
                         return self._send(400, {"error": "mise trop basse"})
                     site.bids.append((auction["id"], body["amount"]))
@@ -210,11 +221,6 @@ class FakeWikiMasters:
                         return self._send(502, {"error": "Bad Gateway"})
                     return self._send(200, {"auction_id": auction["id"], "current_bid": body["amount"],
                                             "bidder_balance": 1747 - body["amount"]})
-                if self.path == "/auth/login":
-                    if body.get("mail") == site.mail and body.get("pwd") == site.password:
-                        site.logins += 1
-                        return self._send(200, {}, headers=[("Set-Cookie", "session=ok; Path=/")])
-                    return self._send(400, {"error": "bad credentials"})
                 if self.path == "/api/marketplace" and self._authed():
                     if len(site.selling) >= site.max_auctions:
                         return self._send(400, {"error": "Nombre maximum d'enchères actives atteint"})

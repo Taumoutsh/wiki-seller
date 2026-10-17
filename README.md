@@ -43,10 +43,9 @@ la **défausse aussitôt** si elle vaut moins de **`DISCARD_BELOW` (15)**, un ex
 - **Jamais défaussées :** les cartes protégées, à acheter et à vendre (voir « Listes de
   cartes »), les exemplaires en vente ou en échange, les cartes rares sans vente connue, et celles
   dont le prix n'a pas pu être lu (redemandées la fois suivante).
-- **Une session à la fois :** la défausse et les passes partagent la session du site ;
-  un seul navigateur est ouvert à la fois. Quand une passe se réveille, la défausse lui
-  laisse la place après la page, le prix ou l'exemplaire en cours, puis reprend où elle
-  en était.
+- **Une tâche à la fois :** la défausse et les passes partagent la session du site.
+  Quand une passe se réveille, la défausse lui laisse la place après la page, le prix ou
+  l'exemplaire en cours, puis reprend où elle en était.
 - **Reprise :** l'avancement est gardé dans `state/discard_progress.json` (24 h au plus),
   même après un redémarrage. Supprimez ce fichier pour repartir de zéro.
 - **Journal :** une ligne par exemplaire défaussé, et toutes les 100 cartes examinées un
@@ -89,8 +88,8 @@ rappellent). Le conteneur ne les monte plus.
 - si vous avez déjà une enchère sur cette carte dans « Mes enchères », elle est reprise ;
 - sinon, le script cherche la carte dans le Marché et choisit l'enchère la moins chère
   dont la mise minimale ne dépasse pas le prix maximum ;
-- il mise la mise minimale (lue sur la page de l'enchère), jamais directement votre
-  maximum ;
+- il mise la mise minimale, calculée comme le site (la mise de départ, puis
+  10 % de plus que la mise en cours, au moins +1), jamais directement votre maximum ;
 - s'il est dépassé, il **ne surenchérit pas tout de suite** : si la nouvelle mise
   minimale reste dans la limite, il attend la fin de l'enchère ; sinon il en cherche
   une autre ;
@@ -135,12 +134,17 @@ comprise) ; `/sell Victor Hugo 120 x2` pour 2 exemplaires.
 
 ## Connexion
 
-Le script essaie, dans l'ordre : la session enregistrée (`state/storage_state.json`, que
-le site renouvelle tout seul), la dernière session reçue par Telegram, `SESSION_COOKIES`,
-puis `MAIL`/`PASSWORD` sur `/login`. Sur `/login`, « Connexion » reste désactivé tant que
-la case Cloudflare « Vérifiez que vous êtes humain » n'est pas validée : le script ne la
-coche pas. Il attend 30 s qu'elle passe seule (5 min avec `--headed`, le temps de la
-cocher vous-même), puis demande une session par Telegram si le bot est configuré.
+Le script n'utilise pas de navigateur : il parle à l'API du site en HTTP, avec les
+cookies de votre session. Le site s'appuie sur Supabase : la session tient dans les
+cookies `sb-…-auth-token.0` et `.1` (un jeton d'accès valable 1 h et un jeton de
+renouvellement). Le script la renouvelle lui-même avant qu'elle expire, comme le ferait
+la page, et enregistre chaque nouvelle session dans `state/session.json`.
+
+La connexion par mot de passe n'est pas possible : la page `/login` attend une case
+Cloudflare cochée par une personne. Quand il n'a pas de session valide, le script
+essaie, dans l'ordre : la session des anciennes versions (`state/storage_state.json`,
+reprise une fois), `SESSION_COOKIES`, puis demande de nouveaux cookies par le bot
+Telegram.
 
 ### Copier la session d'un navigateur
 
@@ -155,10 +159,11 @@ cocher vous-même), puis demande une session par Telegram si le bot est configur
    `…-auth-token.1`) sont copiés sur une seule ligne.
 3. Envoyez cette ligne au bot Telegram quand il la demande, ou écrivez-la dans `.env`
    (`SESSION_COOKIES=sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…`), supprimez
-   `state/storage_state.json` et relancez le conteneur (`docker compose up -d`).
+   `state/session.json` et relancez le conteneur (`docker compose up -d`).
 4. **Ne vous déconnectez pas** ensuite sur ce navigateur (cela fermerait aussi la
    session copiée), et ne l'utilisez plus sur un autre appareil : deux appareils qui la
-   renouvellent chacun de leur côté peuvent la faire annuler.
+   renouvellent chacun de leur côté peuvent la faire annuler. Le mieux : une fenêtre
+   privée réservée au script, que vous laissez de côté.
 
 ## Bot Telegram
 
@@ -175,7 +180,7 @@ serveurs de Telegram : gardez le bot pour vous seul.
 lui répondez avec la ligne copiée par le favori. Il **supprime aussitôt votre message**,
 essaie la session et confirme (✅) ou en demande une autre (❌). Le script attend
 `TELEGRAM_WAIT` (60 min), puis réessaie au réveil suivant, sans nouveau message avant
-3 h. La session acceptée est gardée dans `state/session_cookies.txt`.
+3 h. La session acceptée est gardée (et tenue à jour) dans `state/session.json`.
 
 **Bilan toutes les 2 h** (`REPORT_HOURS`, `0` pour le couper) :
 
@@ -245,14 +250,13 @@ python -m wiki_seller               # une passe (attend la fin de la défausse)
 python -m wiki_seller --loop        # en continu
 ```
 
-`--headed` affiche le navigateur ; `--debug` enregistre une capture d'écran et le HTML à
-chaque étape dans `state/debug/`. Le journal est dans `state/seller.log`.
+`--debug` enregistre la réponse du site dans `state/debug/` quand une mise est refusée.
+Le journal est dans `state/seller.log`.
 
 ### Réglages (`.env`)
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `MAIL` / `PASSWORD` | *(requis)* | Identifiants du site |
 | `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir « Connexion ») |
 | `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
 | `PRICE_RATIO` | `0.70` | Part du prix moyen utilisée pour la mise de départ |
@@ -272,16 +276,17 @@ chaque étape dans `state/debug/`. Le journal est dans `state/seller.log`.
 | `REPORT_HOURS` | `2` | Bilan Telegram toutes les N heures ; `0` = jamais |
 | `STATE_DIR` | `state` | Dossier des fichiers d'état et des listes de cartes |
 | `BASE_URL` | `https://www.wiki-masters.com` | Adresse du site |
-| `HEADLESS` / `CHROMIUM_EXECUTABLE` | `true` / *(vide)* | Navigateur visible, Chromium déjà installé |
-| `CPU_LIMIT` / `MEM_LIMIT` | `2` / `2g` | Ressources maximales du conteneur |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` | *(trouvées seules)* | Session du site, à ne régler qu'en cas de problème |
+| `CPU_LIMIT` / `MEM_LIMIT` | `1` / `512m` | Ressources maximales du conteneur |
 
-Les anciennes options `ACTIONS_VIA`, `OPEN_PACKS_HOURS`, `PACKS_VERIFY_WAIT`,
-`NOTIFY_URL` et `API_TRACE` n'ont plus d'effet ; le journal le signale au démarrage.
+Les anciennes options `MAIL`, `PASSWORD`, `HEADLESS`, `CHROMIUM_EXECUTABLE`,
+`ACTIONS_VIA`, `OPEN_PACKS_HOURS`, `PACKS_VERIFY_WAIT`, `NOTIFY_URL` et `API_TRACE`
+n'ont plus d'effet ; le journal le signale au démarrage.
 
 ## Docker (serveur)
 
 ```bash
-# créer .env avec au moins MAIL et PASSWORD
+# créer .env (voir .env.example), au moins avec le bot Telegram
 mkdir -p state
 docker compose up -d --build
 docker compose logs -f
@@ -298,8 +303,9 @@ lu qu'à la création du conteneur : après l'avoir modifié, lancez `docker com
 |---|---|
 | `main.py` | Ligne de commande, journal |
 | `scheduler.py` | Passes, boucle, réveils (surenchères, `/update`) |
-| `session.py` | Un seul navigateur à la fois, connexion |
-| `site.py` | Client de l'API du site |
+| `session.py` | Une tâche à la fois sur la session, connexion par cookies |
+| `auth.py` | Session Supabase : cookies, renouvellement, `state/session.json` |
+| `site.py` | Client HTTP de l'API du site |
 | `selling.py` | Passe de vente (ventes demandées, puis plan de vente) |
 | `buying.py` | Achats et surenchères |
 | `lists.py` / `commands.py` | Listes de cartes (`state/`) et commandes du bot qui les modifient |
@@ -317,6 +323,6 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Les tests tournent en parallèle (`pytest-xdist`). `tests/test_end_to_end.py` lance un
-vrai Chromium contre une imitation locale du site (`tests/fake_site.py`) et du bot
-Telegram (`tests/fake_telegram.py`).
+Les tests tournent en parallèle (`pytest-xdist`). `tests/test_end_to_end.py` fait
+tourner le script contre une imitation locale du site, session Supabase comprise
+(`tests/fake_site.py`), et du bot Telegram (`tests/fake_telegram.py`).

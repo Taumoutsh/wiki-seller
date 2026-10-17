@@ -1,6 +1,9 @@
-# Image officielle Playwright : Chromium et ses dépendances système déjà installés.
-# La version doit correspondre à celle de playwright dans requirements.txt.
-FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
+# Python seul : le script parle à l'API du site en HTTP, sans navigateur.
+FROM python:3.12-slim
+
+# Fuseau horaire (heure de Paris dans le journal et pour les durées de nuit).
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
@@ -14,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY wiki_seller ./wiki_seller
 
-# Session navigateur, journal et captures de débogage.
+# Session, listes de cartes, caches et journal.
 VOLUME ["/app/state"]
 
 CMD ["python", "-m", "wiki_seller", "--loop"]

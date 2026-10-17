@@ -100,6 +100,10 @@ OBSOLETE_SETTINGS = {
     "PACKS_VERIFY_WAIT": "l'ouverture des paquets a été retirée",
     "NOTIFY_URL": "les notifications passent par le bot Telegram",
     "API_TRACE": "le journal des appels à l'API a été retiré",
+    "MAIL": "la connexion par mot de passe n'est plus utilisée (session par cookies)",
+    "PASSWORD": "la connexion par mot de passe n'est plus utilisée (session par cookies)",
+    "HEADLESS": "le script n'utilise plus de navigateur",
+    "CHROMIUM_EXECUTABLE": "le script n'utilise plus de navigateur",
 }
 
 
@@ -114,19 +118,19 @@ def _rarities(value: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Config:
-    mail: str
-    password: str
     base_url: str
     safe_cards_file: Path  # ancienne liste, reprise dans state/ (lists.py) ; à retirer
     state_dir: Path
     price_ratio: float
     auction_duration_label: str
-    headless: bool
-    chromium_executable: str | None
     # Raretés mises en vente (codes du site : L, UR, SR, R, PC, C) ; vide = toutes.
     sell_rarities: tuple[str, ...] = ()
     # Cookies d'une session connectée (« nom=valeur; nom2=valeur2 »), voir README.
     session_cookies: str = ""
+    # Session du site (Supabase) : adresse et clé publique, déduites des cookies et du
+    # code du site si vides.
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
     # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
     run_interval: timedelta | None = None
     # Achats : ancienne liste (reprise dans state/, à retirer), budget total optionnel,
@@ -170,7 +174,11 @@ class Config:
         return self.run_interval or parse_duration(self.auction_duration_label) or DEFAULT_RUN_INTERVAL
 
     @property
-    def storage_state_file(self) -> Path:
+    def session_file(self) -> Path:
+        return self.state_dir / "session.json"
+
+    @property
+    def storage_state_file(self) -> Path:  # session de l'ancien navigateur, reprise une fois
         return self.state_dir / "storage_state.json"
 
     @property
@@ -193,11 +201,6 @@ class Config:
 def load_config() -> Config:
     # Les variables déjà présentes dans l'environnement (ex. Docker) priment sur le .env.
     load_dotenv(override=False)
-
-    mail = os.getenv("MAIL", "").strip()
-    password = os.getenv("PASSWORD", "")
-    if not mail or not password:
-        raise ConfigError("MAIL et PASSWORD doivent être définis (fichier .env ou environnement).")
 
     try:
         price_ratio = float(os.getenv("PRICE_RATIO", "0.70"))
@@ -223,17 +226,15 @@ def load_config() -> Config:
             raise ConfigError("SNIPE_LEAD doit être un nombre de secondes entre 2 et 300.")
 
     return Config(
-        mail=mail,
-        password=password,
         base_url=os.getenv("BASE_URL", "https://www.wiki-masters.com").rstrip("/"),
         safe_cards_file=Path(os.getenv("SAFE_CARDS_FILE", "safed_cards.json")),
         state_dir=Path(os.getenv("STATE_DIR", "state")),
         price_ratio=price_ratio,
         auction_duration_label=os.getenv("AUCTION_DURATION_LABEL", "1 h"),
-        headless=_bool(os.getenv("HEADLESS"), True),
-        chromium_executable=os.getenv("CHROMIUM_EXECUTABLE") or None,
         sell_rarities=_rarities(os.getenv("SELL_RARITIES", DEFAULT_SELL_RARITIES)),
         session_cookies=os.getenv("SESSION_COOKIES", "").strip(),
+        supabase_url=os.getenv("SUPABASE_URL", "").strip(),
+        supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", "").strip(),
         run_interval=run_interval,
         wanted_cards_file=Path(os.getenv("WANTED_CARDS_FILE", "wanted_cards.json")),
         max_total_bids=_positive_int("MAX_TOTAL_BIDS"),

@@ -10,7 +10,7 @@ from wiki_seller.session import parse_cookies
 
 
 def test_next_run_is_one_hour_after_last_listing(tmp_path):
-    config = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    config = Config("http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h")
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     listed = RunResult(3, now - timedelta(minutes=5), False, None)
     assert next_run_at(listed, config, now) == now + timedelta(minutes=56)
@@ -41,11 +41,11 @@ def test_next_run_follows_auction_duration_or_run_interval(tmp_path):
     listed = RunResult(1, now, False, None)
     nothing = RunResult(0, None, False, None)
 
-    ten_minutes = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "10 min", True, None)
+    ten_minutes = Config("http://x", tmp_path / "s.json", tmp_path, 0.7, "10 min")
     assert next_run_at(listed, ten_minutes, now) == now + timedelta(minutes=11)
     assert next_run_at(nothing, ten_minutes, now) == now + timedelta(minutes=10)
 
-    explicit = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None,
+    explicit = Config("http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h",
                       run_interval=timedelta(minutes=20))
     assert next_run_at(listed, explicit, now) == now + timedelta(minutes=21)
     # Places pleines : fin de la première enchère, mais au plus RUN_INTERVAL.
@@ -77,7 +77,7 @@ def test_next_wake(tmp_path):
 
     from wiki_seller.scheduler import next_wake
 
-    night = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    night = Config("http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h")
 
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     next_pass = now + timedelta(minutes=30)
@@ -85,12 +85,12 @@ def test_next_wake(tmp_path):
     end = now + timedelta(minutes=10)
     night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": end.isoformat()}}}))
     wake, snipe = next_wake(next_pass, night, now)
-    # Réveil 60 s (début de la surveillance) + 45 s (démarrage) avant la fin.
-    assert snipe and wake == end - timedelta(seconds=60) - timedelta(seconds=45)
+    # Réveil 60 s (début de la surveillance) + 15 s (vérification de la session) avant la fin.
+    assert snipe and wake == end - timedelta(seconds=60) - timedelta(seconds=15)
     # Une fin d'enchère juste après la prochaine passe passe avant elle.
     later = now + timedelta(minutes=33)
     night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": later.isoformat()}}}))
-    assert next_wake(next_pass, night, now) == (later - timedelta(seconds=105), True)
+    assert next_wake(next_pass, night, now) == (later - timedelta(seconds=75), True)
     # Fin repoussée (surenchères) : l'heure de réveil est passée mais la fin est à venir.
     soon = now + timedelta(seconds=40)
     night.wanted_state_file.write_text(_json.dumps({"cards": {"x": {"status": "bidding", "end_at": soon.isoformat()}}}))
@@ -113,7 +113,7 @@ def test_search_queries_drop_parentheses_then_punctuation():
 def test_night_durations(tmp_path, monkeypatch):
     from wiki_seller.config import _night_durations
 
-    config = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None,
+    config = Config("http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h",
                     night_durations=_night_durations("1-3=12 h;3-6=6 h"))
     assert [config.duration_label_at(h) for h in (0, 1, 2, 3, 5, 6, 23)] == \
         ["1 h", "12 h", "12 h", "6 h", "6 h", "1 h", "1 h"]
@@ -128,7 +128,7 @@ def test_night_durations(tmp_path, monkeypatch):
 
 
 def test_full_slots_wait_is_capped_by_run_interval(tmp_path):
-    config = Config("m", "p", "http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h", True, None)
+    config = Config("http://x", tmp_path / "s.json", tmp_path, 0.7, "1 h")
     now = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
     full = RunResult(0, None, True, now + timedelta(hours=11))  # ventes de nuit de 12 h
     assert next_run_at(full, config, now) == now + timedelta(hours=1)
@@ -144,11 +144,12 @@ def test_price_cache_ttl_from_env(monkeypatch):
 
 
 def test_obsolete_settings_are_reported(monkeypatch):
-    from wiki_seller.config import obsolete_settings
+    from wiki_seller.config import OBSOLETE_SETTINGS, obsolete_settings
 
-    for name in ("ACTIONS_VIA", "OPEN_PACKS_HOURS", "PACKS_VERIFY_WAIT", "NOTIFY_URL", "API_TRACE"):
+    for name in OBSOLETE_SETTINGS:
         monkeypatch.delenv(name, raising=False)
     assert obsolete_settings() == []
     monkeypatch.setenv("ACTIONS_VIA", "page")
     monkeypatch.setenv("OPEN_PACKS_HOURS", "0-6")
-    assert obsolete_settings() == ["ACTIONS_VIA", "OPEN_PACKS_HOURS"]
+    monkeypatch.setenv("MAIL", "me@example.com")
+    assert obsolete_settings() == ["ACTIONS_VIA", "OPEN_PACKS_HOURS", "MAIL"]
