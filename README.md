@@ -276,10 +276,15 @@ en texte brut. Pas de bilan en `--dry-run`.
 | `/update` (ou `/bilan`) | Bilan immédiat depuis le dernier bilan automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il part juste après |
 | `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
 | `/safe Tour Eiffel` · `/unsafe Tour Eiffel` | Protège la carte (jamais défaussée, toujours un exemplaire gardé), ou la retire des protégées. Une défausse en cours la respecte aussitôt |
-| `/buy Tour Eiffel 500` · `/unbuy Tour Eiffel` | Achète la carte à 500 au plus (ou met ce prix à jour) ; `x2` pour 2 exemplaires. Protégée une fois obtenue |
-| `/sell Tour Eiffel 800` · `/unsell Tour Eiffel` | Vend la carte à 800 exactement, en priorité, jusqu'à la vente ; `x2` pour 2 exemplaires |
-| `/buyandsell Tour Eiffel 500 800` | Achète la carte à 500 au plus, puis la revend à 800 ; `x2` pour 2 exemplaires |
+| `/buy Tour Eiffel 500` · `/unbuy Tour Eiffel` | Achète la carte à 500 au plus (ou met ce prix à jour) ; `x2` pour 2 exemplaires, `@Pseudo` pour n'acheter qu'à ce vendeur. Protégée une fois obtenue |
+| `/sell Tour Eiffel 800` · `/unsell Tour Eiffel` | Vend la carte à 800 exactement, en priorité, jusqu'à la vente ; `x2` pour 2 exemplaires, `12h` (ou `10m`, `30m`, `1h`, `3h`, `6h`) pour la durée de vente |
+| `/buyandsell Tour Eiffel 500 800` | Achète la carte à 500 au plus, puis la revend à 800 ; options `x2`, `12h` (durée de la revente) et `@Pseudo` |
 
+Les options s'écrivent avant ou après les prix, dans n'importe quel ordre :
+`/buyandsell Tour Eiffel 500 800 x2 12h @Paul`. Sans durée, la vente prend la durée
+habituelle du compte (nuit comprise). Pour `@Pseudo`, le nom est comparé à ce que le site
+donne pour le vendeur ; si aucune enchère ne correspond, le journal liste les vendeurs
+vus. Une enchère que vous menez déjà sur la carte reste suivie, quel que soit son vendeur.
 Les derniers nombres sont toujours les prix : `/buy Apollo 11 500` vise « Apollo 11 »
 à 500 au plus. Les modifications comptent dès la passe suivante. `/want` est l'ancien
 nom de `/buy`, encore accepté pour l'instant. Tout autre message reçoit la liste des

@@ -67,11 +67,28 @@ def choose_auction(auctions: list[dict], card: BuyCard, my_id: str | None, now: 
                 or (my_id and auction.get("seller_id") == my_id) or auction.get("id") in my_sales
                 or auction.get("id") in exclude
                 or (auction.get("current_bidder_id") and auction.get("current_bidder_id") in rivals)
+                or (card.seller and not seller_matches(auction, card.seller))
                 or not end or end - now < TOO_LATE or min_next_bid(auction) > card.max_price):
             continue
         candidates.append((min_next_bid(auction), end, auction))
     candidates.sort(key=lambda c: (c[0], c[1]))
     return candidates[0][2] if candidates else None
+
+
+SELLER_FIELDS = ("username", "pseudo", "display_name", "name", "id")
+
+
+def seller_names(auction: dict) -> set[str]:
+    """Noms (et identifiant) du vendeur d'une enchère, tels que le site les donne."""
+    seller = auction.get("seller") if isinstance(auction.get("seller"), dict) else {}
+    profile = auction.get("seller_profile") if isinstance(auction.get("seller_profile"), dict) else {}
+    values = [auction.get(k) for k in ("seller_username", "seller_name", "seller_pseudo", "seller_id")]
+    values += [d.get(k) for d in (seller, profile) for k in SELLER_FIELDS]
+    return {normalize_name(str(v)).lstrip("@") for v in values if isinstance(v, (str, int)) and str(v).strip()}
+
+
+def seller_matches(auction: dict, seller: str) -> bool:
+    return normalize_name(seller).lstrip("@") in seller_names(auction)
 
 
 def won_since(mine: dict, card: BuyCard, since: datetime | None) -> list[dict]:
@@ -279,7 +296,12 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                 if auction is not None and not claim(config, auction["id"]):
                     auction = None  # choisie au même instant par un autre compte
                 if auction is None:
-                    log.info("Achat : aucune enchère de « %s » à %d ou moins.", card.name, card.max_price)
+                    log.info("Achat : aucune enchère de « %s » à %d ou moins%s.", card.name, card.max_price,
+                             f" chez @{card.seller}" if card.seller else "")
+                    same_card = [a for a in found if normalize_name(auction_title(a)) == card.key]
+                    if card.seller and same_card:  # pour vérifier comment le site nomme les vendeurs
+                        log.info("Achat : « %s » — vendeurs des enchères en cours : %s", card.name,
+                                 ", ".join(sorted(set().union(*(seller_names(a) for a in same_card))))[:300])
                     if choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned) is not None:
                         buyer.blocked_by_fellow(card, entry)
                     continue

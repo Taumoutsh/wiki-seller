@@ -32,16 +32,27 @@ DEFAULT_NIGHT_DURATIONS = "1-3=12 h;3-6=6 h"
 
 
 def parse_duration(text: str) -> timedelta | None:
-    """« 10 min », « 1 h », « 2 heures », « 1h30 » → durée ; None si illisible."""
+    """« 10m », « 10 min », « 1h », « 2 heures », « 1h30 » → durée ; None si illisible."""
     match = re.fullmatch(
-        r"\s*(?:(\d+)\s*h(?:eures?)?)?\s*(?:(\d+)\s*(?:min(?:utes?)?)?)?\s*", text.lower())
+        r"\s*(?:(\d+)\s*h(?:eures?)?)?\s*(?:(\d+)\s*(?:m(?:in(?:utes?)?)?)?)?\s*", text.lower())
     if not match or not any(match.groups()):
         return None
     hours, minutes = (int(g) if g else 0 for g in match.groups())
-    if not match.group(1) and not re.search(r"min", text.lower()):
+    if not match.group(1) and not re.search(r"m", text.lower()):
         return None  # « 10 » seul : unité ambiguë
     duration = timedelta(hours=hours, minutes=minutes)
     return duration if duration > timedelta(0) else None
+
+
+def short_duration(value) -> str:
+    """Durée (timedelta ou libellé « 12 h ») au format compact : 12h, 30m, 1h30."""
+    duration = value if isinstance(value, timedelta) else parse_duration(str(value))
+    if duration is None:
+        return str(value)
+    hours, minutes = divmod(int(duration.total_seconds() // 60), 60)
+    if not hours:
+        return f"{minutes}m"
+    return f"{hours}h{minutes:02d}" if minutes else f"{hours}h"
 
 
 def _hours(value: str) -> tuple[int, int] | None:

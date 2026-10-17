@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable
 
-from .config import MIN_RUN_INTERVAL, Config, ConfigError, _night_durations, parse_duration
+from .config import MIN_RUN_INTERVAL, Config, ConfigError, _night_durations, parse_duration, short_duration
 from .state import read_json, write_json
 
 log = logging.getLogger(__name__)
 
 RARITIES = ("L", "UR", "SR", "R", "PC", "C")
-DURATIONS = {10: "10 min", 30: "30 min", 60: "1 h", 180: "3 h", 360: "6 h", 720: "12 h"}
+DURATIONS = {10: "10m", 30: "30m", 60: "1h", 180: "3h", 360: "6h", 720: "12h"}
 YES, NO = ("on", "oui", "1", "true", "yes", "actif", "active"), ("off", "non", "0", "false", "no", "inactif")
 NEW_ACCOUNT = {"raretes": "aucune", "defausse": "0", "pause": "on"}
 
@@ -80,7 +80,7 @@ def _night(text: str):
     try:
         return _night_durations(text)
     except ConfigError as exc:
-        raise SettingError("ex. 1-3=12 h;3-6=6 h (heures de Paris), ou « aucune »") from exc
+        raise SettingError("ex. 1-3=12h;3-6=6h (heures de Paris), ou « aucune »") from exc
 
 
 def _interval(text: str):
@@ -88,7 +88,7 @@ def _interval(text: str):
         return None
     duration = parse_duration(text)
     if duration is None or duration < MIN_RUN_INTERVAL:
-        raise SettingError(f"une durée d'au moins {MIN_RUN_INTERVAL.seconds // 60} min (ex. 1 h), ou « auto »")
+        raise SettingError(f"une durée d'au moins {MIN_RUN_INTERVAL.seconds // 60}m (ex. 1h), ou « auto »")
     return duration
 
 
@@ -96,11 +96,6 @@ def _budget(text: str):
     if text.strip().lower() in ("aucun", "0", "non", "off"):
         return None
     return _integer(1)(text)
-
-
-def _minutes(d) -> str:
-    total = int(d.total_seconds() // 60)
-    return f"{total // 60} h" + (f"{total % 60:02d}" if total % 60 else "") if total >= 60 else f"{total} min"
 
 
 def _on(value: bool) -> str:
@@ -124,13 +119,14 @@ SETTINGS = (
             lambda t: {"market_adjust": _switch(t)}, lambda c: _on(c.market_adjust)),
     Setting("plancher", "ajustement jamais sous ce % du prix moyen",
             lambda t: {"price_floor_ratio": _percent(t)}, lambda c: f"{round(c.price_floor_ratio * 100)} %"),
-    Setting("duree", "durée des ventes (10 min, 30 min, 1 h, 3 h, 6 h, 12 h)",
-            lambda t: {"auction_duration_label": _duration_label(t)}, lambda c: c.auction_duration_label),
-    Setting("nuit", "durées de nuit, heures de Paris (ex. 1-3=12 h;3-6=6 h) ou aucune",
+    Setting("duree", "durée des ventes (10m, 30m, 1h, 3h, 6h, 12h)",
+            lambda t: {"auction_duration_label": _duration_label(t)}, lambda c: short_duration(c.auction_duration_label)),
+    Setting("nuit", "durées de nuit, heures de Paris (ex. 1-3=12h;3-6=6h) ou aucune",
             lambda t: {"night_durations": _night(t)},
-            lambda c: ";".join(f"{a}-{b}={label}" for a, b, label in c.night_durations) or "aucune"),
-    Setting("intervalle", "délai entre deux passes (ex. 1 h), auto = durée des ventes",
-            lambda t: {"run_interval": _interval(t)}, lambda c: _minutes(c.run_interval) if c.run_interval else "auto"),
+            lambda c: ";".join(f"{a}-{b}={short_duration(label)}" for a, b, label in c.night_durations) or "aucune"),
+    Setting("intervalle", "délai entre deux passes (ex. 1h), auto = durée des ventes",
+            lambda t: {"run_interval": _interval(t)},
+            lambda c: short_duration(c.run_interval) if c.run_interval else "auto"),
     Setting("invendues", "ventes ratées avant de mettre une carte de côté",
             lambda t: {"unsold_max_tries": _integer(1)(t)}, lambda c: str(c.unsold_max_tries)),
     Setting("pause_invendues", "jours de mise de côté d'une carte invendue",

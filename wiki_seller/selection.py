@@ -105,6 +105,7 @@ class SaleItem:
     copies_to_sell: int
     copy_ids: tuple[str, ...] = ()  # exemplaires possédés (secours si le site attend leur id)
     exact: bool = False  # prix demandé (/sell) : ni ratio, ni ajustement au marché
+    duration: str = ""  # durée demandée (/sell … 12h) ; vide = durée habituelle
 
 
 @dataclass

@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import parse_duration, short_duration
 from .selection import normalize_name
 from .state import LISTS_LOCK, now_utc, read_json, write_json
 
@@ -35,6 +36,8 @@ class BuyCard:
     max_price: int
     copies: int = 1  # exemplaires à acheter
     sell_price: int | None = None  # /buyandsell : revendue à ce prix une fois obtenue
+    seller: str = ""  # @Pseudo : n'acheter qu'à ce vendeur
+    sell_duration: str = ""  # /buyandsell : durée de la revente (ex. 12h) ; vide = habituelle
 
     @property
     def key(self) -> str:
@@ -51,6 +54,7 @@ class SellCard:
     missing_notified: bool = False  # « introuvable dans la collection » déjà signalé
     keep_one: bool | None = None  # carte protégée en plusieurs exemplaires : le dernier est gardé
                                   # (None : pas encore trouvée dans la collection)
+    duration: str = ""  # durée des ventes (ex. 12h) ; vide = durée habituelle du compte
 
     @property
     def key(self) -> str:
@@ -163,21 +167,26 @@ def _buy_raw(config) -> list[dict]:
     for item in data:
         if (not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip()
                 or not _positive(item.get("max_price")) or not _positive(item.get("copies", 1))
-                or (item.get("sell_price") is not None and not _positive(item["sell_price"]))):
+                or (item.get("sell_price") is not None and not _positive(item["sell_price"]))
+                or not isinstance(item.get("seller", ""), str) or not isinstance(item.get("sell_duration", ""), str)):
             raise ListError(f"{buy_file(config)} : entrée invalide {item!r}.")
     return data
 
 
 def buy_cards(config) -> list[BuyCard]:
     with LISTS_LOCK:
-        return [BuyCard(i["name"].strip(), i["max_price"], i.get("copies", 1), i.get("sell_price"))
-                for i in _buy_raw(config)]
+        return [_buy_card(i) for i in _buy_raw(config)]
 
 
-def set_buy(config, name: str, max_price: int, copies: int | None = None,
-            sell_price: int | None = None) -> tuple[str, BuyCard]:
-    """Ajoute une carte aux achats, ou met à jour ses prix. Renvoie (« ajoutée » |
-    « mise à jour » | « inchangée », carte)."""
+def _buy_card(entry: dict) -> BuyCard:
+    return BuyCard(entry["name"].strip(), entry["max_price"], entry.get("copies", 1), entry.get("sell_price"),
+                   entry.get("seller", ""), entry.get("sell_duration", ""))
+
+
+def set_buy(config, name: str, max_price: int, copies: int | None = None, sell_price: int | None = None,
+            seller: str | None = None, sell_duration: str | None = None) -> tuple[str, BuyCard]:
+    """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées).
+    Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
     with LISTS_LOCK:
         data = _buy_raw(config)
         entry = next((e for e in data if normalize_name(e["name"]) == normalize_name(name)), None)
@@ -191,10 +200,14 @@ def set_buy(config, name: str, max_price: int, copies: int | None = None,
             entry["copies"] = copies
         if sell_price:
             entry["sell_price"] = sell_price
+        if seller:
+            entry["seller"] = seller
+        if sell_duration:
+            entry["sell_duration"] = sell_duration
         status = "ajoutée" if before is None else "inchangée" if entry == before else "mise à jour"
         if status != "inchangée":
             write_json(buy_file(config), data)
-        return status, BuyCard(entry["name"], entry["max_price"], entry.get("copies", 1), entry.get("sell_price"))
+        return status, _buy_card(entry)
 
 
 def remove_buy(config, name: str) -> bool:
@@ -222,8 +235,10 @@ def complete_purchase(config, card: BuyCard, bought: int) -> str:
     with LISTS_LOCK:
         remove_buy(config, card.name)
         if card.sell_price:
-            set_sell(config, card.name, card.sell_price, bought)
-            return f"🔁 « {card.name} » : achat terminé, mise en vente à {card.sell_price} ({bought} exemplaire(s))."
+            set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None)
+            duration = f" pour {card.sell_duration}" if card.sell_duration else ""
+            return (f"🔁 « {card.name} » : achat terminé, mise en vente à {card.sell_price}{duration} "
+                    f"({bought} exemplaire(s)).")
         add_safe(config, card.name)
         return f"🛡️ « {card.name} » : achat terminé ({bought} exemplaire(s)), ajoutée aux cartes protégées."
 
@@ -242,7 +257,8 @@ def _sell_raw(config) -> list[dict]:
 
 def _sell_card(entry: dict) -> SellCard:
     return SellCard(entry["name"], entry["price"], entry.get("copies", 1), entry.get("added_at", ""),
-                    tuple(entry.get("sold", ())), bool(entry.get("missing_notified")), entry.get("keep_one"))
+                    tuple(entry.get("sold", ())), bool(entry.get("missing_notified")), entry.get("keep_one"),
+                    entry.get("duration", ""))
 
 
 def sell_cards(config) -> list[SellCard]:
@@ -250,9 +266,11 @@ def sell_cards(config) -> list[SellCard]:
         return [_sell_card(e) for e in _sell_raw(config)]
 
 
-def set_sell(config, name: str, price: int, copies: int | None = None) -> tuple[str, SellCard]:
+def set_sell(config, name: str, price: int, copies: int | None = None,
+             duration: str | None = None) -> tuple[str, SellCard]:
     """Ajoute une carte aux ventes, ou met à jour son prix (les exemplaires indiqués
-    s'ajoutent alors à ceux restant à vendre). Renvoie (statut, carte)."""
+    s'ajoutent alors à ceux restant à vendre, la durée indiquée remplace l'ancienne).
+    Renvoie (statut, carte)."""
     with LISTS_LOCK:
         data = _sell_raw(config)
         entry = next((e for e in data if normalize_name(e["name"]) == normalize_name(name)), None)
@@ -265,6 +283,8 @@ def set_sell(config, name: str, price: int, copies: int | None = None) -> tuple[
             if copies:
                 entry["copies"] = entry.get("copies", 1) + copies
             status = "mise à jour"
+        if duration:
+            entry["duration"] = duration
         write_json(sell_file(config), data)
         return status, _sell_card(entry)
 
@@ -315,19 +335,59 @@ def protected_names(config) -> set[str]:
         return names
 
 
-def parse_card_args(args: str, prices: int, usage: str) -> tuple[str, list[int], int | None]:
-    """Nom de carte suivi de `prices` nombres (les derniers), et éventuellement « x2 »
-    (exemplaires), avant ou après eux. Le nom peut lui-même finir par un nombre :
-    « Apollo 11 500 » → ("Apollo 11", [500], None) ; « Victor Hugo 120 x2 » →
-    ("Victor Hugo", [120], 2)."""
+SALE_MINUTES = (10, 30, 60, 180, 360, 720)  # durées de vente du site
+SELLER = re.compile(r"@(\S+)")
+
+
+@dataclass(frozen=True)
+class CardArgs:
+    name: str
+    prices: list[int]
+    copies: int | None = None
+    duration: str = ""  # durée de vente, ex. 12h
+    seller: str = ""  # pseudo du vendeur, sans @
+
+
+def _option(word: str, allowed: tuple[str, ...]) -> tuple[str, object] | None:
+    """(« copies » | « duree » | « vendeur », valeur) si le mot est une option permise."""
+    if "copies" in allowed and (match := COPIES.fullmatch(word)):
+        return "copies", int(match.group(1))
+    if "vendeur" in allowed and (match := SELLER.fullmatch(word)):
+        return "vendeur", match.group(1)
+    if "duree" in allowed and not word.isdigit() and (duration := parse_duration(word)) is not None:
+        return "duree", duration
+    return None
+
+
+def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, ...] = ("copies",)) -> CardArgs:
+    """Nom de carte suivi de `prices` nombres (les derniers), avec des options avant ou
+    après eux : « x2 » (exemplaires), « 12h » ou « 30m » (durée de vente), « @Pseudo »
+    (vendeur). Le nom peut lui-même finir par un nombre : « Apollo 11 500 » →
+    Apollo 11 à 500 ; « Victor Hugo 120 x2 12h » → 2 exemplaires, vendus 12h."""
     words = args.split()
-    copies = None
-    if len(words) >= prices + 2:  # il reste un nom et les prix sans le « x2 »
-        for i in range(1, prices + 2):
-            if match := COPIES.fullmatch(words[-i]):
-                copies = int(match.group(1))
-                del words[-i]
-                break
-    if len(words) <= prices or copies == 0 or not all(w.isdigit() and int(w) >= 1 for w in words[-prices:]):
+    options: dict[str, object] = {}
+
+    def take_options() -> None:  # options en fin de liste, sans jamais vider le nom
+        while len(words) > 1 and (option := _option(words[-1], allowed)) and option[0] not in options:
+            options[option[0]] = option[1]
+            words.pop()
+
+    take_options()
+    if len(words) <= prices or not all(w.isdigit() and int(w) >= 1 for w in words[-prices:]):
         raise ListError(usage)
-    return " ".join(words[:-prices]), [int(w) for w in words[-prices:]], copies
+    numbers = [int(w) for w in words[-prices:]]
+    del words[-prices:]
+    take_options()
+    if options.get("copies") == 0:
+        raise ListError(usage)
+    duration = options.get("duree")
+    if duration is not None and int(duration.total_seconds() // 60) not in SALE_MINUTES:
+        raise ListError("Durées de vente possibles : 10m, 30m, 1h, 3h, 6h, 12h.")
+    return CardArgs(" ".join(words), numbers, options.get("copies"),
+                    short_duration(duration) if duration is not None else "", options.get("vendeur", ""))
+
+
+def parse_card_args(args: str, prices: int, usage: str) -> tuple[str, list[int], int | None]:
+    """Nom, prix et exemplaires (« x2 ») seulement : voir parse_card_command."""
+    parsed = parse_card_command(args, prices, usage)
+    return parsed.name, parsed.prices, parsed.copies

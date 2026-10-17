@@ -28,8 +28,8 @@ def test_settings_are_checked_saved_and_applied(base):
     run = lambda command, args="": run_settings_command(base, CHAT_ID, command, args)  # noqa: E731
     assert run("/set", "prix 65") == "✅ prix : 65 % (pris en compte à la prochaine passe)."
     assert run("/set", "raretes l, sr") == "✅ raretes : L,SR (pris en compte à la prochaine passe)."
-    assert run("/set", "duree 3h").startswith("✅ duree : 3 h")
-    assert run("/set", "intervalle 1h30").startswith("✅ intervalle : 1 h30")
+    assert run("/set", "duree 3h").startswith("✅ duree : 3h")
+    assert run("/set", "intervalle 1h30").startswith("✅ intervalle : 1h30")
     assert run("/set", "budget aucun").startswith("✅ budget : aucun")
     assert run("/set", "bilan 0").startswith("✅ bilan : jamais")
     assert run("/set", "surenchère 20").startswith("✅ surenchere : 20 s")
@@ -39,7 +39,7 @@ def test_settings_are_checked_saved_and_applied(base):
     assert run("/set", "couleur rouge").startswith("❌ couleur : réglage inconnu")
     assert run("/set", "prix").startswith("Usage")
     config = accounts.account_config(base, CHAT_ID)
-    assert (config.price_ratio, config.sell_rarities, config.auction_duration_label) == (0.65, ("L", "SR"), "3 h")
+    assert (config.price_ratio, config.sell_rarities, config.auction_duration_label) == (0.65, ("L", "SR"), "3h")
     assert config.run_interval == timedelta(minutes=90) and config.max_total_bids is None
     assert config.report_every is None and config.snipe_lead == timedelta(seconds=20) and config.night_durations == ()
     assert run("/pause").startswith("⏸️") and accounts.account_config(base, CHAT_ID).paused

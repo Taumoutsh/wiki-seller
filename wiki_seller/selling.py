@@ -88,9 +88,9 @@ def list_item(site: WikiMasters, config: Config, item: SaleItem, dry_run: bool, 
     d'exemplaire (le premier vient d'être mis en vente)."""
     k = copy_index % len(item.copy_ids) if item.copy_ids else 0
     copies = item.copy_ids[k:] + item.copy_ids[:k]
-    if item.exact:
-        return site.list_card(item.card_id, copies, item.title, None, dry_run, None, sale_duration(config),
-                              price=item.price)
+    if item.exact:  # durée demandée, sinon la durée habituelle (nuit comprise)
+        return site.list_card(item.card_id, copies, item.title, None, dry_run, None,
+                              item.duration or sale_duration(config), price=item.price)
     return site.list_card(item.card_id, copies, item.title, item.average, dry_run,
                           market_adjuster(site, config, item.title, my_auction_ids), sale_duration(config))
 
@@ -208,7 +208,7 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
             continue
         copy_ids = tuple(c for g in matching for c in copies_not_on_sale(g, selling))
         items.append(SaleItem(matching[0].card_id, matching[0].title, matching[0].rarity, 0, card.price,
-                              count, copy_ids, exact=True))
+                              count, copy_ids, exact=True, duration=card.duration))
     return items
 
 

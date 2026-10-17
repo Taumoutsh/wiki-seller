@@ -165,3 +165,30 @@ def test_startup_reminds_to_delete_the_old_files(tmp_path, caplog):
     remind_legacy_files(config, dry_run=True)
     assert "safed_cards.json et wanted_cards.json : repris dans state/" in caplog.text
     assert safe_file(config).exists() and buy_file(config).exists()
+
+
+def test_parse_card_command_options():
+    from wiki_seller.lists import parse_card_command
+
+    all_options = ("copies", "duree", "vendeur")
+    parsed = parse_card_command("Tour Eiffel 500 800 x2 12h @Paul", 2, "usage", all_options)
+    assert (parsed.name, parsed.prices, parsed.copies, parsed.duration, parsed.seller) == (
+        "Tour Eiffel", [500, 800], 2, "12h", "Paul")
+    parsed = parse_card_command("Victor Hugo 30m 120", 1, "usage", all_options)  # option avant le prix
+    assert (parsed.name, parsed.prices, parsed.duration) == ("Victor Hugo", [120], "30m")
+    assert parse_card_command("Apollo 11 500 1h", 1, "usage", all_options).duration == "1h"
+    assert parse_card_command("12h 500", 1, "usage", all_options).name == "12h"  # le nom ressemble à une durée
+    with pytest.raises(ListError, match="10m, 30m, 1h"):
+        parse_card_command("Tour Eiffel 800 2h", 1, "usage", all_options)
+    with pytest.raises(ListError, match="usage"):  # option non permise pour cette commande
+        parse_card_command("Tour Eiffel 800 @Paul", 1, "usage", ("copies", "duree"))
+
+
+def test_sale_duration_and_seller_are_kept(config):
+    set_buy(config, "Tour Eiffel", 500, sell_price=800, seller="Paul", sell_duration="12h")
+    assert buy_cards(config) == [BuyCard("Tour Eiffel", 500, 1, 800, "Paul", "12h")]
+    message = complete_purchase(config, buy_cards(config)[0], 1)
+    assert "mise en vente à 800 pour 12h" in message
+    assert [(c.name, c.price, c.duration) for c in sell_cards(config)] == [("Tour Eiffel", 800, "12h")]
+    set_sell(config, "Tour Eiffel", 900, duration="30m")
+    assert sell_cards(config)[0].duration == "30m"

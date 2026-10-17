@@ -775,3 +775,33 @@ def test_lost_auctions_are_announced(tmp_path):
     assert lost == ["❌ Perdue : Victor Hugo, remportée à 120 par un autre (max 100) ; recherche d'une autre enchère.",
                     "❌ Perdue : Victor Hugo, montée à 150, au-dessus de votre max (max 100) ; "
                     "recherche d'une autre enchère."]
+
+
+def test_sale_with_requested_duration(tmp_path):
+    from wiki_seller.lists import set_sell
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=2) as site:
+        config = make_config(tmp_path, site.url, [], selling=False)
+        set_sell(config, "Pomme", 999, duration="12h")
+        set_sell(config, "Loire", 500)  # durée habituelle
+        run_once(config)
+    assert [(l["title"], l["price"], l["duration"]) for l in site.listings] == [
+        ("Pomme", "999", "12 h"), ("Loire", "500", "1 h")]
+
+
+def test_purchase_only_from_the_requested_seller(tmp_path, caplog):
+    from wiki_seller.commands import run_list_command
+
+    auctions = [market_auction("v1", "Victor Hugo", 30), market_auction("v2", "Victor Hugo", 60, seller="ami-id"),
+                market_auction("l1", "Loire", 10)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site:
+        config = make_config(tmp_path, site.url, [])
+        reply = run_list_command(config, "/buy", "Victor Hugo 100 @ami-id")
+        assert "chez @ami-id seulement" in reply
+        run_once(config)
+        assert site.bids == [("v2", 60)]  # pas v1, pourtant moins chère
+        run_list_command(config, "/buy", "Loire 100 @inconnu")
+        with caplog.at_level("INFO"):
+            run_once(config)
+    assert site.bids == [("v2", 60)]  # aucune enchère de Loire chez @inconnu
+    assert "« Loire » — vendeurs des enchères en cours : other" in caplog.text
