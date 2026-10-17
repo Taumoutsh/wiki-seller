@@ -40,8 +40,10 @@ ADMIN_HELP = ("\nAdministration :\n"
               "/removeuser <chat_id> : retirer un compte (ses fichiers sont gardés)")
 ADMIN_COMMANDS = ("/users", "/adduser", "/removeuser")
 WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouvert.\n\n"
-                "1. Envoyez ici les cookies de votre session (le favori « cookies » que "
-                "l'administrateur vous a transmis, ouvert sur wiki-masters.com).\n"
+                "1. Dans une fenêtre privée, connectez-vous à wiki-masters.com, ouvrez le favori « cookies » "
+                "que l'administrateur vous a transmis, collez ici la ligne copiée, puis fermez la fenêtre "
+                "privée (vos autres navigateurs restent connectés). Ne cliquez jamais sur « Se déconnecter » "
+                "sur le site : cela fermerait aussi la session du bot.\n"
                 "2. Vérifiez vos réglages avec /settings : au départ, rien n'est vendu automatiquement "
                 "et la défausse est coupée.\n"
                 "3. Envoyez /resume pour démarrer.\n\n")

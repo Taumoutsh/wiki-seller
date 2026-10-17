@@ -160,10 +160,13 @@ Telegram.
 3. Envoyez cette ligne au bot Telegram quand il la demande, ou écrivez-la dans `.env`
    (`SESSION_COOKIES=sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…`), supprimez
    `state/session.json` et relancez le conteneur (`docker compose up -d`).
-4. **Ne vous déconnectez pas** ensuite sur ce navigateur (cela fermerait aussi la
-   session copiée), et ne l'utilisez plus sur un autre appareil : deux appareils qui la
-   renouvellent chacun de leur côté peuvent la faire annuler. Le mieux : une fenêtre
-   privée réservée au script, que vous laissez de côté.
+4. Le mieux : faites-le dans une **fenêtre privée**, et **fermez-la aussitôt la ligne
+   copiée**. Fermer la fenêtre efface ses cookies sans fermer la session côté site ; la
+   laisser ouverte, au contraire, la ferait tenter un jour de renouveler la même session
+   que le script, et le site l'annulerait pour les deux. Vos autres navigateurs restent
+   connectés : chaque connexion a sa propre session.
+5. **Ne cliquez jamais sur « Se déconnecter »** sur le site, sur aucun appareil : par
+   défaut, cela ferme toutes les sessions du compte, celle du script comprise.
 
 ## Bot Telegram
 
