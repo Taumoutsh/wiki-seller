@@ -2,7 +2,9 @@
 chaque réveil) et administration des comptes. Chaque fonction renvoie la réponse à
 envoyer dans la conversation."""
 
-from . import accounts
+from html import escape
+
+from . import accounts, settings
 from .lists import (
     ListError,
     add_safe,
@@ -22,6 +24,9 @@ from .state import read_json
 
 HELP_TEXT = ("Commandes :\n"
              "/update : bilan maintenant (ventes, défausses, solde)\n"
+             "/settings · /set <réglage> <valeur> : réglages du compte\n"
+             "/pause · /resume : arrêter ou reprendre ventes, achats et défausse\n"
+             "/simulation on|off : tout simuler, sans rien envoyer au site\n"
              "/ventes : historique de vos ventes, tel que le site le donne\n"
              "/list : cartes protégées, à acheter et à vendre\n"
              "/safe <carte> · /unsafe <carte> : protéger une carte (jamais défaussée, un exemplaire "
@@ -34,9 +39,13 @@ ADMIN_HELP = ("\nAdministration :\n"
               "/adduser <chat_id> <nom> : ouvrir l'accès à une conversation\n"
               "/removeuser <chat_id> : retirer un compte (ses fichiers sont gardés)")
 ADMIN_COMMANDS = ("/users", "/adduser", "/removeuser")
-WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouvert.\n"
-                "Pour commencer, envoyez ici les cookies de votre session (voir le favori « cookies » "
-                "que l'administrateur vous a transmis).\n\n")
+WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouvert.\n\n"
+                "1. Envoyez ici les cookies de votre session (le favori « cookies » que "
+                "l'administrateur vous a transmis, ouvert sur wiki-masters.com).\n"
+                "2. Vérifiez vos réglages avec /settings : au départ, rien n'est vendu automatiquement "
+                "et la défausse est coupée.\n"
+                "3. Envoyez /resume pour démarrer.\n\n")
+SETTINGS_COMMANDS = ("/settings", "/reglages", "/set", "/pause", "/resume", "/simulation")
 LIST_COMMANDS = ("/list", "/safe", "/unsafe", "/buy", "/want", "/unbuy", "/sell", "/unsell", "/buyandsell")
 
 BUY_USAGE = "Usage : /buy <carte> <prix max> [x2], ex. /buy Apollo 11 500 ou /buy Victor Hugo 120 x2"
@@ -80,6 +89,42 @@ def run_admin_command(base, command: str, args: str, bot=None) -> str:
     return help_text(admin=True)
 
 
+def run_settings_command(base, chat_id: str, command: str, args: str) -> str:
+    """/settings, /set <réglage> <valeur>, /pause, /resume, /simulation on|off."""
+    config = accounts.account_config(base, chat_id)
+    if command in ("/settings", "/reglages"):
+        return settings_text(config)
+    if command == "/set":
+        key, _, value = " ".join(args.split()).partition(" ")
+        if not key or not value:
+            return "Usage : /set <réglage> <valeur>, ex. /set prix 65 (voir /settings)"
+    else:
+        key = "simulation" if command == "/simulation" else "pause"
+        value = args.strip() if command == "/simulation" else ("on" if command == "/pause" else "off")
+        if not value:
+            return "Usage : /simulation on ou /simulation off"
+    try:
+        setting = settings.set_value(config, key, value)
+    except settings.SettingError as exc:
+        return f"❌ {key} : {exc}"
+    updated = accounts.account_config(base, chat_id)
+    if setting.key == "pause":
+        return ("⏸️ Compte en pause : ni vente, ni achat, ni défausse jusqu'à /resume." if updated.paused else
+                "▶️ Compte actif : la prochaine passe démarre dans la minute.")
+    return f"✅ {setting.key} : {setting.show(updated)} (pris en compte à la prochaine passe)."
+
+
+def settings_text(config) -> str:
+    state = "⏸️ en pause (/resume pour démarrer)" if config.paused else "▶️ actif"
+    lines = [f"<b>⚙️ Réglages</b> · {state}" + (" · 🧪 simulation" if config.simulation else ""),
+             "Modifier : /set &lt;réglage&gt; &lt;valeur&gt;, ex. /set prix 65", ""]
+    for setting in settings.SETTINGS:
+        if setting.key in ("pause",):
+            continue
+        lines.append(f"• <b>{setting.key}</b> : {escape(setting.show(config))}\n   <i>{escape(setting.help)}</i>")
+    return "\n".join(lines)
+
+
 def users_text(base) -> str:
     lines = [f"👥 Comptes ({len(accounts.accounts(base))}) :"]
     for account in accounts.accounts(base):
@@ -91,7 +136,8 @@ def users_text(base) -> str:
             counts = "aucune liste"
         session = "session ✅" if config.session_file.exists() else "pas de session"
         admin = " (admin)" if account.chat_id == accounts.admin_id(base) else ""
-        lines.append(f"• {account.name or '—'}{admin} · {account.chat_id} · {session} · {counts}")
+        state = "⏸️ pause" if config.paused else "🧪 simulation" if config.simulation else "▶️ actif"
+        lines.append(f"• {account.name or '—'}{admin} · {account.chat_id} · {state} · {session} · {counts}")
     return "\n".join(lines)
 
 

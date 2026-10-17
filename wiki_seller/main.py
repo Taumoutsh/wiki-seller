@@ -84,9 +84,10 @@ def main(argv: list[str] | None = None) -> int:
             bot = telegram_bot(base)
             if bot is not None:  # une seule écoute pour toutes les conversations
                 CommandListener(bot, request, base).start()
-            loop(config, args.dry_run, args.debug)
+            admin = accounts.admin_id(base)
+            loop(lambda: accounts.account_config(base, admin), args.dry_run, args.debug)
         else:
-            run_once(config, dry_run=args.dry_run, debug=args.debug)
+            run_once(config, dry_run=args.dry_run or config.simulation, debug=args.debug)
             DISCARDER.join()  # une passe unique attend la fin de la défausse lancée
     except ListError as exc:
         log.error("%s", exc)

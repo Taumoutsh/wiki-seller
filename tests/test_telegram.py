@@ -92,7 +92,7 @@ def test_update_command_asks_for_a_report(tmp_path):
             listener.stop()
     assert fake.sent[0].startswith("⏳ Bilan") and fake.sent[1].startswith("⏳ Historique")
     assert "/update" in fake.sent[2] and "/ventes" in fake.sent[2]
-    assert "aucune n'est demandée" in fake.sent[-1]
+    assert "aucune session n'est demandée" in fake.sent[-1]
 
 
 def test_session_reply_reaches_the_request_while_commands_are_listened(tmp_path):

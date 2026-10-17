@@ -134,6 +134,11 @@ class Config:
     # Plusieurs comptes : state_dir est le dossier du compte (state/users/<chat_id>),
     # shared_dir celui des fichiers communs (cache des prix, bot Telegram, journal).
     shared_dir: Path | None = None
+    # Réglages d'un compte (settings.py) : ventes automatiques des raretés ci-dessus,
+    # compte en pause, tout simulé.
+    selling: bool = True
+    paused: bool = False
+    simulation: bool = False
     # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
     run_interval: timedelta | None = None
     # Achats : ancienne liste (reprise dans state/, à retirer), budget total optionnel,

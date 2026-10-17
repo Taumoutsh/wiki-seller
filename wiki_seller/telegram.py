@@ -263,7 +263,7 @@ class CommandListener:
                 _INBOX.notify_all()
                 return
         from . import accounts
-        from .commands import ADMIN_COMMANDS, help_text, run_admin_command
+        from .commands import ADMIN_COMMANDS, SETTINGS_COMMANDS, help_text, run_admin_command, run_settings_command
 
         reply = self.bot.for_chat(chat)
         text = message.get("text") or ""
@@ -282,7 +282,10 @@ class CommandListener:
             reply.send(UNKNOWN_TEXT.format(chat=chat))
         elif session_cookie_names(text):
             self._delete(reply, message)
-            reply.send("La session actuelle fonctionne, aucune n'est demandée : message supprimé.")
+            if account is None:
+                reply.send("Message supprimé : aucune session n'est demandée.")
+            else:
+                self._new_session(reply, account, normalize_cookies(text))
         elif command in REPORT_COMMANDS or command in HISTORY_COMMANDS:
             kind = "report" if command in REPORT_COMMANDS else "history"
             accepted = self.on_request(chat, kind)
@@ -290,10 +293,24 @@ class CommandListener:
                        "⏳ Bilan en préparation…" if kind == "report" else "⏳ Historique en préparation…")
         elif command in ADMIN_COMMANDS and admin and self.config is not None:
             reply.send(run_admin_command(self.config, command, args, self.bot))
+        elif command in SETTINGS_COMMANDS and self.config is not None:
+            reply.send(run_settings_command(self.config, chat, command, args),
+                       html=command in ("/settings", "/reglages"))
         elif command in LIST_COMMANDS and account is not None:
             reply.send(run_list_command(account, command, args))
         else:
             reply.send(help_text(admin) if self.config is not None else HELP_TEXT)
+
+    @staticmethod
+    def _new_session(reply: TelegramBot, account, cookies: str) -> None:
+        """Cookies envoyés sans demande (nouveau compte, ou session à remplacer) : essayés
+        aussitôt ; la session en place est gardée s'ils ne fonctionnent pas."""
+        from .session import replace_session
+
+        result = replace_session(account, cookies)
+        reply.send("✅ Session enregistrée." + (" Envoyez /resume pour démarrer." if account.paused else "")
+                   if result else "❌ Le site refuse cette session (expirée ?). Reconnectez-vous puis renvoyez la ligne."
+                   if result is False else "⏳ Le site ne répond pas : renvoyez la ligne dans quelques minutes.")
 
     @staticmethod
     def _delete(bot: TelegramBot, message: dict) -> None:

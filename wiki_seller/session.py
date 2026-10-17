@@ -157,6 +157,25 @@ def import_session_cookies(site: WikiMasters, text: str, source: str = "SESSION_
     return False
 
 
+def replace_session(config: Config, cookies: str) -> bool | None:
+    """Cookies reçus sans demande : adoptés s'ils fonctionnent (True), sinon la session en
+    place est gardée (False) ; None si le site ne répond pas."""
+    store = session_store(config)
+    previous = (store.cookie_name, store.session) if store.has_session() else None
+    site = WikiMasters(SiteClient(config.base_url, store), config)
+    try:
+        if import_session_cookies(site, cookies, "reçue par Telegram"):
+            return True
+        result = False
+    except SiteError:
+        result = None
+    if previous:
+        store.adopt(*previous)
+    else:
+        store.clear()
+    return result
+
+
 def session_from_telegram(site: WikiMasters) -> bool:
     """Le bot Telegram demande de nouveaux cookies et attend la réponse (TELEGRAM_WAIT)."""
     from .telegram import telegram_bot

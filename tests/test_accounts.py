@@ -77,7 +77,7 @@ def test_bot_serves_each_conversation(tmp_path):
     assert sent[4] == ("555", "🛡️ « Pomme » protégée : jamais défaussée, et toujours un exemplaire gardé "
                               "(1 carte(s) protégée(s)).")
     assert sent[5][0] == "555" and "pas encore actif" in sent[5][1] and requested == ["555"]
-    assert sent[6][0] == CHAT_ID and "Paul · 555 · pas de session · 1 protégée(s)" in sent[6][1]
+    assert sent[6][0] == CHAT_ID and "Paul · 555 · ⏸️ pause · pas de session · 1 protégée(s)" in sent[6][1]
     assert "admin" in sent[6][1] and sent[7][1].startswith("Compte 555 retiré")
     assert "Votre identifiant Telegram : 555" in sent[8][1]  # retiré : de nouveau inconnu
     assert safe_titles(accounts.account_config(base, "555")) == ["Pomme"]

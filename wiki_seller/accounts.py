@@ -12,6 +12,7 @@ import re
 import threading
 from dataclasses import dataclass
 
+from . import settings
 from .config import Config
 from .state import now_utc, read_json, write_json
 
@@ -66,6 +67,8 @@ def add(base: Config, chat_id: str, name: str) -> bool:
             entry["name"] = name
         write_json(_file(base), data)
     account_dir(base, chat_id).mkdir(parents=True, exist_ok=True)
+    if new:
+        settings.init_new_account(account_config(base, chat_id))  # en pause, ni vente ni défausse
     return new
 
 
@@ -93,7 +96,8 @@ def account_config(base: Config, chat_id: str) -> Config:
                "telegram_chat_id": "" if chat_id == LOCAL else chat_id}
     if chat_id != admin_id(base):
         changes.update(safe_cards_file=folder / "none", wanted_cards_file=folder / "none", session_cookies="")
-    return dataclasses.replace(base, **changes)
+    config = dataclasses.replace(base, **changes)
+    return dataclasses.replace(config, **settings.apply(config))
 
 
 def migrate(base: Config) -> None:

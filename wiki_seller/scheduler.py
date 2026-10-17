@@ -32,6 +32,7 @@ RESTART_MARGIN = timedelta(minutes=1)
 RETRY_AFTER_ERROR = timedelta(minutes=10)
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 REPORT_GUARD_SECONDS = 90  # pas de bilan demandé juste avant un réveil
+PAUSE_CHECK = timedelta(minutes=1)  # compte en pause : /resume vérifié chaque minute
 
 class _Requests:
     """Demandes du bot pour un compte (/update : "report", /ventes : "history") : elles
@@ -197,19 +198,31 @@ def next_wake(next_pass: datetime, config: Config, now: datetime) -> tuple[datet
     return next_pass, False
 
 
-def loop(config: Config, dry_run: bool, debug: bool) -> None:
-    """Boucle d'un compte : passes, réveils de surenchère, demandes du bot."""
-    next_pass = now_utc()
-    snipe = False
-    bot = telegram_bot(config)
-    _RUNNING.add(config.telegram_chat_id)
-    list_error = None
+def loop(source, dry_run: bool, debug: bool) -> None:
+    """Boucle d'un compte : passes, réveils de surenchère, demandes du bot. source : ses
+    réglages (Config), ou une fonction qui les relit à chaque tour (/set, /pause…)."""
+    current = source if callable(source) else (lambda: source)
+    _RUNNING.add(current().telegram_chat_id)
+    next_pass, snipe, list_error, paused = now_utc(), False, None, None
     while True:
+        config = current()
+        bot = telegram_bot(config)
+        if config.paused:
+            if not paused:
+                log.info("Compte en pause : ni vente, ni achat, ni défausse jusqu'à /resume.")
+            paused = True
+            sleep_until(now_utc() + PAUSE_CHECK, config, debug)
+            continue
+        if paused:
+            log.info("Compte repris : passe tout de suite.")
+            next_pass, snipe = now_utc(), False
+        paused = False
+        simulate = dry_run or config.simulation
         try:
             if snipe:
-                run_snipe(config, dry_run=dry_run, debug=debug)
+                run_snipe(config, dry_run=simulate, debug=debug)
             else:
-                next_pass = next_run_at(run_once(config, dry_run=dry_run, debug=debug), config, now_utc())
+                next_pass = next_run_at(run_once(config, dry_run=simulate, debug=debug), config, now_utc())
             list_error = None
         except ConfigError:
             raise

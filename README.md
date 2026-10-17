@@ -187,6 +187,19 @@ Chaque compte WikiMasters correspond à une conversation Telegram (son chat_id),
 | `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
 | `/users` | Liste des comptes : session, nombre de cartes protégées, à acheter et à vendre |
 
+Chaque compte se règle depuis sa conversation (`/settings` affiche tout) :
+
+| Commande | Effet |
+|---|---|
+| `/set <réglage> <valeur>` | `raretes` (ex. `L,SR`, `toutes`, `aucune`), `prix` (% du prix moyen), `ajustement`, `plancher`, `duree`, `nuit`, `intervalle`, `invendues`, `pause_invendues`, `defausse` (0 = coupée), `seuil_defausse`, `budget`, `surenchere`, `bilan` ; pris en compte à la passe suivante |
+| `/pause` · `/resume` | Arrête ou reprend ventes, achats et défausse |
+| `/simulation on\|off` | Tout simuler, sans rien envoyer au site |
+
+Un réglage jamais modifié prend la valeur du `.env`. Un nouveau compte démarre en pause,
+sans vente automatique (`raretes aucune`) ni défausse : la personne envoie ses cookies
+(sans attendre de demande), vérifie `/settings`, puis `/resume`. Les ventes demandées
+(`/sell`) partent même avec `raretes aucune`.
+
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant, à vous
 transmettre ; rien d'autre ne lui est répondu. Chaque compte a ses fichiers dans
 `state/users/<chat_id>/` (session, listes, suivis, bilans) ; le cache des prix, l'état du

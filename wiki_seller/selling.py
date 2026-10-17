@@ -248,6 +248,9 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
     if market.free_slots == 0:
         log.info("Aucune place libre aux enchères : rien à faire pour l'instant.")
         return RunResult(0, None, True, market.earliest_end())
+    if not priority and not config.selling:
+        log.info("Ventes automatiques coupées (réglage raretes : aucune) et aucune vente demandée.")
+        return RunResult(0, None, False, market.earliest_end())
 
     # Les cartes à vendre (/sell) sont de toutes raretés : la collection est alors lue en entier.
     entries, in_trade = site.fetch_collection(() if priority else config.sell_rarities)
@@ -264,7 +267,9 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
     priority_keys = {c.key for c in priority}
     groups = [g for g in parse_collection(entries, excluded_copy_ids=in_trade)
               if normalize_name(g.title) not in priority_keys]
-    if listings.room:
+    if not config.selling:
+        log.info("Ventes automatiques coupées (réglage raretes : aucune).")
+    elif listings.room:
         _sell_plan(site, config, listings, groups, safe_names, market, my_id)
     else:
         log.info("Plus de place libre après les ventes demandées.")
