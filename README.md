@@ -1,130 +1,216 @@
 # wiki-seller
 
-Automatise votre compte [WikiMasters](https://www.wiki-masters.com) : mise aux enchères
-des cartes de valeur, achat des cartes voulues, défausse des cartes sans valeur, et un
-bot Telegram pour la session et les bilans.
+Automatise un ou plusieurs comptes [WikiMasters](https://www.wiki-masters.com) : mise
+aux enchères des cartes de valeur, achat des cartes voulues, ventes à prix fixé,
+défausse des cartes sans valeur, le tout piloté par un bot Telegram (une conversation
+par compte).
 
-À chaque passe, le script :
+Le script parle à l'API du site en HTTP, comme la page elle-même, avec la session de
+chaque compte : pas de navigateur, et aucune vérification humaine n'est jamais
+contournée.
 
-1. se connecte (voir « Connexion ») ;
-2. mise sur les cartes à acheter (`/buy`, voir « Achats ») ;
-3. met en vente, s'il reste de la place (le site autorise 5 enchères à la fois),
-   **d'abord les cartes demandées** (`/sell`, voir « Ventes à prix exact »), puis les
-   cartes des raretés `SELL_RARITIES` (par défaut légendaires `L` et super rares `SR`),
-   **de la plus chère à la moins chère**, sauf les cartes protégées (`/safe` : un
-   exemplaire est conservé et les doublons sont vendus). Mise de
-   départ : **70 % du prix moyen du marché**, arrondie à l'entier inférieur et ajustée
-   d'après les enchères en cours de la même carte (`MARKET_ADJUST`), pour **1 h**. Une
-   carte sans prix moyen est ignorée ; une carte dont le prix n'a pas pu être lu
-   attend la passe suivante ;
-4. lance la défausse en arrière-plan (voir « Défausse automatique ») ;
-5. envoie le bilan Telegram si son heure est venue (voir « Bot Telegram »).
+## Démarrage rapide (administrateur)
 
-En mode `--loop`, la passe suivante démarre **`RUN_INTERVAL` après la dernière mise en
-vente** (par défaut la durée des enchères, 1 h). Si toutes les places étaient prises,
-elle démarre dès la fin de la première enchère en cours, et au plus tard `RUN_INTERVAL`
-plus tard (les ventes de nuit durent jusqu'à 12 h).
+1. Créez le bot Telegram (voir « Bot Telegram ») et remplissez `.env` à partir de
+   `.env.example` : au minimum `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID` (le vôtre).
+2. Lancez le conteneur :
 
-Toutes les actions passent par l'API du site, comme la page elle-même : aucune
-vérification humaine n'est jamais contournée.
+   ```bash
+   mkdir -p state
+   docker compose up -d --build
+   docker compose logs -f
+   ```
 
-## Défausse automatique (arrière-plan)
+3. Le bot vous demande votre session : envoyez-lui la ligne de cookies (voir
+   « Session du site »).
+4. Réglez votre compte avec `/settings` et `/set`, remplissez vos listes (`/safe`,
+   `/buy`, `/sell`…). Tout se fait depuis Telegram.
 
-À chaque réveil (passe ou surenchère), un **thread à part** est lancé, sauf s'il tourne
-déjà ou s'est terminé il y a moins d'une heure (15 min si des prix n'avaient pas pu
-être lus). Il lit toute la collection et compte les exemplaires. Au-delà de
-**`DISCARD_TRIGGER` (150)**, il examine les cartes **des plus communes aux plus rares**
-(`C`, `PC`, `R`, `SR`, `UR`, `L`) : il lit le prix de chacune (cache, sinon le site) et
-la **défausse aussitôt** si elle vaut moins de **`DISCARD_BELOW` (15)**, un exemplaire
-à la fois (`POST /api/user-cards/{exemplaire}/discard`, 1 wikibidou chacun).
+Pour un premier essai sans rien envoyer au site : `/simulation on`.
 
-- **Défaussées :** prix moyen strictement inférieur à 15, ou aucune vente connue pour
-  une commune (`C`) ou peu commune (`PC`). Tous les exemplaires, y compris le dernier.
-- **Jamais défaussées :** les cartes protégées, à acheter et à vendre (voir « Listes de
-  cartes »), les exemplaires en vente ou en échange, les cartes rares sans vente connue, et celles
-  dont le prix n'a pas pu être lu (redemandées la fois suivante).
-- **Une tâche à la fois :** la défausse et les passes partagent la session du site.
-  Quand une passe se réveille, la défausse lui laisse la place après la page, le prix ou
-  l'exemplaire en cours, puis reprend où elle en était.
-- **Reprise :** l'avancement est gardé dans `state/discard_progress.json` (24 h au plus),
-  même après un redémarrage. Supprimez ce fichier pour repartir de zéro.
-- **Journal :** une ligne par exemplaire défaussé, et toutes les 100 cartes examinées un
-  point d'étape avec le temps moyen par prix et le nombre de refus du site.
+## Ajouter un utilisateur
 
-`DISCARD_BELOW=0` désactive la défausse. En `--dry-run`, rien n'est envoyé.
+1. La personne écrit à votre bot (lien `https://t.me/<nom_du_bot>`, bouton
+   « Démarrer ») : il lui répond son identifiant Telegram, qu'elle vous transmet.
+2. Vous envoyez `/adduser <chat_id> <prénom>` : elle reçoit un message de bienvenue.
+3. Elle envoie sa ligne de cookies au bot (voir « Session du site »), vérifie
+   `/settings`, puis `/resume`.
 
-## Prix moyens
+Un nouveau compte démarre **en pause**, **sans vente automatique** (`raretes aucune`),
+**sans défausse** et sans carte protégée : rien ne se passe tant que la personne ne l'a
+pas décidé. Les cookies donnent un accès complet au compte et transitent par Telegram :
+n'ouvrez le bot qu'à des personnes de confiance.
 
-Les prix viennent de `/api/marketplace/cards/<id>/sales?scope=summary`, une requête par
-carte, gardés `PRICE_CACHE_HOURS` (24 h) dans `state/price_cache.json`, partagé par la
-vente et la défausse. Un refus passager du site (trop de requêtes, panne) ne fait
-laisser de côté que la carte concernée, après 30 s de pause ; l'API n'est abandonnée
-qu'après 5 refus de suite, ou dès un accès interdit.
+## Session du site
 
-## Listes de cartes
+Le site s'appuie sur Supabase : la session tient dans les cookies `sb-…-auth-token.0` et
+`.1` (un jeton d'accès valable 1 h et un jeton de renouvellement). Le script la
+renouvelle lui-même avant qu'elle expire, comme la page, et enregistre chaque nouvelle
+version dans `state/users/<chat_id>/session.json`. La connexion par mot de passe n'est
+pas possible (la page `/login` attend une case Cloudflare cochée par une personne) : la
+session vient toujours d'un navigateur connecté.
 
-Trois listes, dans `state/`, modifiées par le bot Telegram (voir « Commandes ») et
-relues à chaque passe :
+### Copier la ligne de cookies
 
-| Fichier | Commandes | Contenu |
+Toujours dans une **fenêtre privée**, connectée à wiki-masters.com :
+
+- **Ordinateur :** ouvrez la console (F12, onglet Console), collez cette ligne puis
+  Entrée ; la ligne de cookies est copiée (la console affiche `undefined`, c'est
+  normal) :
+
+  ```js
+  copy(document.cookie.split('; ').filter(c => c.startsWith('sb-')).join('; '))
+  ```
+
+  Chrome demande parfois d'écrire `allow pasting` avant le premier collage.
+- **Téléphone (ou ordinateur) :** ajoutez un favori « cookies » dont l'adresse est la
+  ligne ci-dessous, puis ouvrez-le sur wiki-masters.com :
+
+  ```
+  javascript:(()=>{const c=document.cookie.split('; ').filter(x=>x.startsWith('sb-')).join('; ');navigator.clipboard.writeText(c).then(()=>alert('Copié : '+c.split('; ').length+' cookie(s)'),()=>prompt('Tout sélectionner et copier :',c))})()
+  ```
+
+Collez la ligne (`sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…`) dans votre
+conversation avec le bot : il **supprime aussitôt le message**, essaie la session et
+répond ✅ ou ❌. Puis :
+
+- **fermez la fenêtre privée tout de suite** : laissée ouverte, elle tenterait un jour
+  de renouveler la même session que le script, et le site l'annulerait pour les deux.
+  Fermer la fenêtre ne ferme pas la session ; vos autres navigateurs restent connectés
+  (chaque connexion a sa propre session) ;
+- **ne cliquez jamais sur « Se déconnecter »** sur le site, sur aucun appareil : par
+  défaut, cela ferme toutes les sessions du compte, celle du script comprise.
+
+**Session expirée :** le bot envoie le lien du site et la marche à suivre dans la
+conversation du compte, attend la réponse `TELEGRAM_WAIT` (60 min) sans bloquer les autres
+comptes, puis réessaie au réveil suivant (sans nouveau message avant 3 h). Des cookies
+peuvent aussi être envoyés à tout moment, sans demande : la session en place est gardée
+s'ils ne fonctionnent pas.
+
+## Commandes du bot
+
+| Commande | Effet |
+|---|---|
+| `/update` (ou `/bilan`) | Bilan immédiat (voir « Bilan ») |
+| `/ventes` (ou `/historique`) | Vos enchères terminées telles que le site les renvoie (40 au plus) : ✅ vendue, ❌ invendue, période couverte |
+| `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
+| `/safe <carte>` · `/unsafe <carte>` | Protège une carte (jamais défaussée, un exemplaire toujours gardé), ou la retire des protégées |
+| `/buy <carte> <prix max>` · `/unbuy <carte>` | Achète la carte à ce prix au plus (voir « Achats ») ; protégée une fois obtenue |
+| `/sell <carte> <prix>` · `/unsell <carte>` | Vend la carte à ce prix exact, en priorité, jusqu'à la vente (voir « Ventes à prix fixé ») |
+| `/buyandsell <carte> <prix max> <prix de vente>` | Achète la carte, puis la revend à ce prix |
+| `/settings` · `/set <réglage> <valeur>` | Réglages du compte (voir « Réglages par compte ») |
+| `/pause` · `/resume` | Arrête ou reprend ventes, achats et défausse (reprise dans la minute) |
+| `/simulation on\|off` | Tout simuler, sans rien envoyer au site |
+
+**Options** de `/buy`, `/sell` et `/buyandsell`, avant ou après les prix, dans n'importe
+quel ordre : `x2` (2 exemplaires), `12h` (durée de vente : `10m`, `30m`, `1h`, `3h`, `6h`,
+`12h` ; `/sell` et `/buyandsell`), `@Pseudo` (n'acheter qu'à ce vendeur ; `/buy` et
+`/buyandsell`). Exemple : `/buyandsell Tour Eiffel 500 800 x2 12h @Paul`.
+
+Les derniers nombres sont toujours les prix : `/buy Apollo 11 500` vise « Apollo 11 » à
+500 au plus. Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
+modifications comptent dès la passe suivante. Tout autre message reçoit la liste des
+commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
+
+**Administration** (votre conversation seulement) :
+
+| Commande | Effet |
+|---|---|
+| `/adduser <chat_id> <nom>` | Ouvre l'accès ; la personne reçoit un message de bienvenue |
+| `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
+| `/users` | Comptes : état (actif, pause, simulation), session, nombre de cartes par liste |
+| `/set cache_prix 168` | Durée de validité des prix en cache, pour tous les comptes (`168`, `168h` ou `7j`) |
+
+Une conversation inconnue qui écrit au bot reçoit seulement son identifiant.
+
+## Réglages par compte
+
+`/settings` affiche les valeurs ; `/set <réglage> <valeur>` les change, pour la passe
+suivante. Un réglage jamais modifié prend la valeur du `.env` (voir « Réglages communs »).
+
+| Réglage | Exemple | Effet |
 |---|---|---|
-| `state/safe_cards.json` | `/safe`, `/unsafe` | Cartes protégées : jamais défaussées, un exemplaire toujours gardé |
-| `state/buy_cards.json` | `/buy`, `/buyandsell`, `/unbuy` | Cartes à acheter, avec leur prix maximum |
-| `state/sell_cards.json` | `/sell`, `/unsell` | Cartes à vendre à un prix exact |
+| `raretes` | `L,SR`, `toutes`, `aucune` | Raretés mises en vente automatiquement (`L`, `UR`, `SR`, `R`, `PC`, `C`) |
+| `prix` | `70` | Mise de départ, en % du prix moyen |
+| `ajustement` | `on` / `off` | Prix ajusté d'après les enchères en cours de la carte |
+| `plancher` | `50` | Ajustement jamais sous ce % du prix moyen |
+| `duree` | `1h` | Durée des ventes (`10m`, `30m`, `1h`, `3h`, `6h`, `12h`) |
+| `nuit` | `1-3=12h;3-6=6h`, `aucune` | Durées de nuit, heures de Paris |
+| `intervalle` | `1h`, `auto` | Délai entre deux passes (`auto` : durée des ventes) |
+| `invendues` · `pause_invendues` | `3` · `5` | Ventes ratées avant de mettre une carte de côté, et jours de mise de côté |
+| `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant moins que ce prix (`0` = coupée), au-delà de ce nombre d'exemplaires |
+| `budget` | `2000`, `aucun` | Somme maximale des mises en cours |
+| `surenchere` | `30` | Secondes avant la fin d'une enchère pour surenchérir (2 à 300) |
+| `bilan` | `2` | Bilan automatique toutes les N heures (`0` = jamais) |
+| `simulation` | `on` / `off` | Tout simuler |
 
-`/list` les affiche. Les noms sont comparés sans majuscules, accents ni espaces en trop.
-Sans liste de cartes protégées, aucune passe ne tourne (le script vendrait tout) :
-envoyez `/safe <carte>`, ou écrivez `[]` dans `state/safe_cards.json` pour tout vendre.
+## Fonctionnement
 
-Hors Docker, les anciens `safed_cards.json` et `wanted_cards.json` sont repris dans
-`state/` au premier démarrage ; ils ne servent plus ensuite (le journal et le bot le
-rappellent). Le conteneur ne les monte plus.
+Chaque compte tourne dans son propre fil, en parallèle des autres. À chaque passe, le
+script :
 
-## Achats
+1. vérifie la session (voir « Session du site ») ;
+2. mise sur les cartes à acheter (voir « Achats ») ;
+3. met en vente, s'il reste de la place (5 enchères à la fois sur le site), **d'abord
+   les ventes demandées** (`/sell`), puis les cartes des raretés `raretes`, **de la plus
+   chère à la moins chère**, sauf les cartes protégées (un exemplaire gardé, les doublons
+   vendus) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
+   et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
+   durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix n'a pas
+   pu être lu attend la passe suivante ;
+4. lance la défausse en arrière-plan (voir « Défausse ») ;
+5. envoie le bilan si son heure est venue (voir « Bilan »).
 
-`/buy Tour Eiffel 500` : achète la carte à 500 au plus ; `/buy Victor Hugo 120 x2` pour
-2 exemplaires, l'un après l'autre. Pour chaque carte :
+La passe suivante démarre `intervalle` après la dernière mise en vente (par défaut la
+durée des ventes). Si toutes les places étaient prises, elle démarre dès la fin de la
+première enchère en cours. La boucle se réveille aussi juste avant la fin des enchères
+suivies, pour surenchérir.
 
-- si vous avez déjà une enchère sur cette carte dans « Mes enchères », elle est reprise ;
-- sinon, le script cherche la carte dans le Marché et choisit l'enchère la moins chère
-  dont la mise minimale ne dépasse pas le prix maximum ;
-- il mise la mise minimale, calculée comme le site (la mise de départ, puis
-  10 % de plus que la mise en cours, au moins +1), jamais directement votre maximum ;
-- s'il est dépassé, il **ne surenchérit pas tout de suite** : si la nouvelle mise
-  minimale reste dans la limite, il attend la fin de l'enchère ; sinon il en cherche
-  une autre ;
-- la boucle se réveille pour la **dernière minute** de l'enchère, la relit **chaque
-  seconde** et, si vous n'êtes plus en tête, surenchérit à **`SNIPE_LEAD` secondes (30)
-  de la fin**, dans la limite, puis **à chaque fois que vous êtes dépassé** ; une mise
-  des 10 dernières secondes prolonge l'enchère de 60 s : la surveillance continue
-  jusqu'à la vraie fin ;
-- **une seule enchère à la fois par carte**.
+### Achats
 
-Le site ne répond pas toujours pendant les enchères. Une mise sans réponse (au bout de
-8 s, ou erreur du site) est vérifiée sur l'enchère : si elle est passée malgré tout, elle
-n'est pas renvoyée ; sinon elle repart chaque seconde, jusqu'à la fin de l'enchère (au
-plus 2 min pendant une passe). Une lecture de l'enchère sans réponse est refaite la
-seconde suivante, sans interrompre la surveillance.
+`/buy Tour Eiffel 500` achète la carte à 500 au plus ; `x2` pour 2 exemplaires, l'un
+après l'autre ; `@Pseudo` pour n'acheter qu'aux enchères de ce vendeur (si rien ne
+correspond, le journal liste les vendeurs vus). Pour chaque carte :
 
-Le bot annonce chaque résultat : « 🛒 Obtenue : Tour Eiffel pour 480 », ou « ❌ Perdue :
-Tour Eiffel, remportée à 520 par un autre (max 500) » (aussi quand l'enchère où vous aviez
-misé monte au-dessus de votre max). Pour une enchère surveillée jusqu'à la fin, le
-résultat part dès que le site désigne le gagnant ; sinon, au réveil suivant.
-Une fois tous les exemplaires obtenus, la carte **quitte la liste d'achat et devient
-protégée**. Avec `/buyandsell Tour Eiffel 500 800`, elle part à la place dans les
-ventes à 800 (voir ci-dessous). Le suivi des enchères est dans `state/wanted_state.json`.
-`MAX_TOTAL_BIDS` limite la somme des mises en cours.
+- une enchère que vous menez déjà sur cette carte (« Mes enchères ») est reprise ;
+- sinon, le script choisit dans le Marché l'enchère la moins chère dont la mise minimale
+  ne dépasse pas votre maximum, et mise **la mise minimale**, calculée comme le site (la
+  mise de départ, puis 10 % de plus que la mise en cours, au moins +1) ;
+- dépassé, il **ne surenchérit pas tout de suite** : il revient pour la dernière minute,
+  relit l'enchère **chaque seconde** et surenchérit à `surenchere` secondes (30) de la
+  fin, puis **à chaque fois qu'il est dépassé**, dans la limite ; une mise des 10
+  dernières secondes prolonge l'enchère de 60 s, la surveillance continue jusqu'à la
+  vraie fin ;
+- au-dessus de votre maximum, il abandonne cette enchère et en cherche une autre ;
+- **une seule enchère à la fois par carte** ; `budget` limite la somme des mises en
+  cours.
 
-## Ventes à prix exact
+Le site ne répond pas toujours pendant les enchères : une mise sans réponse (8 s, ou
+erreur du site) est vérifiée sur l'enchère ; passée malgré tout, elle n'est pas renvoyée,
+sinon elle repart chaque seconde jusqu'à la fin de l'enchère (2 min au plus pendant une
+passe). Une lecture sans réponse est refaite la seconde suivante.
 
-`/sell Tour Eiffel 800` met la carte en vente **à 800 exactement** (ni `PRICE_RATIO`, ni
-ajustement au marché), quelle que soit sa rareté, pour la durée habituelle (nuit
-comprise) ; `/sell Victor Hugo 120 x2` pour 2 exemplaires.
+Le bot annonce chaque résultat dès que le site désigne le gagnant : « 🛒 Obtenue : Tour
+Eiffel pour 480 » ou « ❌ Perdue : Tour Eiffel, remportée à 520 par un autre (max 500) »
+(aussi quand l'enchère où vous aviez misé dépasse votre maximum). Une fois tous les
+exemplaires obtenus, la carte **quitte la liste d'achat et devient protégée** ; avec
+`/buyandsell`, elle part dans les ventes au prix (et pour la durée) demandés.
 
-- Ces cartes passent **en priorité** dans les places libres, dès la passe suivante ; les
-  enchères en cours ne sont pas annulées.
+**Plusieurs comptes :** deux comptes du bot ne misent jamais l'un contre l'autre. Une
+enchère suivie ou menée par un compte est laissée aux autres ; si la seule enchère à
+votre prix est prise ainsi, le bot vous prévient une fois et attend une autre enchère.
+Acheter une carte mise en vente par un autre compte du bot reste possible.
+
+### Ventes à prix fixé
+
+`/sell Tour Eiffel 800` met la carte en vente **à 800 exactement** (ni `prix`, ni
+ajustement), quelle que soit sa rareté et même avec `raretes aucune`, pour la durée
+demandée (`12h`…) ou à défaut la durée habituelle.
+
+- Ces cartes passent **en priorité** dans les places libres ; les enchères en cours ne
+  sont pas annulées.
 - Une enchère terminée sans acheteur est **relancée au même prix** à chaque passe,
-  jusqu'à la vente (la mise de côté des invendues ne s'applique pas).
+  jusqu'à la vente.
 - Chaque vente est annoncée (« 💰 Vendue : Tour Eiffel à 800 ») ; une fois tous les
   exemplaires vendus, la carte quitte la liste.
 - **Carte protégée :** en un seul exemplaire, elle n'est plus protégée et part ; en
@@ -132,102 +218,33 @@ comprise) ; `/sell Victor Hugo 120 x2` pour 2 exemplaires.
 - Une carte absente de la collection est signalée une fois et reste dans la liste
   (`/unsell` pour l'annuler). Ces cartes ne sont jamais défaussées.
 
-## Connexion
+### Défausse
 
-Le script n'utilise pas de navigateur : il parle à l'API du site en HTTP, avec les
-cookies de votre session. Le site s'appuie sur Supabase : la session tient dans les
-cookies `sb-…-auth-token.0` et `.1` (un jeton d'accès valable 1 h et un jeton de
-renouvellement). Le script la renouvelle lui-même avant qu'elle expire, comme le ferait
-la page, et enregistre chaque nouvelle session dans `state/session.json`.
+À chaque réveil, un fil à part par compte lit la collection, sauf s'il tourne déjà ou a
+fini il y a moins d'une heure (15 min si des prix n'avaient pas pu être lus). Au-delà de
+`seuil_defausse` exemplaires (150), il examine les cartes **des plus communes aux plus
+rares** (`C`, `PC`, `R`, `SR`, `UR`, `L`), lit le prix de chacune (cache, sinon le site)
+et la **défausse aussitôt** si elle vaut moins de `defausse` (1 wikibidou par
+exemplaire).
 
-La connexion par mot de passe n'est pas possible : la page `/login` attend une case
-Cloudflare cochée par une personne. Quand il n'a pas de session valide, le script
-essaie, dans l'ordre : la session des anciennes versions (`state/storage_state.json`,
-reprise une fois), `SESSION_COOKIES`, puis demande de nouveaux cookies par le bot
-Telegram.
+- **Défaussées :** prix moyen inférieur au seuil, ou aucune vente connue pour une
+  commune (`C`) ou peu commune (`PC`). Tous les exemplaires, y compris le dernier.
+- **Jamais défaussées :** les cartes protégées, à acheter et à vendre, les exemplaires en
+  vente ou en échange, les cartes rares sans vente connue, et celles dont le prix n'a pas
+  pu être lu (redemandées la fois suivante).
+- La défausse laisse la place aux passes du compte, puis reprend où elle en était.
 
-### Copier la session d'un navigateur
+### Prix moyens
 
-1. Sur votre téléphone ou votre ordinateur, connectez-vous à wiki-masters.com.
-2. Ajoutez un favori dont l'adresse est :
+Lus sur `/api/marketplace/cards/<id>/sales?scope=summary` (une requête par carte,
+environ 5 s), et gardés dans `state/price_cache.json`, commun à tous les comptes, pendant
+`cache_prix` (24 h ; `/set cache_prix` ou `PRICE_CACHE_HOURS`). Un refus passager du site
+ne fait laisser de côté que la carte concernée, après 30 s de pause ; l'API n'est
+abandonnée qu'après 5 refus de suite.
 
-   ```
-   javascript:(()=>{const c=document.cookie.split('; ').filter(x=>x.startsWith('sb-')).join('; ');navigator.clipboard.writeText(c).then(()=>alert('Copié : '+c.split('; ').length+' cookie(s)'),()=>prompt('Tout sélectionner et copier :',c))})()
-   ```
+### Bilan
 
-   puis ouvrez-le sur wiki-masters.com : les cookies de session (`…-auth-token.0` et
-   `…-auth-token.1`) sont copiés sur une seule ligne.
-3. Envoyez cette ligne au bot Telegram quand il la demande, ou écrivez-la dans `.env`
-   (`SESSION_COOKIES=sb-…-auth-token.0=base64-…; sb-…-auth-token.1=…`), supprimez
-   `state/session.json` et relancez le conteneur (`docker compose up -d`).
-4. Le mieux : faites-le dans une **fenêtre privée**, et **fermez-la aussitôt la ligne
-   copiée**. Fermer la fenêtre efface ses cookies sans fermer la session côté site ; la
-   laisser ouverte, au contraire, la ferait tenter un jour de renouveler la même session
-   que le script, et le site l'annulerait pour les deux. Vos autres navigateurs restent
-   connectés : chaque connexion a sa propre session.
-5. **Ne cliquez jamais sur « Se déconnecter »** sur le site, sur aucun appareil : par
-   défaut, cela ferme toutes les sessions du compte, celle du script comprise.
-
-## Bot Telegram
-
-1. Dans Telegram, écrivez à **@BotFather** : `/newbot`, choisissez un nom ; il vous
-   donne le jeton du bot (`123456:ABC…`) → `TELEGRAM_BOT_TOKEN` dans `.env`.
-2. Écrivez n'importe quoi à votre bot, puis ouvrez
-   `https://api.telegram.org/bot<JETON>/getUpdates` : le nombre après `"chat":{"id":`
-   est votre identifiant → `TELEGRAM_CHAT_ID` dans `.env`. Relancez le conteneur.
-
-`TELEGRAM_CHAT_ID` est l'administrateur. Les cookies transitent par les serveurs de
-Telegram : n'ouvrez le bot qu'à des personnes de confiance.
-
-### Plusieurs comptes
-
-Chaque compte WikiMasters correspond à une conversation Telegram (son chat_id), ajoutée
-à la main par l'administrateur :
-
-| Commande (administrateur) | Effet |
-|---|---|
-| `/adduser <chat_id> <nom>` | Ouvre l'accès ; la personne reçoit un message de bienvenue |
-| `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
-| `/users` | Liste des comptes : session, nombre de cartes protégées, à acheter et à vendre |
-
-Chaque compte se règle depuis sa conversation (`/settings` affiche tout) :
-
-| Commande | Effet |
-|---|---|
-| `/set <réglage> <valeur>` | `raretes` (ex. `L,SR`, `toutes`, `aucune`), `prix` (% du prix moyen), `ajustement`, `plancher`, `duree`, `nuit`, `intervalle`, `invendues`, `pause_invendues`, `defausse` (0 = coupée), `seuil_defausse`, `budget`, `surenchere`, `bilan` ; pris en compte à la passe suivante |
-| `/pause` · `/resume` | Arrête ou reprend ventes, achats et défausse |
-| `/simulation on\|off` | Tout simuler, sans rien envoyer au site |
-
-L'administrateur règle aussi ce qui est commun à tous les comptes : `/set cache_prix 168`
-(ou `168h`, `7j`) change la durée de validité des prix moyens en cache, sans relancer le
-conteneur. Un réglage jamais modifié prend la valeur du `.env`. Un nouveau compte démarre en pause,
-sans vente automatique (`raretes aucune`) ni défausse : la personne envoie ses cookies
-(sans attendre de demande), vérifie `/settings`, puis `/resume`. Les ventes demandées
-(`/sell`) partent même avec `raretes aucune`.
-
-Les comptes tournent en parallèle, chacun dans son fil : passes, surenchères, défausse et
-demandes de session ne s'attendent pas entre eux. Un compte ajouté démarre dans les
-30 s, un compte retiré s'arrête à son réveil suivant. Dans le journal, chaque ligne porte
-le nom du compte entre crochets (`[Paul]`, `[défausse-Paul]`).
-
-Deux comptes du bot ne misent jamais l'un contre l'autre : une enchère suivie ou menée
-par un compte est laissée aux autres. Si la seule enchère à votre prix est prise ainsi,
-le bot vous prévient une fois et attend une autre enchère. Acheter une carte mise en
-vente par un autre compte du bot reste possible.
-
-Une conversation inconnue qui écrit au bot reçoit seulement son identifiant, à vous
-transmettre ; rien d'autre ne lui est répondu. Chaque compte a ses fichiers dans
-`state/users/<chat_id>/` (session, listes, suivis, bilans) ; le cache des prix, l'état du
-bot et le journal sont communs, dans `state/`. Au premier démarrage, les fichiers de
-l'ancienne version passent dans le dossier de l'administrateur.
-
-**Session expirée :** le bot vous envoie le lien du site et la marche à suivre ; vous
-lui répondez avec la ligne copiée par le favori. Il **supprime aussitôt votre message**,
-essaie la session et confirme (✅) ou en demande une autre (❌). Le script attend
-`TELEGRAM_WAIT` (60 min), puis réessaie au réveil suivant, sans nouveau message avant
-3 h. La session acceptée est gardée (et tenue à jour) dans `state/session.json`.
-
-**Bilan toutes les 2 h** (`REPORT_HOURS`, `0` pour le couper) :
+Toutes les `bilan` heures (2), ou à la demande avec `/update` :
 
 ```
 📊 Bilan · 14:00 → 16:02
@@ -250,82 +267,58 @@ essaie la session et confirme (✅) ou en demande une autre (❌). Le script att
    ↳ abandonnée (au-dessus du max)
 ```
 
-- **En haut :** le solde et le gain depuis le dernier bilan automatique ; « Rien de neuf »
-  s'il ne s'est rien passé. Les sections vides sont omises.
-- **Ventes :** prix finaux de vos enchères conclues (historique du site), 30 au plus.
-  Chaque vente est comptée une seule fois : une vente qui apparaît en retard dans
-  l'historique compte au bilan suivant.
-- **Défausses :** 1 wikibidou par exemplaire (compteur dans `state/report.json`).
-- **Achats en cours :** les enchères des cartes à acheter (`/buy`) : ✅ vous menez ;
-  ⚠️ dépassé (votre mise → prix actuel), surenchère prévue juste avant la fin, avec son
-  montant une fois le pas du site appris ; ❌ abandonnée, au-dessus du max. Fin : l'heure
-  seule si c'est aujourd'hui.
+- **En haut :** le solde et le gain depuis le dernier bilan automatique (« Rien de neuf »
+  sinon) ; les sections vides sont omises.
+- **Ventes :** prix finaux de vos enchères conclues (historique du site, 30 au plus),
+  chacune comptée une seule fois : une vente qui arrive en retard dans l'historique
+  compte au bilan suivant.
+- **Défausses :** 1 wikibidou par exemplaire.
+- **Achats en cours :** ✅ en tête ; ⚠️ dépassé (votre mise → prix actuel), surenchère
+  prévue ; ❌ abandonnée, au-dessus du max. Fin : l'heure seule si c'est aujourd'hui.
 
-Le bilan automatique part en fin de passe, une fois les enchères placées, et attend
-qu'aucune de vos ventes ne se termine dans les 5 minutes ni ne soit en cours de
-règlement (terminée, mais pas encore dans l'historique) : sinon le solde compterait une
-vente que le bilan ne montre pas. Il part au réveil suivant, et quoi qu'il arrive au-delà
-de 30 minutes de retard.
+Le bilan automatique part en fin de passe, une fois les enchères placées, quand aucune
+de vos ventes ne se termine dans les 5 minutes ni n'est en cours de règlement (sinon le
+solde compterait une vente que le bilan ne montre pas) ; au plus tard 30 minutes après
+l'heure. `/update` part tout de suite (juste après un réveil s'il en tombe un dans les
+90 s). Pas de bilan en simulation.
 
-Le bilan est mis en forme (titres en gras) ; si Telegram refuse la mise en forme, il part
-en texte brut. Pas de bilan en `--dry-run`.
+## Arrêt et reprise
 
-**Commandes** (en mode `--loop`) :
+Tout est enregistré au fil de l'eau dans `state/` : arrêter ou mettre à jour le
+conteneur ne fait rien recommencer.
 
-| Commande | Effet |
-|---|---|
-| `/ventes` (ou `/historique`) | Vos enchères terminées telles que le site les renvoie (les 40 plus récentes) : ✅ vendue, ❌ invendue, et la période couverte |
-| `/update` (ou `/bilan`) | Bilan immédiat depuis le dernier bilan automatique, sans changer le rythme des 2 h ; juste avant un réveil (moins de 90 s), il part juste après |
-| `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
-| `/safe Tour Eiffel` · `/unsafe Tour Eiffel` | Protège la carte (jamais défaussée, toujours un exemplaire gardé), ou la retire des protégées. Une défausse en cours la respecte aussitôt |
-| `/buy Tour Eiffel 500` · `/unbuy Tour Eiffel` | Achète la carte à 500 au plus (ou met ce prix à jour) ; `x2` pour 2 exemplaires, `@Pseudo` pour n'acheter qu'à ce vendeur. Protégée une fois obtenue |
-| `/sell Tour Eiffel 800` · `/unsell Tour Eiffel` | Vend la carte à 800 exactement, en priorité, jusqu'à la vente ; `x2` pour 2 exemplaires, `12h` (ou `10m`, `30m`, `1h`, `3h`, `6h`) pour la durée de vente |
-| `/buyandsell Tour Eiffel 500 800` | Achète la carte à 500 au plus, puis la revend à 800 ; options `x2`, `12h` (durée de la revente) et `@Pseudo` |
+- **Prix :** le cache est enregistré tous les 50 prix lus et à la fin de chaque lecture ;
+  un arrêt en pleine lecture perd au plus les 49 derniers (quelques minutes).
+- **Défausse :** l'avancement est enregistré toutes les 20 pages de collection, toutes
+  les 20 cartes examinées et après chaque carte défaussée ; elle reprend là où elle en
+  était (24 h au plus), sans jamais défausser deux fois.
+- **Sessions, listes, réglages, achats suivis, bilans :** enregistrés à chaque
+  changement.
 
-Les options s'écrivent avant ou après les prix, dans n'importe quel ordre :
-`/buyandsell Tour Eiffel 500 800 x2 12h @Paul`. Sans durée, la vente prend la durée
-habituelle du compte (nuit comprise). Pour `@Pseudo`, le nom est comparé à ce que le site
-donne pour le vendeur ; si aucune enchère ne correspond, le journal liste les vendeurs
-vus. Une enchère que vous menez déjà sur la carte reste suivie, quel que soit son vendeur.
-Les derniers nombres sont toujours les prix : `/buy Apollo 11 500` vise « Apollo 11 »
-à 500 au plus. Les modifications comptent dès la passe suivante. `/want` est l'ancien
-nom de `/buy`, encore accepté pour l'instant. Tout autre message reçoit la liste des
-commandes.
+## Réglages communs (`.env`)
 
-## Utilisation
-
-```bash
-python -m wiki_seller --dry-run     # tout simuler : à faire en premier
-python -m wiki_seller               # une passe (attend la fin de la défausse)
-python -m wiki_seller --loop        # en continu
-```
-
-`--debug` enregistre la réponse du site dans `state/debug/` quand une mise est refusée.
-Le journal est dans `state/seller.log`.
-
-### Réglages (`.env`)
+Lus à la création du conteneur : après une modification, `docker compose up -d` (et non
+`restart`). Les réglages « par compte » sont les valeurs de départ des comptes,
+modifiables ensuite par `/set`.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `SESSION_COOKIES` | *(vide)* | Session copiée d'un navigateur (voir « Connexion ») |
-| `SELL_RARITIES` | `L,SR` | Raretés mises en vente (`L`, `UR`, `SR`, `R`, `PC`, `C`) ; vide = toutes |
-| `PRICE_RATIO` | `0.70` | Part du prix moyen utilisée pour la mise de départ |
-| `MARKET_ADJUST` | `true` | Ajuste la mise d'après les enchères en cours de la même carte : sous leur moyenne, + un écart type ; au-dessus, − un écart type ; moins de 2 enchères : inchangée |
-| `PRICE_FLOOR_RATIO` | `0.5` | Plancher de l'ajustement : jamais sous cette part du prix moyen |
-| `AUCTION_DURATION_LABEL` | `1 h` | Durée des enchères (`10 min`, `30 min`, `1 h`, `3 h`, `6 h`, `12 h`) |
-| `NIGHT_DURATIONS` | `1-3=12 h;3-6=6 h` | Durée des ventes selon l'heure de Paris ; vide = jamais |
-| `RUN_INTERVAL` | *(durée des enchères)* | Délai avant la passe suivante (`10 min`, `1 h`, `1h30`… ; 5 min minimum) |
-| `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `3` / `5` | Carte invendue N fois : mise de côté pendant N jours (`state/unsold.json`) |
-| `PRICE_CACHE_HOURS` | `24` | Validité d'un prix moyen en cache (modifiable aussi par `/set cache_prix`) |
-| `DISCARD_BELOW` | `15` | Défausse des cartes valant moins que ce prix moyen ; `0` = désactivée |
-| `DISCARD_TRIGGER` | `150` | Exemplaires dans la collection au-delà desquels la défausse est lancée |
-| `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
-| `SNIPE_LEAD` | `30` | Secondes avant la fin d'une enchère pour surenchérir |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(vide)* | Bot Telegram (voir « Bot Telegram ») |
-| `TELEGRAM_WAIT` | `60` | Minutes d'attente de votre réponse quand la session a expiré |
-| `REPORT_HOURS` | `2` | Bilan Telegram toutes les N heures ; `0` = jamais |
-| `STATE_DIR` | `state` | Dossier des fichiers d'état et des listes de cartes |
-| `BASE_URL` | `https://www.wiki-masters.com` | Adresse du site |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(vide)* | Bot Telegram ; `TELEGRAM_CHAT_ID` est l'administrateur |
+| `TELEGRAM_WAIT` | `60` | Minutes d'attente des cookies quand la session a expiré |
+| `SESSION_COOKIES` | *(vide)* | Session de l'administrateur copiée d'un navigateur, sans passer par le bot |
+| `SELL_RARITIES` | `L,SR` | Par compte (`raretes`) ; vide = toutes |
+| `PRICE_RATIO` | `0.70` | Par compte (`prix`) |
+| `MARKET_ADJUST` / `PRICE_FLOOR_RATIO` | `true` / `0.5` | Par compte (`ajustement`, `plancher`) : sous la moyenne des enchères en cours, + un écart type ; au-dessus, − un écart type |
+| `AUCTION_DURATION_LABEL` | `1h` | Par compte (`duree`) |
+| `NIGHT_DURATIONS` | `1-3=12h;3-6=6h` | Par compte (`nuit`) |
+| `RUN_INTERVAL` | *(durée des ventes)* | Par compte (`intervalle`) ; 5 min minimum |
+| `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `3` / `5` | Par compte (`invendues`, `pause_invendues`) |
+| `DISCARD_BELOW` / `DISCARD_TRIGGER` | `15` / `150` | Par compte (`defausse`, `seuil_defausse`) |
+| `MAX_TOTAL_BIDS` | *(vide)* | Par compte (`budget`) |
+| `SNIPE_LEAD` | `30` | Par compte (`surenchere`) |
+| `REPORT_HOURS` | `2` | Par compte (`bilan`) |
+| `PRICE_CACHE_HOURS` | `24` | Commun (`/set cache_prix`) |
+| `STATE_DIR` / `BASE_URL` | `state` / `https://www.wiki-masters.com` | Dossier des fichiers d'état ; adresse du site |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | *(trouvées seules)* | Session du site, à ne régler qu'en cas de problème |
 | `CPU_LIMIT` / `MEM_LIMIT` | `1` / `512m` | Ressources maximales du conteneur |
 
@@ -333,38 +326,57 @@ Les anciennes options `MAIL`, `PASSWORD`, `HEADLESS`, `CHROMIUM_EXECUTABLE`,
 `ACTIONS_VIA`, `OPEN_PACKS_HOURS`, `PACKS_VERIFY_WAIT`, `NOTIFY_URL` et `API_TRACE`
 n'ont plus d'effet ; le journal le signale au démarrage.
 
-## Docker (serveur)
+## Bot Telegram
+
+1. Dans Telegram, écrivez à **@BotFather** : `/newbot`, choisissez un nom ; il vous
+   donne le jeton du bot (`123456:ABC…`) → `TELEGRAM_BOT_TOKEN` dans `.env`.
+2. Écrivez n'importe quoi à votre bot, puis ouvrez
+   `https://api.telegram.org/bot<JETON>/getUpdates` : le nombre après `"chat":{"id":`
+   est votre identifiant → `TELEGRAM_CHAT_ID` dans `.env`. Relancez le conteneur.
+
+## Fichiers
+
+| Emplacement | Contenu |
+|---|---|
+| `state/users.json` | Liste des comptes |
+| `state/users/<chat_id>/` | Un compte : `session.json`, `settings.json`, `safe_cards.json`, `buy_cards.json`, `sell_cards.json`, `wanted_state.json` (achats suivis), `report.json` (bilans), `discard_progress.json`, `unsold.json`, `debug/` |
+| `state/price_cache.json` | Prix moyens, communs à tous les comptes |
+| `state/global_settings.json` | Réglages communs (`cache_prix`) |
+| `state/telegram.json` · `state/site.json` | État du bot ; clé publique du site |
+| `state/seller.log` | Journal, avec le compte entre crochets sur chaque ligne (`[Paul]`, `[défausse-Paul]`) |
+
+Au premier démarrage d'une version multi-comptes, les fichiers de l'ancienne version
+(dans `state/`, et les anciens `safed_cards.json` / `wanted_cards.json`) passent dans le
+dossier de l'administrateur.
+
+## Ligne de commande
 
 ```bash
-# créer .env (voir .env.example), au moins avec le bot Telegram
-mkdir -p state
-docker compose up -d --build
-docker compose logs -f
+python -m wiki_seller --dry-run     # tout simuler : une passe du compte administrateur
+python -m wiki_seller               # une passe (attend la fin de la défausse)
+python -m wiki_seller --loop        # en continu, tous les comptes (utilisé par le conteneur)
 ```
 
-Le conteneur tourne en `--loop` et redémarre tout seul. Les listes de cartes se gèrent
-ensuite avec le bot (`/safe`, `/buy`, `/sell`…). Le `.env` n'est
-lu qu'à la création du conteneur : après l'avoir modifié, lancez `docker compose up -d`
-(et non `restart`). Session, caches et suivis sont conservés dans `state/`.
+`--debug` enregistre la réponse du site dans `state/users/<chat_id>/debug/` quand une
+mise est refusée. Avec Docker, lancez-les par `docker compose run --rm wiki-seller
+python -m wiki_seller …`, **conteneur arrêté** : une même session utilisée par deux
+processus à la fois peut être annulée.
 
 ## Organisation du code
 
 | Module | Rôle |
 |---|---|
-| `main.py` | Ligne de commande, journal |
-| `scheduler.py` | Passes, boucle, réveils (surenchères, `/update`) |
-| `session.py` | Une tâche à la fois sur la session, connexion par cookies |
-| `auth.py` | Session Supabase : cookies, renouvellement, `state/session.json` |
+| `main.py` | Ligne de commande, journal, une boucle par compte |
+| `accounts.py` / `settings.py` | Comptes (`state/users/`) et leurs réglages |
+| `scheduler.py` | Passes, boucle d'un compte, réveils (surenchères, `/update`) |
+| `session.py` / `auth.py` | Connexion par cookies ; session Supabase et son renouvellement |
 | `site.py` | Client HTTP de l'API du site |
-| `selling.py` | Passe de vente (ventes demandées, puis plan de vente) |
-| `buying.py` | Achats et surenchères |
-| `lists.py` / `commands.py` | Listes de cartes (`state/`) et commandes du bot qui les modifient |
-| `discard.py` | Défausse en arrière-plan |
-| `pricing.py` | Prix moyens et leur cache |
-| `selection.py` | Logique pure : collection, plan de vente, ajustement au marché |
-| `unsold.py` | Cartes invendues mises de côté |
-| `telegram.py` / `report.py` | Bot Telegram et bilans |
-| `state.py` / `config.py` | Fichiers d'état et horloge ; réglages |
+| `selling.py` / `buying.py` | Passe de vente ; achats et surenchères |
+| `discard.py` / `pricing.py` | Défausse en arrière-plan ; prix moyens et leur cache |
+| `lists.py` / `commands.py` | Listes de cartes ; commandes du bot |
+| `selection.py` / `unsold.py` | Logique pure (collection, plan de vente, ajustement) ; invendues mises de côté |
+| `telegram.py` / `report.py` | Bot Telegram ; bilans et historique |
+| `state.py` / `config.py` | Fichiers d'état et horloge ; réglages du `.env` |
 
 ## Tests
 
@@ -373,6 +385,6 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Les tests tournent en parallèle (`pytest-xdist`). `tests/test_end_to_end.py` fait
-tourner le script contre une imitation locale du site, session Supabase comprise
-(`tests/fake_site.py`), et du bot Telegram (`tests/fake_telegram.py`).
+Les tests tournent en parallèle (`pytest-xdist`), contre une imitation locale du site,
+session Supabase comprise (`tests/fake_site.py`), et du bot Telegram
+(`tests/fake_telegram.py`).
