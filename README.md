@@ -205,6 +205,11 @@ demandes de session ne s'attendent pas entre eux. Un compte ajouté démarre dan
 30 s, un compte retiré s'arrête à son réveil suivant. Dans le journal, chaque ligne porte
 le nom du compte entre crochets (`[Paul]`, `[défausse-Paul]`).
 
+Deux comptes du bot ne misent jamais l'un contre l'autre : une enchère suivie ou menée
+par un compte est laissée aux autres. Si la seule enchère à votre prix est prise ainsi,
+le bot vous prévient une fois et attend une autre enchère. Acheter une carte mise en
+vente par un autre compte du bot reste possible.
+
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant, à vous
 transmettre ; rien d'autre ne lui est répondu. Chaque compte a ses fichiers dans
 `state/users/<chat_id>/` (session, listes, suivis, bilans) ; le cache des prix, l'état du

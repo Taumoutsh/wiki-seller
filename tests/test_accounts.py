@@ -139,3 +139,37 @@ def test_cookies_sent_without_request_are_tried(tmp_path):
     assert fake.sent[0].startswith("❌") and fake.sent[1] == "✅ Session enregistrée. Envoyez /resume pour démarrer."
     assert len(fake.deleted) == 2 and paul.session_file.exists()
     assert json.loads((paul.state_dir / "safe_cards.json").read_text()) == []  # liste vide au départ
+
+
+def test_bot_accounts_never_bid_against_each_other(tmp_path):
+    from wiki_seller.lists import set_buy
+    from wiki_seller.scheduler import run_once
+
+    from .fake_site import FakeWikiMasters
+    from .test_end_to_end import API_AVERAGES, COLLECTION, eiffel_auctions
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site, \
+            FakeTelegram() as fake:
+        base = make_config(tmp_path, site.url, [], telegram_chat_id=CHAT_ID, telegram_token=TOKEN,
+                           telegram_api_url=fake.url)
+        accounts.migrate(base)
+        accounts.add(base, "555", "Paul")
+        paul = accounts.account_config(base, "555")
+        paul.wanted_state_file.write_text(json.dumps({"my_id": "paul-id", "cards": {
+            "gustave eiffel": {"name": "Gustave Eiffel", "auction_id": "e2", "status": "bidding"}}}))
+        admin = accounts.account_config(base, CHAT_ID)
+        set_buy(admin, "Gustave Eiffel", 300)
+        run_once(admin)
+        assert site.bids == [("e1", 200)]  # e2, moins chère, est suivie par Paul
+
+        # Paul mène maintenant e1 : plus aucune enchère pour l'administrateur, prévenu une fois.
+        site.auctions["e1"].update(current_bid=220, current_bidder_id="paul-id")
+        state = json.loads(admin.wanted_state_file.read_text())
+        state["cards"]["gustave eiffel"].pop("auction_id")
+        state["cards"]["gustave eiffel"]["status"] = "searching"
+        admin.wanted_state_file.write_text(json.dumps(state))
+        run_once(admin)
+        run_once(admin)
+    assert site.bids == [("e1", 200)]
+    blocked = [t for t in fake.sent if "déjà suivie par un autre utilisateur du bot" in t]
+    assert len(blocked) == 1 and fake.chats[fake.sent.index(blocked[0])] == CHAT_ID

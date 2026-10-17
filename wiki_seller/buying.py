@@ -7,6 +7,7 @@ Une fois tous les exemplaires obtenus, la carte quitte la liste d'achat et devie
 protégée, ou part dans les ventes au prix demandé (/buyandsell)."""
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -55,15 +56,17 @@ def min_next_bid(auction: dict) -> int:
 
 
 def choose_auction(auctions: list[dict], card: BuyCard, my_id: str | None, now: datetime,
-                   my_sales: set[str] = frozenset(), exclude: set[str] = frozenset()) -> dict | None:
-    """Enchère active de cette carte, pas à nous, dans la limite : la moins chère, puis
-    celle qui finit le plus tôt."""
+                   my_sales: set[str] = frozenset(), exclude: set[str] = frozenset(),
+                   rivals: set[str] = frozenset()) -> dict | None:
+    """Enchère active de cette carte, pas à nous, dans la limite, que ne mène aucun autre
+    compte du bot (rivals) : la moins chère, puis celle qui finit le plus tôt."""
     candidates = []
     for auction in auctions:
         end = parse_time(auction.get("end_at"))
         if (normalize_name(auction_title(auction)) != card.key or auction.get("status", "active") != "active"
                 or (my_id and auction.get("seller_id") == my_id) or auction.get("id") in my_sales
                 or auction.get("id") in exclude
+                or (auction.get("current_bidder_id") and auction.get("current_bidder_id") in rivals)
                 or not end or end - now < TOO_LATE or min_next_bid(auction) > card.max_price):
             continue
         candidates.append((min_next_bid(auction), end, auction))
@@ -91,6 +94,49 @@ def my_user_id(mine: dict, known: str | None) -> str | None:
             if isinstance(auction, dict) and isinstance(auction.get(field), str):
                 return auction[field]
     return None
+
+
+# ─────────────────────────── Plusieurs comptes ───────────────────────────
+# Deux comptes du bot ne misent jamais l'un contre l'autre : une enchère suivie par un
+# compte (enregistrée dans son wanted_state.json, ou choisie pendant sa passe en cours)
+# est laissée aux autres, de même que celles qu'un autre compte du bot mène.
+
+_CLAIMS: dict[str, str] = {}  # enchère → dossier du compte qui l'a choisie (passe en cours)
+_CLAIMS_LOCK = threading.Lock()
+
+
+def fellow_accounts(config: Config) -> tuple[set[str], set[str]]:
+    """(enchères suivies par les autres comptes du bot, leurs identifiants sur le site)."""
+    if config.shared_dir is None:
+        return set(), set()
+    me = str(config.state_dir)
+    users = read_json(config.shared_state_dir / "users.json", {}).get("users") or {}
+    auctions, ids = set(), set()
+    for chat_id in users:
+        folder = config.shared_state_dir / "users" / chat_id
+        if str(folder) == me:
+            continue
+        data = read_json(folder / "wanted_state.json", {})
+        if data.get("my_id"):
+            ids.add(data["my_id"])
+        auctions |= {e["auction_id"] for e in (data.get("cards") or {}).values()
+                     if isinstance(e, dict) and e.get("auction_id") and e.get("status") == "bidding"}
+    with _CLAIMS_LOCK:
+        auctions |= {a for a, owner in _CLAIMS.items() if owner != me}
+    return auctions, ids
+
+
+def claim(config: Config, auction_id: str) -> bool:
+    """Réserve l'enchère pour ce compte ; False si un autre compte l'a choisie avant."""
+    with _CLAIMS_LOCK:
+        return _CLAIMS.setdefault(auction_id, str(config.state_dir)) == str(config.state_dir)
+
+
+def release_claims(config: Config) -> None:
+    """Fin de passe : le wanted_state.json enregistré prend le relais."""
+    with _CLAIMS_LOCK:
+        for auction_id in [a for a, owner in _CLAIMS.items() if owner == str(config.state_dir)]:
+            del _CLAIMS[auction_id]
 
 
 class WantedState:
@@ -150,6 +196,8 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                             if state.my_id and a.get("current_bidder_id") == state.my_id
                             and a.get("status") == "active")
     my_sales = {a.get("id") for a in mine.get("selling") or [] if isinstance(a, dict)}
+    taken, rivals = fellow_accounts(config)
+    buyer.rivals = rivals
 
     bidding_ids = {a.get("id") for a in bidding}
     try:
@@ -191,15 +239,23 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                     if state.my_id and auction.get("winner_id"):
                         buyer.lost(card, entry, auction, force=True)
                 auction = None
+            abandoned: set[str] = set()
+            if auction is not None and not buyer.leading(auction) and (
+                    auction["id"] in taken or auction.get("current_bidder_id") in rivals):
+                log.info("Achat : « %s » — enchère suivie ou menée par un autre compte du bot ; elle lui est "
+                         "laissée.", card.name)
+                abandoned.add(auction["id"])
+                auction = None
             if auction is None:
                 _forget(entry)
+            elif not snipe_only:
+                claim(config, auction["id"])
 
             if snipe_only:
                 if auction is not None:
                     buyer.watch_until_end(card, entry, auction)
                 continue
 
-            abandoned: set[str] = set()
             if auction is not None and not buyer.leading(auction) \
                     and (auction["id"] in bidding_ids or entry.get("placed") == auction["id"]):
                 # Déjà misé et dépassé : pas de surenchère maintenant, seulement à la fin
@@ -218,15 +274,21 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                 auction = None
 
             if auction is None:
-                auction = choose_auction(site.search_auctions(card.name), card, state.my_id,
-                                         buyer.now(), my_sales, abandoned)
+                found = site.search_auctions(card.name)
+                auction = choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned | taken, rivals)
+                if auction is not None and not claim(config, auction["id"]):
+                    auction = None  # choisie au même instant par un autre compte
                 if auction is None:
                     log.info("Achat : aucune enchère de « %s » à %d ou moins.", card.name, card.max_price)
+                    if choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned) is not None:
+                        buyer.blocked_by_fellow(card, entry)
                     continue
+            entry.pop("blocked_notified", None)
             entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
             buyer.bid_if_needed(card, entry, auction)
     finally:
         state.save()
+        release_claims(config)
 
 
 def _forget(entry: dict) -> None:
@@ -240,6 +302,7 @@ class _Buyer:
     def __init__(self, site, config: Config, state: WantedState, dry_run: bool, now):
         self.site, self.config, self.state, self.dry_run, self.now = site, config, state, dry_run, now
         self.budget_used = 0
+        self.rivals: set[str] = set()  # identifiants des autres comptes du bot
 
     def count_wins(self, card: BuyCard, entry: dict, wins: list[dict]) -> bool:
         """Note les enchères gagnées ; True si le nombre d'exemplaires voulu est atteint."""
@@ -279,6 +342,15 @@ class _Buyer:
         del self.state.data["cards"][card.key]  # redemandée plus tard, elle repartira de zéro
         log.info("Achat : %s", message)
         notify(self.config, message)
+
+    def blocked_by_fellow(self, card: BuyCard, entry: dict) -> None:
+        """Seules enchères possibles déjà suivies par un autre compte du bot : prévenu une fois."""
+        log.info("Achat : « %s » — enchère(s) à votre prix suivie(s) par un autre compte du bot ; "
+                 "le script attend une autre enchère.", card.name)
+        if not entry.get("blocked_notified") and not self.dry_run:
+            notify(self.config, f"⚠️ Achat de « {card.name} » : l'enchère à votre prix est déjà suivie par un "
+                                "autre utilisateur du bot. Le script attend une autre enchère.")
+        entry["blocked_notified"] = True
 
     def lost(self, card: BuyCard, entry: dict, auction: dict, force: bool = False) -> None:
         """Enchère perdue (remportée par un autre, ou montée au-dessus de votre max) :
@@ -405,6 +477,11 @@ class _Buyer:
                 return
             end = parse_time(auction.get("end_at")) or end
             entry["end_at"] = auction.get("end_at")
+            if auction.get("current_bidder_id") in self.rivals:
+                log.info("Achat : « %s » — un autre compte du bot mène cette enchère ; elle lui est laissée.",
+                         card.name)
+                _forget(entry)
+                return
             remaining = end - self.now()
             if not self.leading(auction) and remaining <= lead:
                 self.fast_bid(card, entry, auction)
