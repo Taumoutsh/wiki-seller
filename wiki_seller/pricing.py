@@ -17,7 +17,7 @@ REQUEST_PAUSE = 0.3  # s entre deux lectures de prix
 
 
 def cache_file(config: Config):
-    return config.state_dir / "price_cache.json"
+    return config.shared_state_dir / "price_cache.json"  # un prix est le même pour tous les comptes
 
 
 def load_price_cache(config: Config) -> dict:

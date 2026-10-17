@@ -110,16 +110,18 @@ def test_sleep_wakes_up_for_a_report_request(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(main, "report_now", lambda config, debug, kinds: calls.append(kinds))
     monkeypatch.setattr(main, "REPORT_GUARD_SECONDS", 0.5)
-    main.request("report")
-    main.request("history")
+    monkeypatch.setattr(main, "_RUNNING", {""})
+    assert not main.request("autre", "report")  # compte qui ne tourne pas
+    assert main.request("", "report") and main.request("", "history")
     main.sleep_until(main.now_utc() + timedelta(seconds=1.5), None, False)
-    assert calls == [{"report", "history"}] and not main.REPORT_REQUEST.is_set()
+    requests = main._requests("")
+    assert calls == [{"report", "history"}] and not requests.event.is_set()
     calls[:] = [1]
     # Juste avant un réveil : le bilan attend la fin du réveil.
-    main.REPORT_REQUEST.set()
+    main.request("", "report")
     main.sleep_until(main.now_utc() + timedelta(seconds=0.3), None, False)
-    assert calls == [1] and main.REPORT_REQUEST.is_set()
-    main.REPORT_REQUEST.clear()
+    assert calls == [1] and requests.event.is_set()
+    requests.take()
 
 
 def test_history_text_shows_what_the_site_returns():

@@ -5,12 +5,13 @@ import logging
 import sys
 from logging.handlers import RotatingFileHandler
 
+from . import accounts
 from .config import OBSOLETE_SETTINGS, Config, ConfigError, load_config, obsolete_settings
 from .discard import DISCARDER
 from .lists import ListError, buy_cards, legacy_files, safe_titles
-from .scheduler import loop, run_once
+from .scheduler import loop, request, run_once
 from .site import SessionExpired
-from .telegram import notify
+from .telegram import CommandListener, notify, telegram_bot
 
 log = logging.getLogger("wiki_seller")
 
@@ -69,15 +70,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        config = load_config()
+        base = load_config()
     except ConfigError as exc:
         print(f"Configuration invalide : {exc}", file=sys.stderr)
         return 2
-    setup_logging(config)
+    setup_logging(base)
+    accounts.migrate(base)
+    config = accounts.account_config(base, accounts.admin_id(base))  # compte de l'administrateur
     log_startup(config, args.dry_run)
 
     try:
         if args.loop:
+            bot = telegram_bot(base)
+            if bot is not None:  # une seule écoute pour toutes les conversations
+                CommandListener(bot, request, base).start()
             loop(config, args.dry_run, args.debug)
         else:
             run_once(config, dry_run=args.dry_run, debug=args.debug)

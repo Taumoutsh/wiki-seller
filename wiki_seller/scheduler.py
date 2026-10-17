@@ -24,7 +24,7 @@ from .selling import RunResult, sell
 from .session import open_site
 from .site import SessionExpired, WikiMasters
 from .state import now_utc, read_json
-from .telegram import CommandListener, telegram_bot
+from .telegram import telegram_bot
 
 log = logging.getLogger(__name__)
 
@@ -33,16 +33,41 @@ RETRY_AFTER_ERROR = timedelta(minutes=10)
 PASS_DURATION_GUARD = timedelta(minutes=10)  # durée maximale d'une passe, pour ne pas manquer un réveil
 REPORT_GUARD_SECONDS = 90  # pas de bilan demandé juste avant un réveil
 
-# Demandes du bot Telegram (/update : "report", /ventes : "history") : réveillent la boucle.
-REPORT_REQUEST = threading.Event()
-_PENDING: set[str] = set()
-_PENDING_LOCK = threading.Lock()
+class _Requests:
+    """Demandes du bot pour un compte (/update : "report", /ventes : "history") : elles
+    réveillent la boucle de ce compte."""
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.pending: set[str] = set()
+        self.lock = threading.Lock()
+
+    def take(self) -> set[str]:
+        with self.lock:
+            self.event.clear()
+            kinds, self.pending = self.pending or {"report"}, set()
+            return kinds
 
 
-def request(kind: str) -> None:
-    with _PENDING_LOCK:
-        _PENDING.add(kind)
-    REPORT_REQUEST.set()
+_REQUESTS: dict[str, _Requests] = {}
+_RUNNING: set[str] = set()  # comptes dont la boucle tourne (conversation Telegram)
+_LOCK = threading.Lock()
+
+
+def _requests(chat: str) -> _Requests:
+    with _LOCK:
+        return _REQUESTS.setdefault(chat, _Requests())
+
+
+def request(chat: str, kind: str) -> bool:
+    """Bilan ou historique demandé par un compte ; False si sa boucle ne tourne pas."""
+    if chat not in _RUNNING:
+        return False
+    requests = _requests(chat)
+    with requests.lock:
+        requests.pending.add(kind)
+        requests.event.set()
+    return True
 
 
 def run_once(config: Config, dry_run: bool = False, debug: bool = False) -> RunResult:
@@ -133,6 +158,7 @@ def report_now(config: Config, debug: bool, kinds: set[str] = frozenset({"report
 def sleep_until(wake: datetime, config: Config, debug: bool) -> None:
     """Attend le prochain réveil ; un /update reçu entre-temps envoie le bilan aussitôt,
     sauf juste avant le réveil (une surenchère ne doit pas attendre) : il part après."""
+    requests = _requests(config.telegram_chat_id if config else "")
     while True:
         remaining = (wake - now_utc()).total_seconds()
         if remaining <= 0:
@@ -140,12 +166,8 @@ def sleep_until(wake: datetime, config: Config, debug: bool) -> None:
         if remaining <= REPORT_GUARD_SECONDS:
             time.sleep(remaining)
             return
-        if REPORT_REQUEST.wait(remaining - REPORT_GUARD_SECONDS):
-            REPORT_REQUEST.clear()
-            with _PENDING_LOCK:
-                kinds = set(_PENDING) or {"report"}
-                _PENDING.clear()
-            report_now(config, debug, kinds)
+        if requests.event.wait(remaining - REPORT_GUARD_SECONDS):
+            report_now(config, debug, requests.take())
 
 
 def next_run_at(result: RunResult, config: Config, now: datetime) -> datetime:
@@ -176,11 +198,11 @@ def next_wake(next_pass: datetime, config: Config, now: datetime) -> tuple[datet
 
 
 def loop(config: Config, dry_run: bool, debug: bool) -> None:
+    """Boucle d'un compte : passes, réveils de surenchère, demandes du bot."""
     next_pass = now_utc()
     snipe = False
     bot = telegram_bot(config)
-    if bot is not None:
-        CommandListener(bot, request, config).start()
+    _RUNNING.add(config.telegram_chat_id)
     list_error = None
     while True:
         try:

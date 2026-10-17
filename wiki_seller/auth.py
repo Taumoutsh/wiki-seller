@@ -105,8 +105,10 @@ def find_anon_key(base_url: str, project: str, fetch) -> str | None:
 class SessionStore:
     """Session d'un compte (state/session.json), partagée par les fils du compte."""
 
-    def __init__(self, path: Path, base_url: str, supabase_url: str = "", anon_key: str = ""):
+    def __init__(self, path: Path, base_url: str, supabase_url: str = "", anon_key: str = "",
+                 site_cache: Path | None = None):
         self.path, self.base_url = path, base_url
+        self.site_cache = site_cache or path.with_name("site.json")  # clé publique du site, commune
         self._supabase_url, self._anon_key = supabase_url.rstrip("/"), anon_key
         self._lock = threading.RLock()
         data = read_json(path, {})
@@ -185,7 +187,7 @@ class SessionStore:
         gardée dans state/site.json)."""
         if self._anon_key:
             return self._anon_key
-        cache = self.path.with_name("site.json")
+        cache = self.site_cache
         cached = read_json(cache, {}).get("anon_key")
         if cached and jwt_claims(cached).get("ref") in (self.project, None):
             self._anon_key = cached

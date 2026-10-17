@@ -1,6 +1,8 @@
-"""Commandes du bot Telegram qui modifient les listes de cartes (state/) : réponse à
-envoyer dans la conversation. Les passes relisent les listes à chaque réveil."""
+"""Commandes du bot Telegram : listes de cartes d'un compte (relues par les passes à
+chaque réveil) et administration des comptes. Chaque fonction renvoie la réponse à
+envoyer dans la conversation."""
 
+from . import accounts
 from .lists import (
     ListError,
     add_safe,
@@ -27,6 +29,14 @@ HELP_TEXT = ("Commandes :\n"
              "/buy <carte> <prix max> [x2] · /unbuy <carte> : acheter une carte, protégée une fois obtenue\n"
              "/sell <carte> <prix> [x2] · /unsell <carte> : vendre une carte à ce prix exact, en priorité\n"
              "/buyandsell <carte> <prix max> <prix de vente> [x2] : acheter une carte puis la revendre")
+ADMIN_HELP = ("\nAdministration :\n"
+              "/users : comptes du bot\n"
+              "/adduser <chat_id> <nom> : ouvrir l'accès à une conversation\n"
+              "/removeuser <chat_id> : retirer un compte (ses fichiers sont gardés)")
+ADMIN_COMMANDS = ("/users", "/adduser", "/removeuser")
+WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouvert.\n"
+                "Pour commencer, envoyez ici les cookies de votre session (voir le favori « cookies » "
+                "que l'administrateur vous a transmis).\n\n")
 LIST_COMMANDS = ("/list", "/safe", "/unsafe", "/buy", "/want", "/unbuy", "/sell", "/unsell", "/buyandsell")
 
 BUY_USAGE = "Usage : /buy <carte> <prix max> [x2], ex. /buy Apollo 11 500 ou /buy Victor Hugo 120 x2"
@@ -36,6 +46,53 @@ BUY_AND_SELL_USAGE = ("Usage : /buyandsell <carte> <prix max> <prix de vente> [x
 # À supprimer avec /want (ancien nom de /buy) à une prochaine mise à jour.
 WANT_NOTICE = "\n(/want est l'ancien nom de /buy : utilisez /buy, /want disparaîtra bientôt.)"
 MAX_MESSAGE = 3800  # Telegram refuse les messages de plus de 4096 caractères
+
+
+def help_text(admin: bool = False) -> str:
+    return HELP_TEXT + (ADMIN_HELP if admin else "")
+
+
+def run_admin_command(base, command: str, args: str, bot=None) -> str:
+    """/users, /adduser <chat_id> <nom>, /removeuser <chat_id> (administrateur seulement)."""
+    words = args.split()
+    if command == "/users":
+        return users_text(base)
+    if command == "/adduser":
+        if not words:
+            return "Usage : /adduser <chat_id> <nom>, ex. /adduser 123456789 Paul"
+        chat_id, name = words[0], " ".join(words[1:])
+        try:
+            new = accounts.add(base, chat_id, name)
+        except ValueError as exc:
+            return f"❌ {exc}"
+        if new and bot is not None:
+            bot.for_chat(chat_id).send(WELCOME_TEXT.format(name=name or "") + HELP_TEXT)
+        return (f"✅ Compte {name or chat_id} ({chat_id}) ajouté : un message de bienvenue lui a été envoyé."
+                if new else f"Le compte {chat_id} existait déjà" + (f" ; nom : {name}." if name else "."))
+    if command == "/removeuser":
+        if not words:
+            return "Usage : /removeuser <chat_id>"
+        if words[0] == accounts.admin_id(base):
+            return "❌ Le compte de l'administrateur ne peut pas être retiré."
+        if not accounts.remove(base, words[0]):
+            return f"Aucun compte {words[0]}."
+        return f"Compte {words[0]} retiré (ses fichiers restent dans state/users/{words[0]}/)."
+    return help_text(admin=True)
+
+
+def users_text(base) -> str:
+    lines = [f"👥 Comptes ({len(accounts.accounts(base))}) :"]
+    for account in accounts.accounts(base):
+        config = accounts.account_config(base, account.chat_id)
+        try:
+            counts = f"{len(safe_titles(config))} protégée(s), {len(buy_cards(config))} achat(s), " \
+                     f"{len(sell_cards(config))} vente(s)"
+        except ListError:
+            counts = "aucune liste"
+        session = "session ✅" if config.session_file.exists() else "pas de session"
+        admin = " (admin)" if account.chat_id == accounts.admin_id(base) else ""
+        lines.append(f"• {account.name or '—'}{admin} · {account.chat_id} · {session} · {counts}")
+    return "\n".join(lines)
 
 
 def run_list_command(config, command: str, args: str) -> str:

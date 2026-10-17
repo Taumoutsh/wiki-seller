@@ -13,6 +13,7 @@ class FakeTelegram:
     def __init__(self):
         self.updates = []  # messages en attente, comme les renvoie getUpdates
         self.sent = []  # textes envoyés par le bot
+        self.chats = []  # conversation de chacun
         self.parse_modes = []  # mise en forme demandée pour chacun (None ou "HTML")
         self.reject_html = False  # refuser la mise en forme, comme une balise mal formée
         self.deleted = []  # identifiants des messages supprimés
@@ -50,6 +51,7 @@ class FakeTelegram:
                     if fake.reject_html and body.get("parse_mode"):
                         return self._send({"ok": False, "description": "Bad Request: can't parse entities"}, 400)
                     fake.sent.append(body["text"])
+                    fake.chats.append(str(body["chat_id"]))
                     fake.parse_modes.append(body.get("parse_mode"))
                     return self._send({"ok": True, "result": {"message_id": 0}})
                 if method == "deleteMessage":

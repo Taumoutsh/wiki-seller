@@ -131,6 +131,9 @@ class Config:
     # code du site si vides.
     supabase_url: str = ""
     supabase_anon_key: str = ""
+    # Plusieurs comptes : state_dir est le dossier du compte (state/users/<chat_id>),
+    # shared_dir celui des fichiers communs (cache des prix, bot Telegram, journal).
+    shared_dir: Path | None = None
     # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
     run_interval: timedelta | None = None
     # Achats : ancienne liste (reprise dans state/, à retirer), budget total optionnel,
@@ -172,6 +175,10 @@ class Config:
     @property
     def pass_interval(self) -> timedelta:
         return self.run_interval or parse_duration(self.auction_duration_label) or DEFAULT_RUN_INTERVAL
+
+    @property
+    def shared_state_dir(self) -> Path:
+        return self.shared_dir or self.state_dir
 
     @property
     def session_file(self) -> Path:

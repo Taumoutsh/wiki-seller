@@ -173,8 +173,25 @@ Telegram.
    `https://api.telegram.org/bot<JETON>/getUpdates` : le nombre après `"chat":{"id":`
    est votre identifiant → `TELEGRAM_CHAT_ID` dans `.env`. Relancez le conteneur.
 
-Seuls les messages de `TELEGRAM_CHAT_ID` sont lus. Les cookies transitent par les
-serveurs de Telegram : gardez le bot pour vous seul.
+`TELEGRAM_CHAT_ID` est l'administrateur. Les cookies transitent par les serveurs de
+Telegram : n'ouvrez le bot qu'à des personnes de confiance.
+
+### Plusieurs comptes
+
+Chaque compte WikiMasters correspond à une conversation Telegram (son chat_id), ajoutée
+à la main par l'administrateur :
+
+| Commande (administrateur) | Effet |
+|---|---|
+| `/adduser <chat_id> <nom>` | Ouvre l'accès ; la personne reçoit un message de bienvenue |
+| `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
+| `/users` | Liste des comptes : session, nombre de cartes protégées, à acheter et à vendre |
+
+Une conversation inconnue qui écrit au bot reçoit seulement son identifiant, à vous
+transmettre ; rien d'autre ne lui est répondu. Chaque compte a ses fichiers dans
+`state/users/<chat_id>/` (session, listes, suivis, bilans) ; le cache des prix, l'état du
+bot et le journal sont communs, dans `state/`. Au premier démarrage, les fichiers de
+l'ancienne version passent dans le dossier de l'administrateur.
 
 **Session expirée :** le bot vous envoie le lien du site et la marche à suivre ; vous
 lui répondez avec la ligne copiée par le favori. Il **supprime aussitôt votre message**,

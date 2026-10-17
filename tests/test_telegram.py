@@ -47,7 +47,7 @@ def test_refused_session_is_reported_and_the_bot_keeps_waiting(tmp_path):
     with FakeTelegram() as fake:
         fake.say(COOKIES)  # envoyé avant la demande : ignoré
         telegram = bot(tmp_path, fake)
-        telegram.state_file.write_text('{"offset": 1002, "asked_at": "2999-01-01T00:00:00+00:00"}')
+        telegram.state_file.write_text('{"offset": 1002, "asked": {"42": "2999-01-01T00:00:00+00:00"}}')
         fake.say(COOKIES)
         fake.say(COOKIES)
         assert telegram.request_session("https://site", lambda c: next(answers), timedelta(seconds=10))
@@ -77,7 +77,7 @@ def test_update_command_asks_for_a_report(tmp_path):
 
     requested = []
     with FakeTelegram() as fake:
-        listener = CommandListener(bot(tmp_path, fake), requested.append).start()
+        listener = CommandListener(bot(tmp_path, fake), lambda chat, kind: requested.append(kind)).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())  # écoute prête
             fake.say("/update")
@@ -103,7 +103,7 @@ def test_session_reply_reaches_the_request_while_commands_are_listened(tmp_path)
     tried = []
     with FakeTelegram() as fake:
         telegram = bot(tmp_path, fake)
-        listener = CommandListener(telegram, lambda kind: None).start()
+        listener = CommandListener(telegram, lambda chat, kind: None).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())
 
@@ -126,11 +126,15 @@ def test_list_commands_edit_the_lists(tmp_path):
 
     from .test_end_to_end import make_config
 
-    config = make_config(tmp_path, "http://127.0.0.1:1", ["Tour Eiffel"], wanted=[])
+    from wiki_seller import accounts
+
+    base = make_config(tmp_path, "http://127.0.0.1:1", ["Tour Eiffel"], wanted=[], telegram_chat_id=CHAT_ID)
+    accounts.migrate(base)
+    config = accounts.account_config(base, CHAT_ID)
     commands = ["/safe Victor Hugo", "/want Gustave Eiffel 300 x2", "/buy Gustave Eiffel", "/sell Tour Eiffel 800",
                 "/buyandsell Apollo 11 500 900", "/unsell Pomme", "/unsafe Victor Hugo", "/list"]
     with FakeTelegram() as fake:
-        listener = CommandListener(bot(tmp_path, fake), lambda kind: None, config).start()
+        listener = CommandListener(bot(tmp_path, fake), lambda chat, kind: None, base).start()
         try:
             assert wait_for(lambda: (tmp_path / "telegram.json").exists())
             for n, command in enumerate(commands, 1):

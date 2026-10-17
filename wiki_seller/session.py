@@ -77,7 +77,8 @@ def session_store(config: Config) -> SessionStore:
     with _STORES_LOCK:
         store = _STORES.get(path)
         if store is None:
-            store = _STORES[path] = SessionStore(path, config.base_url, config.supabase_url, config.supabase_anon_key)
+            store = _STORES[path] = SessionStore(path, config.base_url, config.supabase_url, config.supabase_anon_key,
+                                                 config.shared_state_dir / "site.json")
         return store
 
 
