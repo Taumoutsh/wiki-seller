@@ -2,6 +2,7 @@
 state/price_cache.json (PRICE_CACHE_HOURS), sinon l'API du site, carte par carte."""
 
 import logging
+import threading
 import time
 
 from .config import Config
@@ -14,6 +15,7 @@ SAVE_EVERY = 50  # prix lus entre deux écritures du cache
 RETRY_PAUSE = 30  # s de pause après un refus passager de l'API des prix
 FAILURES_BEFORE_GIVING_UP = 5  # refus passagers de suite avant d'abandonner l'API des prix
 REQUEST_PAUSE = 0.3  # s entre deux lectures de prix
+_CACHE_LOCK = threading.Lock()
 
 
 def cache_file(config: Config):
@@ -96,7 +98,13 @@ class PriceReader:
                 f"{retries} nouvel(s) essai(s) après refus du site")
 
     def save(self) -> None:
-        write_json(cache_file(self.config), self.cache)
+        """Fusionne avec le fichier : plusieurs comptes lisent des prix en même temps."""
+        with _CACHE_LOCK:
+            merged = read_json(cache_file(self.config), {})
+            for key, entry in self.cache.items():
+                if not isinstance(merged.get(key), dict) or entry.get("at", "") >= merged[key].get("at", ""):
+                    merged[key] = entry
+            write_json(cache_file(self.config), merged)
 
 
 def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda: False):

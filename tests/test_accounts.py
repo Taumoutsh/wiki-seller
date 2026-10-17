@@ -1,6 +1,7 @@
 import json
 
 from wiki_seller import accounts
+from wiki_seller.commands import run_settings_command
 
 from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
 from .test_end_to_end import make_config
@@ -82,3 +83,59 @@ def test_bot_serves_each_conversation(tmp_path):
     assert "Votre identifiant Telegram : 555" in sent[8][1]  # retiré : de nouveau inconnu
     assert safe_titles(accounts.account_config(base, "555")) == ["Pomme"]
     assert json.loads((tmp_path / "state" / "users.json").read_text())["users"].keys() == {CHAT_ID}
+
+
+def test_accounts_run_in_parallel_and_stop_when_removed(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    import wiki_seller.main as main
+    import wiki_seller.scheduler as scheduler
+
+    base = base_config(tmp_path)
+    accounts.migrate(base)
+    accounts.add(base, "555", "Paul")
+    for chat in (CHAT_ID, "555"):  # comptes actifs, sans défausse
+        run_settings_command(base, chat, "/resume", "")
+    running, overlap = set(), []
+
+    def fake_pass(config, dry_run, debug):
+        running.add(config.account_name)
+        overlap.append(len(running))
+        time.sleep(0.5)
+        running.discard(config.account_name)
+        return scheduler.RunResult(0, None, False, None)
+
+    monkeypatch.setattr(scheduler, "run_once", fake_pass)
+    monkeypatch.setattr(scheduler, "next_run_at", lambda result, config, now: now + scheduler.timedelta(seconds=1))
+    monkeypatch.setattr(main, "SUPERVISE_EVERY", 0.2)
+    threading.Thread(target=main.run_accounts, args=(base, False, False), daemon=True).start()
+    assert wait_for(lambda: 2 in overlap)  # les deux comptes passent en même temps
+    assert scheduler._RUNNING >= {CHAT_ID, "555"}
+    accounts.remove(base, "555")
+    assert wait_for(lambda: "555" not in scheduler._RUNNING)
+
+
+def test_cookies_sent_without_request_are_tried(tmp_path):
+    from wiki_seller.telegram import CommandListener
+
+    from .fake_site import FakeWikiMasters
+
+    with FakeWikiMasters([], {}) as site, FakeTelegram() as fake:
+        base = make_config(tmp_path, site.url, [], telegram_chat_id=CHAT_ID, telegram_token=TOKEN,
+                           telegram_api_url=fake.url, session_cookies="")
+        accounts.migrate(base)
+        accounts.add(base, "555", "Paul")
+        listener = CommandListener(bot(tmp_path, fake), lambda chat, kind: False, base).start()
+        try:
+            assert wait_for(lambda: (tmp_path / "telegram.json").exists())
+            fake.say("sb-fakeproj-auth-token.0=base64-abc", chat_id="555")  # illisible : refusée
+            assert wait_for(lambda: len(fake.sent) == 1)
+            fake.say(site.session_cookies(), chat_id="555")
+            assert wait_for(lambda: len(fake.sent) == 2)
+        finally:
+            listener.stop()
+    paul = accounts.account_config(base, "555")
+    assert fake.sent[0].startswith("❌") and fake.sent[1] == "✅ Session enregistrée. Envoyez /resume pour démarrer."
+    assert len(fake.deleted) == 2 and paul.session_file.exists()
+    assert json.loads((paul.state_dir / "safe_cards.json").read_text()) == []  # liste vide au départ

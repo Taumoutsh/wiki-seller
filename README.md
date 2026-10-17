@@ -200,6 +200,11 @@ sans vente automatique (`raretes aucune`) ni défausse : la personne envoie ses 
 (sans attendre de demande), vérifie `/settings`, puis `/resume`. Les ventes demandées
 (`/sell`) partent même avec `raretes aucune`.
 
+Les comptes tournent en parallèle, chacun dans son fil : passes, surenchères, défausse et
+demandes de session ne s'attendent pas entre eux. Un compte ajouté démarre dans les
+30 s, un compte retiré s'arrête à son réveil suivant. Dans le journal, chaque ligne porte
+le nom du compte entre crochets (`[Paul]`, `[défausse-Paul]`).
+
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant, à vous
 transmettre ; rien d'autre ne lui est répondu. Chaque compte a ses fichiers dans
 `state/users/<chat_id>/` (session, listes, suivis, bilans) ; le cache des prix, l'état du

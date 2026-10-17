@@ -68,7 +68,10 @@ def add(base: Config, chat_id: str, name: str) -> bool:
         write_json(_file(base), data)
     account_dir(base, chat_id).mkdir(parents=True, exist_ok=True)
     if new:
-        settings.init_new_account(account_config(base, chat_id))  # en pause, ni vente ni défausse
+        config = account_config(base, chat_id)
+        settings.init_new_account(config)  # en pause, ni vente automatique ni défausse
+        if not (config.state_dir / "safe_cards.json").exists():  # aucune carte protégée au départ
+            write_json(config.state_dir / "safe_cards.json", [])
     return new
 
 
@@ -92,8 +95,10 @@ def account_config(base: Config, chat_id: str) -> Config:
     sa conversation. Les anciens fichiers de listes ne concernent que l'administrateur."""
     chat_id = str(chat_id)
     folder = account_dir(base, chat_id)
+    account = find(base, chat_id)
     changes = {"state_dir": folder, "shared_dir": base.state_dir,
-               "telegram_chat_id": "" if chat_id == LOCAL else chat_id}
+               "telegram_chat_id": "" if chat_id == LOCAL else chat_id,
+               "account_name": (account.name if account else "") or chat_id}
     if chat_id != admin_id(base):
         changes.update(safe_cards_file=folder / "none", wanted_cards_file=folder / "none", session_cookies="")
     config = dataclasses.replace(base, **changes)

@@ -139,6 +139,7 @@ class Config:
     selling: bool = True
     paused: bool = False
     simulation: bool = False
+    account_name: str = ""  # nom du compte, pour le journal
     # Délai avant la passe suivante ; None = durée des enchères (AUCTION_DURATION_LABEL).
     run_interval: timedelta | None = None
     # Achats : ancienne liste (reprise dans state/, à retirer), budget total optionnel,

@@ -3,6 +3,8 @@
 import argparse
 import logging
 import sys
+import threading
+import time
 from logging.handlers import RotatingFileHandler
 
 from . import accounts
@@ -16,9 +18,13 @@ from .telegram import CommandListener, notify, telegram_bot
 log = logging.getLogger("wiki_seller")
 
 
+SUPERVISE_EVERY = 30  # s : comptes ajoutés ou retirés, boucles arrêtées par une erreur
+
+
 def setup_logging(config: Config) -> None:
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S")
+    # [compte] : chaque compte tourne dans son fil, nommé comme lui.
+    fmt = logging.Formatter("%(asctime)s %(levelname)s [%(threadName)s] %(message)s", "%Y-%m-%d %H:%M:%S")
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     console = logging.StreamHandler(sys.stdout)
@@ -62,6 +68,34 @@ def remind_legacy_files(config: Config, dry_run: bool) -> None:
         notify(config, text)
 
 
+def run_accounts(base: Config, dry_run: bool, debug: bool) -> None:
+    """Une boucle par compte, chacune dans son fil : démarrée pour un compte ajouté,
+    arrêtée pour un compte retiré, relancée après une erreur imprévue."""
+    threads: dict[str, threading.Thread] = {}
+    while True:
+        for account in accounts.accounts(base):
+            thread = threads.get(account.chat_id)
+            if thread is not None and thread.is_alive():
+                continue
+            if thread is not None:
+                log.warning("Compte %s : boucle arrêtée, relancée.", account.name or account.chat_id)
+            thread = threading.Thread(target=_account_loop, args=(base, account.chat_id, dry_run, debug),
+                                      name=account.name or account.chat_id, daemon=True)
+            threads[account.chat_id] = thread
+            thread.start()
+        time.sleep(SUPERVISE_EVERY)
+
+
+def _account_loop(base: Config, chat_id: str, dry_run: bool, debug: bool) -> None:
+    def current():
+        return accounts.account_config(base, chat_id) if accounts.find(base, chat_id) else None
+
+    try:
+        loop(current, dry_run, debug)
+    except Exception:
+        log.exception("Boucle du compte arrêtée par une erreur.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wiki_seller", description="Ventes, achats et défausse automatiques sur WikiMasters.")
     parser.add_argument("--dry-run", action="store_true", help="tout simuler : ni mise en vente, ni mise, ni défausse")
@@ -84,8 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             bot = telegram_bot(base)
             if bot is not None:  # une seule écoute pour toutes les conversations
                 CommandListener(bot, request, base).start()
-            admin = accounts.admin_id(base)
-            loop(lambda: accounts.account_config(base, admin), args.dry_run, args.debug)
+            run_accounts(base, args.dry_run, args.debug)
         else:
             run_once(config, dry_run=args.dry_run or config.simulation, debug=args.debug)
             DISCARDER.join()  # une passe unique attend la fin de la défausse lancée

@@ -200,12 +200,27 @@ def next_wake(next_pass: datetime, config: Config, now: datetime) -> tuple[datet
 
 def loop(source, dry_run: bool, debug: bool) -> None:
     """Boucle d'un compte : passes, réveils de surenchère, demandes du bot. source : ses
-    réglages (Config), ou une fonction qui les relit à chaque tour (/set, /pause…)."""
+    réglages (Config), ou une fonction qui les relit à chaque tour (/set, /pause…) et
+    renvoie None quand le compte est retiré : la boucle s'arrête alors."""
     current = source if callable(source) else (lambda: source)
-    _RUNNING.add(current().telegram_chat_id)
+    config = current()
+    if config is None:
+        return
+    chat = config.telegram_chat_id
+    _RUNNING.add(chat)
+    try:
+        _loop(current, dry_run, debug)
+    finally:
+        _RUNNING.discard(chat)
+
+
+def _loop(current, dry_run: bool, debug: bool) -> None:
     next_pass, snipe, list_error, paused = now_utc(), False, None, None
     while True:
         config = current()
+        if config is None:
+            log.info("Compte retiré : sa boucle s'arrête.")
+            return
         bot = telegram_bot(config)
         if config.paused:
             if not paused:

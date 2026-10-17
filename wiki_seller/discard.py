@@ -5,7 +5,7 @@ Il lit la collection (une seule fois, page par page) et, au-delà de DISCARD_TRI
 exemplaires, examine les cartes des plus communes aux plus rares : prix moyen lu (cache,
 sinon l'API), puis défausse immédiate par l'API si la carte vaut moins de DISCARD_BELOW.
 
-Il partage la session avec les passes (session.GATE) et leur cède la place dès qu'elles
+Il partage la session avec les passes du compte (session.gate) et leur cède la place dès qu'elles
 attendent. L'avancement est gardé dans state/discard_progress.json : la défausse reprend
 là où elle s'était arrêtée, même après un redémarrage."""
 
@@ -22,7 +22,7 @@ from .lists import protected_names
 from .pricing import PriceReader
 from .report import record_discard
 from .selection import CardGroup, copies_not_on_sale, count_listed, normalize_name, parse_collection
-from .session import GATE, open_site
+from .session import gate, open_site
 from .site import CollectionScan, DiscardStatus, SessionExpired, WikiMasters
 from .state import now_utc, parse_time, read_json, write_json
 
@@ -159,31 +159,38 @@ def next_start(config: Config) -> datetime | None:
 # ─────────────────────────── Thread ───────────────────────────
 
 
-class DiscardWorker:
-    """Un seul thread de défausse à la fois."""
+class DiscardWorkers:
+    """Un thread de défausse à la fois par compte."""
 
     def __init__(self):
-        self._thread: threading.Thread | None = None
+        self._threads: dict = {}
         self._lock = threading.Lock()
 
-    def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+    def running(self, config: Config | None = None) -> bool:
+        """Défausse en cours pour ce compte (pour n'importe lequel si config est None)."""
+        with self._lock:
+            threads = [self._threads.get(config.state_dir)] if config else list(self._threads.values())
+        return any(t is not None and t.is_alive() for t in threads)
 
     def start(self, config: Config, dry_run: bool, debug: bool) -> bool:
         with self._lock:
-            if self.running():
+            current = self._threads.get(config.state_dir)
+            if current is not None and current.is_alive():
                 return False
-            self._thread = threading.Thread(target=run_discard, args=(config, dry_run, debug),
-                                            name="defausse", daemon=True)
-            self._thread.start()
+            thread = threading.Thread(target=run_discard, args=(config, dry_run, debug),
+                                      name=f"défausse-{config.account_name or 'compte'}", daemon=True)
+            self._threads[config.state_dir] = thread
+            thread.start()
             return True
 
     def join(self, timeout: float | None = None) -> None:
-        if self._thread is not None:
-            self._thread.join(timeout)
+        with self._lock:
+            threads = list(self._threads.values())
+        for thread in threads:
+            thread.join(timeout)
 
 
-DISCARDER = DiscardWorker()
+DISCARDER = DiscardWorkers()
 
 
 def check_discard(config: Config, dry_run: bool, debug: bool) -> None:
@@ -191,7 +198,7 @@ def check_discard(config: Config, dry_run: bool, debug: bool) -> None:
     vient de finir. Le thread lit lui-même la collection : la passe ne l'attend pas."""
     if not config.discard_below:
         return
-    if DISCARDER.running():
+    if DISCARDER.running(config):
         log.info("Défausse déjà en cours en arrière-plan.")
         return
     restart = next_start(config)
@@ -239,9 +246,9 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
             while progress.position < len(progress.cards):
                 item = progress.cards[progress.position]
                 if progress.copies_done == 0:  # sinon : prix déjà lu, défausse en cours
-                    if GATE.should_yield():
+                    if gate(config).should_yield():
                         return False
-                    status, average = reader.read(item, GATE.should_yield)
+                    status, average = reader.read(item, gate(config).should_yield)
                     if status == reader.STOPPED:
                         return False
                     if status == reader.UNKNOWN:
@@ -275,7 +282,7 @@ def _discard_copies(site: WikiMasters, config: Config, item: DiscardItem, progre
         log.warning("Défausse : %s : exemplaires sans identifiant, impossible à défausser ; carte suivante.",
                     item.title)
     while progress.copies_done < min(item.copies, len(item.copy_ids)):
-        if GATE.should_yield():
+        if gate(config).should_yield():
             return False
         status, detail = site.discard_card(item.copy_ids[progress.copies_done], dry_run)
         if status is DiscardStatus.FAILED:
@@ -310,7 +317,7 @@ def _list_cards(site: WikiMasters, config: Config, progress: DiscardProgress) ->
         if scan.next_page % SAVE_EVERY_PAGES == 0:
             progress.save(config)
 
-    if not site.scan_collection(progress.scan, GATE.should_yield, on_page=save_now_and_then):
+    if not site.scan_collection(progress.scan, gate(config).should_yield, on_page=save_now_and_then):
         log.info("Défausse : %d entrée(s) de la collection lues avant la pause.", len(progress.scan.entries))
         return False
     log.info("Collection chargée : %d entrée(s).", len(progress.scan.entries))

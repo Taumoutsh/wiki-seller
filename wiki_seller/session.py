@@ -65,9 +65,15 @@ class SessionGate:
             self._cond.notify_all()
 
 
-GATE = SessionGate()
+_GATES: dict = {}
 _STORES: dict = {}
 _STORES_LOCK = threading.Lock()
+
+
+def gate(config: Config) -> SessionGate:
+    """Barrière de la session d'un compte (les comptes ne s'attendent pas entre eux)."""
+    with _STORES_LOCK:
+        return _GATES.setdefault(config.session_file, SessionGate())
 
 
 def session_store(config: Config) -> SessionStore:
@@ -87,7 +93,8 @@ def open_site(config: Config, debug: bool = False, background: bool = False):
     """Client connecté au site. Une seule tâche à la fois : une tâche de fond (background)
     attend et cède la place aux passes."""
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    with GATE.background() if background else GATE.priority():
+    lock = gate(config)
+    with lock.background() if background else lock.priority():
         site = WikiMasters(SiteClient(config.base_url, session_store(config)), config, debug=debug)
         ensure_logged_in(site)
         yield site

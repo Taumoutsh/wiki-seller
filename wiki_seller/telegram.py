@@ -27,6 +27,7 @@ log = logging.getLogger("wiki_seller")
 POLL_SECONDS = 50  # attente maximale d'une requête getUpdates (long polling)
 LISTEN_SECONDS = 20  # idem pour l'écoute des commandes : laisse vite la place à une demande de session
 _POLL_LOCK = threading.Lock()  # un seul lecteur des messages à la fois
+_STATE_LOCK = threading.Lock()  # état commun du bot (state/telegram.json)
 _INBOX = threading.Condition()
 _WAITING: dict[str, list[dict]] = {}  # conversation → messages reçus pendant sa demande de session
 _LISTENING = threading.Event()  # l'écoute des commandes tourne : elle seule lit les messages
@@ -96,8 +97,13 @@ class TelegramBot:
     def _state(self) -> dict:
         return read_json(self.state_file, {})
 
-    def _save_state(self, state: dict) -> None:
-        write_json(self.state_file, state)
+    def _update_state(self, change) -> dict:
+        """Lecture-modification-écriture de l'état commun, à l'abri des autres fils."""
+        with _STATE_LOCK:
+            state = self._state()
+            change(state)
+            write_json(self.state_file, state)
+            return state
 
     # ─────────────────────────── Lecture des messages ───────────────────────────
 
@@ -105,17 +111,15 @@ class TelegramBot:
         """Messages reçus, toutes conversations (attente jusqu'à `wait` s). Un seul lecteur
         à la fois."""
         with _POLL_LOCK:
-            state = self._state()
-            if "offset" not in state:  # premier lancement : ignore les anciens messages
-                state["offset"] = self._next_offset()
-                self._save_state(state)
-            updates = self.call("getUpdates", http_timeout=wait + 15, offset=state["offset"],
+            offset = self._state().get("offset")
+            if offset is None:  # premier lancement : ignore les anciens messages
+                offset = self._next_offset()
+                self._update_state(lambda state: state.update(offset=offset))
+            updates = self.call("getUpdates", http_timeout=wait + 15, offset=offset,
                                 timeout=wait, allowed_updates=["message"])
             messages = []
             for update in updates or []:
-                state = self._state()
-                state["offset"] = update["update_id"] + 1
-                self._save_state(state)
+                self._update_state(lambda state, u=update: state.update(offset=u["update_id"] + 1))
                 message = update.get("message") or {}
                 if chat_of(message):
                     messages.append(message)
@@ -143,15 +147,14 @@ class TelegramBot:
                 _WAITING.pop(self.chat_id, None)
 
     def _request_session(self, site_url: str, try_cookies, wait: timedelta) -> bool:
-        state = self._state()
         now = datetime.now(timezone.utc)
-        asked = state.get("asked", {}).get(self.chat_id)
+        asked = self._state().get("asked", {}).get(self.chat_id)
         if not asked or now - datetime.fromisoformat(asked) > REMIND_AFTER:
-            if "offset" not in state:  # ignore les messages envoyés avant la demande
-                state["offset"] = self._next_offset()
+            if "offset" not in self._state():  # ignore les messages envoyés avant la demande
+                offset = self._next_offset()
+                self._update_state(lambda state: state.setdefault("offset", offset))
             self.send(ASK_TEXT.format(url=site_url))
-            state.setdefault("asked", {})[self.chat_id] = now.isoformat()
-            self._save_state(state)
+            self._update_state(lambda state: state.setdefault("asked", {}).update({self.chat_id: now.isoformat()}))
             log.info("Telegram : session demandée ; attente de la réponse (jusqu'à %d min).",
                      wait.total_seconds() // 60)
         else:
@@ -162,9 +165,7 @@ class TelegramBot:
         while time.monotonic() < deadline:
             for message in self._replies(max(1, min(POLL_SECONDS, int(deadline - time.monotonic())))):
                 if self._handle(message, try_cookies):
-                    state = self._state()
-                    state.get("asked", {}).pop(self.chat_id, None)
-                    self._save_state(state)
+                    self._update_state(lambda state: state.get("asked", {}).pop(self.chat_id, None))
                     return True
         return False
 
