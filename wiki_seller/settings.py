@@ -148,8 +148,32 @@ SETTINGS = (
     Setting("pause", "compte en pause : ni vente, ni achat, ni défausse (on/off)",
             lambda t: {"paused": _switch(t)}, lambda c: _on(c.paused)),
 )
-BY_KEY = {s.key: s for s in SETTINGS}
-ALIASES = {"rarete": "raretes", "rarities": "raretes", "duree_nuit": "nuit", "défausse": "defausse",
+
+
+
+def _hours(text: str) -> timedelta:
+    """« 168 », « 168h », « 7j » → durée en heures (1 h à 1 an)."""
+    value = text.strip().lower().replace(" ", "")
+    days = value[-1:] in ("j", "d")
+    number = value[:-1] if value[-1:] in ("h", "j", "d") else value
+    if not number.isdigit() or not 1 <= int(number) * (24 if days else 1) <= 8760:
+        raise SettingError("un nombre d'heures (ex. 168 ou 168h) ou de jours (ex. 7j), entre 1h et 365j")
+    return timedelta(hours=int(number) * (24 if days else 1))
+
+
+def _hours_text(duration: timedelta) -> str:
+    hours = int(duration.total_seconds() // 3600)
+    return f"{hours}h" + (f" ({hours // 24}j)" if hours >= 24 and hours % 24 == 0 else "")
+
+
+# Réglages communs à tous les comptes (state/global_settings.json), administrateur seulement.
+GLOBAL_SETTINGS = (
+    Setting("cache_prix", "durée de validité d'un prix moyen en cache (ex. 24h, 168h ou 7j), pour tous les comptes",
+            lambda t: {"price_cache_ttl": _hours(t)}, lambda c: _hours_text(c.price_cache_ttl)),
+)
+GLOBAL_KEYS = {s.key for s in GLOBAL_SETTINGS}
+BY_KEY = {s.key: s for s in (*SETTINGS, *GLOBAL_SETTINGS)}
+ALIASES = {"cache": "cache_prix", "cache_prix_heures": "cache_prix", "rarete": "raretes", "rarities": "raretes", "duree_nuit": "nuit", "défausse": "defausse",
            "durée": "duree", "surenchère": "surenchere", "raretés": "raretes"}
 
 
@@ -157,14 +181,21 @@ def _file(config: Config):
     return config.state_dir / "settings.json"
 
 
+def _global_file(config: Config):
+    return config.shared_state_dir / "global_settings.json"
+
+
 def stored(config: Config) -> dict[str, str]:
     return read_json(_file(config), {})
 
 
 def apply(config: Config) -> dict:
-    """Changements de Config tirés de settings.json (un réglage illisible est ignoré)."""
+    """Changements de Config tirés des réglages communs (global_settings.json) puis de
+    ceux du compte (settings.json) ; un réglage illisible est ignoré."""
     changes = {}
-    for key, text in stored(config).items():
+    common = {k: v for k, v in read_json(_global_file(config), {}).items() if k in GLOBAL_KEYS}
+    own = {k: v for k, v in stored(config).items() if k not in GLOBAL_KEYS}
+    for key, text in [*common.items(), *own.items()]:
         setting = BY_KEY.get(key)
         if setting is None:
             continue
@@ -175,16 +206,20 @@ def apply(config: Config) -> dict:
     return changes
 
 
-def set_value(config: Config, key: str, text: str) -> Setting:
-    """Vérifie puis enregistre un réglage ; SettingError si la valeur est invalide."""
+def set_value(config: Config, key: str, text: str, admin: bool = False) -> Setting:
+    """Vérifie puis enregistre un réglage ; SettingError si la valeur est invalide (ou si
+    un réglage commun est demandé par un autre compte que l'administrateur)."""
     key = ALIASES.get(key.lower(), key.lower())
     setting = BY_KEY.get(key)
     if setting is None:
         raise SettingError(f"réglage inconnu « {key} » (voir /settings)")
+    if key in GLOBAL_KEYS and not admin:
+        raise SettingError("réglage commun à tous les comptes, réservé à l'administrateur")
     setting.parse(text)  # valide
-    data = stored(config)
+    path = _global_file(config) if key in GLOBAL_KEYS else _file(config)
+    data = read_json(path, {})
     data[key] = " ".join(text.split())
-    write_json(_file(config), data)
+    write_json(path, data)
     return setting
 
 

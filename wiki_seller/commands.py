@@ -99,8 +99,9 @@ def run_admin_command(base, command: str, args: str, bot=None) -> str:
 def run_settings_command(base, chat_id: str, command: str, args: str) -> str:
     """/settings, /set <réglage> <valeur>, /pause, /resume, /simulation on|off."""
     config = accounts.account_config(base, chat_id)
+    admin = str(chat_id) == accounts.admin_id(base)
     if command in ("/settings", "/reglages"):
-        return settings_text(config)
+        return settings_text(config, admin)
     if command == "/set":
         key, _, value = " ".join(args.split()).partition(" ")
         if not key or not value:
@@ -111,17 +112,18 @@ def run_settings_command(base, chat_id: str, command: str, args: str) -> str:
         if not value:
             return "Usage : /simulation on ou /simulation off"
     try:
-        setting = settings.set_value(config, key, value)
+        setting = settings.set_value(config, key, value, admin)
     except settings.SettingError as exc:
         return f"❌ {key} : {exc}"
     updated = accounts.account_config(base, chat_id)
     if setting.key == "pause":
         return ("⏸️ Compte en pause : ni vente, ni achat, ni défausse jusqu'à /resume." if updated.paused else
                 "▶️ Compte actif : la prochaine passe démarre dans la minute.")
-    return f"✅ {setting.key} : {setting.show(updated)} (pris en compte à la prochaine passe)."
+    shared = " pour tous les comptes" if setting.key in settings.GLOBAL_KEYS else ""
+    return f"✅ {setting.key} : {setting.show(updated)} (pris en compte à la prochaine passe{shared})."
 
 
-def settings_text(config) -> str:
+def settings_text(config, admin: bool = False) -> str:
     state = "⏸️ en pause (/resume pour démarrer)" if config.paused else "▶️ actif"
     lines = [f"<b>⚙️ Réglages</b> · {state}" + (" · 🧪 simulation" if config.simulation else ""),
              "Modifier : /set &lt;réglage&gt; &lt;valeur&gt;, ex. /set prix 65", ""]
@@ -129,6 +131,10 @@ def settings_text(config) -> str:
         if setting.key in ("pause",):
             continue
         lines.append(f"• <b>{setting.key}</b> : {escape(setting.show(config))}\n   <i>{escape(setting.help)}</i>")
+    if admin:
+        lines += ["", "<b>Communs à tous les comptes</b> (administrateur) :"]
+        lines += [f"• <b>{s.key}</b> : {escape(s.show(config))}\n   <i>{escape(s.help)}</i>"
+                  for s in settings.GLOBAL_SETTINGS]
     return "\n".join(lines)
 
 

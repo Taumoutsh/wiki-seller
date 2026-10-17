@@ -99,3 +99,16 @@ def test_paused_account_does_nothing_until_resumed(tmp_path, monkeypatch):
     state["config"] = dataclasses.replace(config, paused=False, simulation=True)
     thread.join(2)
     assert passes == [True]  # reprise, en simulation
+
+
+def test_price_cache_duration_is_shared_and_admin_only(base):
+    accounts.add(base, "555", "Paul")
+    assert run_settings_command(base, "555", "/set", "cache_prix 12").startswith("❌ cache_prix : réglage commun")
+    reply = run_settings_command(base, CHAT_ID, "/set", "cache_prix 7j")
+    assert reply == "✅ cache_prix : 168h (7j) (pris en compte à la prochaine passe pour tous les comptes)."
+    for chat in (CHAT_ID, "555"):
+        assert accounts.account_config(base, chat).price_cache_ttl == timedelta(hours=168)
+    assert run_settings_command(base, CHAT_ID, "/set", "cache 36h").startswith("✅ cache_prix : 36h")
+    assert run_settings_command(base, CHAT_ID, "/set", "cache_prix 0").startswith("❌")
+    assert "<b>cache_prix</b> : 36h" in run_settings_command(base, CHAT_ID, "/settings", "")
+    assert "cache_prix" not in run_settings_command(base, "555", "/settings", "")

@@ -198,7 +198,9 @@ Chaque compte se règle depuis sa conversation (`/settings` affiche tout) :
 | `/pause` · `/resume` | Arrête ou reprend ventes, achats et défausse |
 | `/simulation on\|off` | Tout simuler, sans rien envoyer au site |
 
-Un réglage jamais modifié prend la valeur du `.env`. Un nouveau compte démarre en pause,
+L'administrateur règle aussi ce qui est commun à tous les comptes : `/set cache_prix 168`
+(ou `168h`, `7j`) change la durée de validité des prix moyens en cache, sans relancer le
+conteneur. Un réglage jamais modifié prend la valeur du `.env`. Un nouveau compte démarre en pause,
 sans vente automatique (`raretes aucune`) ni défausse : la personne envoie ses cookies
 (sans attendre de demande), vérifie `/settings`, puis `/resume`. Les ventes demandées
 (`/sell`) partent même avec `raretes aucune`.
@@ -314,7 +316,7 @@ Le journal est dans `state/seller.log`.
 | `NIGHT_DURATIONS` | `1-3=12 h;3-6=6 h` | Durée des ventes selon l'heure de Paris ; vide = jamais |
 | `RUN_INTERVAL` | *(durée des enchères)* | Délai avant la passe suivante (`10 min`, `1 h`, `1h30`… ; 5 min minimum) |
 | `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `3` / `5` | Carte invendue N fois : mise de côté pendant N jours (`state/unsold.json`) |
-| `PRICE_CACHE_HOURS` | `24` | Validité d'un prix moyen en cache |
+| `PRICE_CACHE_HOURS` | `24` | Validité d'un prix moyen en cache (modifiable aussi par `/set cache_prix`) |
 | `DISCARD_BELOW` | `15` | Défausse des cartes valant moins que ce prix moyen ; `0` = désactivée |
 | `DISCARD_TRIGGER` | `150` | Exemplaires dans la collection au-delà desquels la défausse est lancée |
 | `MAX_TOTAL_BIDS` | *(vide)* | Somme maximale des mises en cours |
