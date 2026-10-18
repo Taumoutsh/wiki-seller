@@ -112,3 +112,16 @@ def test_price_cache_duration_is_shared_and_admin_only(base):
     assert run_settings_command(base, CHAT_ID, "/set", "cache_prix 0").startswith("❌")
     assert "<b>cache_prix</b> : 36h" in run_settings_command(base, CHAT_ID, "/settings", "")
     assert "cache_prix" not in run_settings_command(base, "555", "/settings", "")
+
+
+def test_minimum_sales_to_sell_is_shared_and_admin_only(base):
+    accounts.add(base, "555", "Paul")
+    assert accounts.account_config(base, "555").min_sales_to_sell == 4
+    assert run_settings_command(base, "555", "/set", "ventes_min 2").startswith("❌ ventes_min : réglage commun")
+    reply = run_settings_command(base, CHAT_ID, "/set", "ventes_min 3")
+    assert reply == ("✅ ventes_min : 3 (mise de côté à 2 ventes ou moins) (pris en compte à la prochaine passe "
+                     "pour tous les comptes).")
+    for chat in (CHAT_ID, "555"):
+        assert accounts.account_config(base, chat).min_sales_to_sell == 3
+    assert run_settings_command(base, CHAT_ID, "/set", "ventes_min 0").startswith("❌")
+    assert "<b>ventes_min</b> : 3" in run_settings_command(base, CHAT_ID, "/settings", "")

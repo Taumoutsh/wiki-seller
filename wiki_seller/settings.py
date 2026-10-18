@@ -167,13 +167,20 @@ def _hours_text(duration: timedelta) -> str:
 
 
 # Réglages communs à tous les comptes (state/global_settings.json), administrateur seulement.
+def _min_sales_text(config) -> str:
+    n = config.min_sales_to_sell
+    return f"{n} (mise de côté à {n - 1} vente{'s' if n > 2 else ''} ou moins)" if n > 1 else "1 (aucune mise de côté)"
+
+
 GLOBAL_SETTINGS = (
+    Setting("ventes_min", "ventes connues minimales pour vendre une carte automatiquement (sinon mise de côté), "
+            "pour tous les comptes", lambda t: {"min_sales_to_sell": _integer(1, 100)(t)}, _min_sales_text),
     Setting("cache_prix", "durée de validité d'un prix moyen en cache (ex. 24h, 168h ou 7j), pour tous les comptes",
             lambda t: {"price_cache_ttl": _hours(t)}, lambda c: _hours_text(c.price_cache_ttl)),
 )
 GLOBAL_KEYS = {s.key for s in GLOBAL_SETTINGS}
 BY_KEY = {s.key: s for s in (*SETTINGS, *GLOBAL_SETTINGS)}
-ALIASES = {"cache": "cache_prix", "cache_prix_heures": "cache_prix", "rarete": "raretes", "rarities": "raretes", "duree_nuit": "nuit", "défausse": "defausse",
+ALIASES = {"ventes": "ventes_min", "ventes_minimum": "ventes_min", "cache": "cache_prix", "cache_prix_heures": "cache_prix", "rarete": "raretes", "rarities": "raretes", "duree_nuit": "nuit", "défausse": "defausse",
            "durée": "duree", "surenchère": "surenchere", "raretés": "raretes"}
 
 

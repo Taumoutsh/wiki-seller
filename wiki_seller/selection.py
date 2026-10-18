@@ -10,9 +10,6 @@ from decimal import Decimal
 
 # Nombre d'exemplaires conservés pour une carte protégée (state/safe_cards.json).
 PROTECTED_COPIES_TO_KEEP = 1
-# Vente automatique : une carte dont le prix repose sur moins de MIN_SALES_TO_SELL ventes
-# (3 au plus : ventes isolées, peut-être des échanges d'argent) est mise de côté.
-MIN_SALES_TO_SELL = 4
 
 
 def normalize_name(name: str) -> str:
@@ -143,6 +140,7 @@ def build_sale_plan(
     ratio: float,
     unknown_prices: set[str] = frozenset(),
     sales_counts: dict[str, int | None] | None = None,
+    min_sales: int = 1,
 ) -> SalePlan:
     """Liste des cartes à vendre, de la plus chère à la moins chère. Prix par carte et
     rareté (CardGroup.key) ; les cartes dont le prix n'a pas pu être lu (`unknown_prices`)
@@ -161,7 +159,7 @@ def build_sale_plan(
             skipped.append((group.title, "pas de prix moyen"))
             continue
         count = (sales_counts or {}).get(group.key)
-        if count is not None and count < MIN_SALES_TO_SELL:
+        if count is not None and count < min_sales:  # ventes isolées, peut-être des échanges d'argent
             sales = f"{count} vente{'s' if count > 1 else ''} connue{'s' if count > 1 else ''}"
             skipped.append((group.title, f"mise de côté : {sales}, prix {average:g} peu fiable"))
             continue

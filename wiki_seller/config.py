@@ -163,6 +163,8 @@ class Config:
     unsold_cooldown: timedelta = timedelta(days=5)
     # Durée de validité des prix moyens en cache (state/price_cache.json).
     price_cache_ttl: timedelta = timedelta(hours=24)
+    # Vente automatique : ventes connues minimales pour se fier au prix d'une carte (sinon mise de côté).
+    min_sales_to_sell: int = 4
     # Durées de vente la nuit : ((début, fin, libellé), ...), heures de Paris [début, fin[.
     night_durations: tuple[tuple[int, int, str], ...] = ()
     # Bot Telegram qui demande une nouvelle session quand elle expire (vide = désactivé).
@@ -270,6 +272,7 @@ def load_config() -> Config:
         unsold_max_tries=_positive_int("UNSOLD_MAX_TRIES") or 3,
         unsold_cooldown=timedelta(days=_positive_int("UNSOLD_COOLDOWN_DAYS") or 5),
         price_cache_ttl=timedelta(hours=_positive_int("PRICE_CACHE_HOURS") or 24),
+        min_sales_to_sell=_positive_int("MIN_SALES_TO_SELL") or 4,
         night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
         market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),
         price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),

@@ -351,7 +351,8 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
         log.info("%d prix en cours de lecture en arrière-plan : ces cartes partiront à la passe suivante "
                  "(anticipée dès qu'ils sont lus).", len(unknown))
     counts = {key: entry.get("count") for key, entry in load_price_cache(config).items()}
-    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown, counts)
+    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown, counts,
+                           config.min_sales_to_sell)
     set_aside = [(t, r) for t, r in plan.skipped if r.startswith("mise de côté")]
     if set_aside:
         log.info("%d carte(s) mise(s) de côté, trop peu de ventes pour s'y fier : %s", len(set_aside),

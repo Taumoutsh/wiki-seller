@@ -62,7 +62,8 @@ ADMIN_HELP = ("\n\n👑 Administration\n"
               "/users — comptes du bot\n"
               "/adduser <chat_id> <nom> — ouvrir l'accès à une conversation\n"
               "/removeuser <chat_id> — retirer un compte (ses fichiers sont gardés)\n"
-              "/set cache_prix <durée> — validité des prix en cache, pour tous (ex. 24h, 7j)")
+              "/set cache_prix <durée> — validité des prix en cache, pour tous (ex. 24h, 7j)\n"
+              "/set ventes_min <n> — ventes connues minimales pour vendre une carte automatiquement, pour tous")
 ADMIN_COMMANDS = ("/users", "/adduser", "/removeuser")
 WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouvert.\n\n"
                 "1. Dans une fenêtre privée, connectez-vous à wiki-masters.com, ouvrez le favori « cookies » "

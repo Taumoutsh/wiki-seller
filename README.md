@@ -136,6 +136,7 @@ commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 | `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
 | `/users` | Comptes : état (actif, pause, simulation), session, accès au Marché 🏪, nombre de cartes par liste |
 | `/set cache_prix 168` | Durée de validité des prix en cache, pour tous les comptes (`168`, `168h` ou `7j`) |
+| `/set ventes_min 4` | Ventes connues minimales pour vendre une carte automatiquement, pour tous les comptes (en dessous : mise de côté) |
 
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant.
 
@@ -174,7 +175,7 @@ script :
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
    durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
    sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise
-   de côté**, jusqu'à ce que d'autres ventes confirment son prix ; la passe ne lit aucun prix :
+   de côté** (`ventes_min`, 4 : réglage commun de l'administrateur), jusqu'à ce que d'autres ventes confirment son prix ; la passe ne lit aucun prix :
    ceux qui manquent au cache sont lus en arrière-plan (voir « Prix des cartes ») et la
    carte part à la passe suivante, anticipée dès qu'ils sont lus ;
 4. lance la défausse en arrière-plan (voir « Défausse ») ;
@@ -393,6 +394,7 @@ modifiables ensuite par `/set`.
 | `SNIPE_LEAD` | `30` | Par compte (`surenchere`) |
 | `REPORT_HOURS` | `2` | Par compte (`bilan`) |
 | `PRICE_CACHE_HOURS` | `24` | Commun (`/set cache_prix`) |
+| `MIN_SALES_TO_SELL` | `4` | Commun (`/set ventes_min`) |
 | `STATE_DIR` / `BASE_URL` | `state` / `https://www.wiki-masters.com` | Dossier des fichiers d'état ; adresse du site |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | *(trouvées seules)* | Session du site, à ne régler qu'en cas de problème |
 | `CPU_LIMIT` / `MEM_LIMIT` | `1` / `512m` | Ressources maximales du conteneur |
@@ -417,7 +419,7 @@ n'ont plus d'effet ; le journal le signale au démarrage.
 | `state/users/<chat_id>/` | Un compte : `session.json`, `settings.json`, `safe_cards.json`, `buy_cards.json`, `sell_cards.json`, `wanted_state.json` (achats suivis), `report.json` (bilans), `discard_progress.json`, `unsold.json`, `debug/` |
 | `state/price_cache.json` | Prix des cartes, communs à tous les comptes |
 | `state/market/` | Session Marché (`/market`) et compte qui l'a fournie |
-| `state/global_settings.json` | Réglages communs (`cache_prix`) |
+| `state/global_settings.json` | Réglages communs (`cache_prix`, `ventes_min`) |
 | `state/telegram.json` · `state/site.json` | État du bot ; clé publique du site |
 | `state/seller.log` | Journal, avec le compte entre crochets sur chaque ligne (`[Paul]`, `[défausse-Paul]`) |
 
