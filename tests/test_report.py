@@ -53,20 +53,19 @@ def test_report_details_auctions_of_the_cards_to_buy(tmp_path):
          "status": "active", "end_at": end},
         {"id": "x1", "card": {"wikipedia_title": "Pas voulue"}, "current_bid": 5, "status": "active"}]}
     hm = datetime.fromisoformat(end).astimezone().strftime("%H:%M")
-    text = "\n".join(bid_lines(config, mine, "me", now=datetime.fromisoformat(end)))
-    assert text == (f"✅ Tour Eiffel\n   en tête à 300 · max 500 · fin {hm}\n"
-                    f"⚠️ Victor Hugo\n   dépassé : 80 → 100 · max 120 · fin {hm}\n"
-                    "   ↳ surenchère à 110 juste avant la fin\n"
-                    f"❌ Loire\n   dépassé : 90 → 100 · max 100 · fin {hm}\n"
-                    "   ↳ abandonnée (au-dessus du max)")
+    assert bid_lines(config, mine, "me", now=datetime.fromisoformat(end)) == [
+        f"✅ Tour Eiffel · en tête à 300 · max 500 · fin {hm}",
+        f"⚠️ Victor Hugo · 80 → 100, surenchère à 110 · max 120 · fin {hm}",
+        f"❌ Loire · 90 → 100, abandonnée · max 100 · fin {hm}"]
     earlier = datetime.fromisoformat(end) - timedelta(days=2)
     assert "fin " + datetime.fromisoformat(end).astimezone().strftime("%d/%m %H:%M") in bid_lines(
         config, mine, "me", now=earlier)[0]
     later = datetime.fromisoformat(end) + timedelta(seconds=1)
-    assert [b.split("\n")[0] for b in bid_lines(config, mine, "me", now=later)] == []  # finies
+    assert bid_lines(config, mine, "me", now=later) == []  # finies
     stub = Stub()
     send_report(stub, config, stub, [], "me", on_demand=True, mine=mine)
-    assert "\n\n<b>🛒 Achats en cours</b>\n✅ Tour Eiffel\n" in stub.sent[0] and "Pas voulue" not in stub.sent[0]
+    assert "\n\n<b>🛒 Achats en cours · 3</b> (✅ 1 ⚠️ 1 ❌ 1)\n✅ Tour Eiffel · " in stub.sent[0]
+    assert "Pas voulue" not in stub.sent[0]
 
 
 class Stub:
@@ -245,5 +244,11 @@ def test_watched_auction_without_bid_is_in_the_report(tmp_path):
     config.wanted_state_file.write_text(json.dumps({"cards": {"tour eiffel": {
         "auction_id": "t1", "status": "bidding", "end_at": end, "watch_price": 120}}}))
     hm = datetime.fromisoformat(end).astimezone().strftime("%d/%m %H:%M")
-    assert bid_lines(config, {"bidding": []}, "me", now=NOW) == [
-        f"👀 Tour Eiffel\n   mise minimale 120 · max 500 · fin {hm}\n   ↳ mise à 30 s de la fin"]
+    assert bid_lines(config, {"bidding": []}, "me", now=NOW) == [f"👀 Tour Eiffel · mise à 120 · max 500 · fin {hm}"]
+
+
+def test_long_lists_are_capped_in_the_report():
+    bids = [f"👀 Carte {i} · mise à 10 · max 20 · fin 18:00" for i in range(20)]
+    text = report_text(NOW, NOW, [], 0, 100, bids, [f"• Perdue {i}" for i in range(12)])
+    assert "<b>🛒 Achats en cours · 20</b> (👀 20)" in text and "Carte 14 ·" in text and "Carte 15 ·" not in text
+    assert "… et 5 autres" in text and "<b>❌ Enchères perdues · 12</b>" in text and "… et 2 autres" in text

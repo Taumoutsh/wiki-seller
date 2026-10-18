@@ -199,6 +199,7 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
   **à chaque fois qu'il est dépassé**, dans la limite ; une mise des 10 dernières
   secondes prolonge l'enchère de 60 s, la surveillance continue jusqu'à la vraie fin ;
   une enchère qui finit dans les 3 minutes est surveillée tout de suite, pendant la passe ;
+  plusieurs fins d'enchère proches sont surveillées **en même temps** (une par carte) ;
 - au-dessus de votre maximum, il abandonne cette enchère et en cherche une autre ;
 - **une seule enchère à la fois par carte** ; `budget` limite la somme des mises en
   cours, vérifiée au moment de miser.
@@ -308,18 +309,11 @@ Toutes les `bilan` heures (2), ou à la demande avec `/update` :
 
 🗑️ Défausses · 120 exemplaires · +120
 
-🛒 Achats en cours
-👀 Gustave Eiffel
-   mise minimale 150 · max 300 · fin 20:10
-   ↳ mise à 30 s de la fin
-✅ Tour Eiffel
-   en tête à 300 · max 500 · fin 18:42
-⚠️ Victor Hugo
-   dépassé : 80 → 100 · max 120 · fin 19:05
-   ↳ surenchère à 110 juste avant la fin
-❌ Loire
-   dépassé : 90 → 100 · max 100
-   ↳ abandonnée (au-dessus du max)
+🛒 Achats en cours · 4 (👀 1 ✅ 1 ⚠️ 1 ❌ 1)
+✅ Tour Eiffel · en tête à 300 · max 500 · fin 18:42
+⚠️ Victor Hugo · 80 → 100, surenchère à 110 · max 120 · fin 19:05
+❌ Loire · 90 → 100, abandonnée · max 100 · fin 19:30
+👀 Gustave Eiffel · mise à 150 · max 300 · fin 20:10
 
 ❌ Enchères perdues · 1
 • Emmanuel Macron · remportée à 3 191 par un autre (max 2 700)
@@ -331,11 +325,13 @@ Toutes les `bilan` heures (2), ou à la demande avec `/update` :
   chacune comptée une seule fois : une vente qui arrive en retard dans l'historique
   compte au bilan suivant.
 - **Défausses :** 1 wikibidou par exemplaire.
-- **Achats en cours :** 👀 suivie sans mise encore (mise juste avant la fin) ; ✅ en
-  tête ; ⚠️ dépassé (votre mise → prix actuel), surenchère prévue ; ❌ abandonnée,
+- **Achats en cours :** une ligne par enchère, les plus proches de la fin d'abord, 15 au
+  plus (« … et N autres ») : 👀 suivie sans mise encore (mise à N juste avant la fin) ;
+  ✅ en tête ; ⚠️ dépassé (votre mise → prix actuel), surenchère prévue ; ❌ abandonnée,
   au-dessus du max. Fin : l'heure seule si c'est aujourd'hui.
 - **Enchères perdues :** celles où vous aviez misé, terminées au profit d'un autre ou
-  montées au-dessus de votre max depuis le dernier bilan automatique, une fois chacune.
+  montées au-dessus de votre max depuis le dernier bilan automatique, une fois chacune
+  (10 au plus).
 
 Le bilan automatique part en fin de passe, une fois les enchères placées, quand aucune
 de vos ventes ne se termine dans les 5 minutes ni n'est en cours de règlement (sinon le

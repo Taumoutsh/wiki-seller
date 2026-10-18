@@ -880,3 +880,20 @@ def test_purchase_only_from_the_requested_seller(tmp_path, caplog):
             run_once(config)
     assert "auction_id" not in tracked(config, "loire")  # aucune enchère de Loire chez @inconnu
     assert "« Loire » — vendeurs des enchères en cours : other" in caplog.text
+
+
+def test_close_auction_ends_are_watched_at_the_same_time(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    end = datetime.now(timezone.utc) + timedelta(seconds=12)
+    auctions = [market_auction("v1", "Victor Hugo", 50, end_at=end.isoformat()),
+                market_auction("l1", "Loire", 20, end_at=(end + timedelta(seconds=2)).isoformat())]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100},
+                                                            {"name": "Loire", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=8))
+        close_after(site, end, "v1")
+        close_after(site, end + timedelta(seconds=2), "l1")
+        run_once(config)
+    # Une seule surveillance à la fois aurait laissé passer la seconde fin.
+    assert sorted(site.bids) == [("l1", 20), ("v1", 50)] and buy_cards(config) == []

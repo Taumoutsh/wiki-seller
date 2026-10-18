@@ -21,7 +21,6 @@ from .unsold import auction_outcome
 log = logging.getLogger(__name__)
 
 DISCARD_REWARD = 1  # wikibidou par exemplaire défaussé (fenêtre « Défausser cette carte ? »)
-INDENT = "   "
 # Le bilan automatique attend qu'aucune de vos ventes ne se termine dans les REPORT_QUIET
 # minutes, ni ne soit en cours de règlement (terminée depuis moins de SETTLING, mais pas
 # encore dans l'historique : le solde la compte déjà, le bilan pas encore). Au-delà de
@@ -36,6 +35,8 @@ COUNTED_LIMIT = 500
 MAX_SALES_LISTED = 30  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
 MAX_HISTORY_LISTED = 40  # enchères détaillées par /ventes
 LOSSES_KEPT = 50  # enchères perdues gardées entre deux bilans
+MAX_BIDS_LISTED = 15  # enchères en cours détaillées dans un bilan (les plus proches de la fin)
+MAX_LOSSES_LISTED = 10  # enchères perdues détaillées dans un bilan
 _LOCK = threading.Lock()  # la défausse (thread) et les passes écrivent le même fichier
 
 
@@ -92,16 +93,16 @@ def sales_between(history: list, my_id: str | None, start: datetime, end: dateti
 
 
 def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None) -> list[str]:
-    """Enchères en cours sur les cartes à acheter, une par bloc (HTML Telegram) : ✅ vous
-    menez, ⚠️ dépassé avec surenchère prévue avant la fin, ❌ abandonnée (au-dessus du max),
-    👀 suivie sans mise encore (mise juste avant la fin)."""
+    """Enchères en cours sur les cartes à acheter, une ligne chacune (HTML Telegram), les
+    plus proches de la fin d'abord : ✅ vous menez, ⚠️ dépassé avec surenchère prévue
+    avant la fin, ❌ abandonnée (au-dessus du max), 👀 suivie sans mise encore."""
     try:
         cards = {c.key: c for c in buy_cards(config)}
     except ListError:
         return []
     tracked = read_json(config.wanted_state_file, {}).get("cards", {})
     now = now or now_utc()
-    blocks = []
+    rows: list[tuple[datetime | None, str]] = []
     for auction in mine.get("bidding") or []:
         if not isinstance(auction, dict) or auction.get("status", "active") != "active":
             continue
@@ -109,47 +110,46 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
         if card is None or ended(auction, now) or not rarity_matches(auction, card, unknown_ok=True):
             continue
         entry = tracked.get(card.key) or {}
-        current = auction.get("current_bid")
-        end = parse_time(auction.get("end_at"))
+        current, end = auction.get("current_bid"), parse_time(auction.get("end_at"))
         max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
-        limit = f"max {money(max_price)}" if max_price else "max auto"
-        details = [limit + (" (auto)" if max_price and card.max_price == AUTO else "")]
-        details += [f"fin {when(end, now)}"] if end else []
-        name = escape(card.name)
         if my_id and auction.get("current_bidder_id") == my_id:
-            blocks.append(f"✅ {name}\n{INDENT}" + " · ".join([f"en tête à {money(current)}", *details]))
-            continue
-        mine_bid = entry.get("my_bid") or {}
-        placed = mine_bid.get("amount") if mine_bid.get("auction") == auction.get("id") else None
-        if not isinstance(current, int):
-            blocks.append(f"⚠️ {name}\n{INDENT}" + " · ".join(["dépassé (prix actuel illisible)", *details]))
-            continue
-        outbid = f"dépassé : {money(placed)} → {money(current)}" if placed else f"dépassé à {money(current)}"
-        following = min_bid(auction)
-        if max_price and following > max_price:
-            icon, plan = "❌", "abandonnée (au-dessus du max)"
+            icon, state = "✅", f"en tête à {money(current)}"
+        elif not isinstance(current, int):
+            icon, state = "⚠️", "dépassé, prix illisible"
         else:
-            icon, plan = "⚠️", f"surenchère à {money(following)} juste avant la fin"
-        blocks.append(f"{icon} {name}\n{INDENT}" + " · ".join([outbid, *details]) + f"\n{INDENT}↳ {plan}")
-    blocks += _watched_lines(config, cards, tracked, mine, now)
-    return blocks
-
-
-def _watched_lines(config, cards: dict, tracked: dict, mine: dict, now: datetime) -> list[str]:
-    """Enchères gardées sans mise : la mise part juste avant la fin."""
+            mine_bid = entry.get("my_bid") or {}
+            placed = mine_bid.get("amount") if mine_bid.get("auction") == auction.get("id") else None
+            price = f"{money(placed)} → {money(current)}" if placed else f"dépassé à {money(current)}"
+            following = min_bid(auction)
+            if max_price and following > max_price:
+                icon, state = "❌", f"{price}, abandonnée"
+            else:
+                icon, state = "⚠️", f"{price}, surenchère à {money(following)}"
+        rows.append((end, _bid_row(icon, card, state, max_price, end, now)))
     mine_ids = {a.get("id") for a in mine.get("bidding") or [] if isinstance(a, dict)}
-    blocks = []
-    for key, entry in tracked.items():
+    for key, entry in tracked.items():  # gardées sans mise : la mise part juste avant la fin
         card, end = cards.get(key), parse_time(entry.get("end_at"))
         if (card is None or entry.get("status") != "bidding" or not entry.get("auction_id")
                 or entry["auction_id"] in mine_ids or not end or end < now):
             continue
         max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
-        details = [f"mise minimale {money(entry.get('watch_price'))}" if entry.get("watch_price") else "suivie",
-                   f"max {money(max_price)}" if max_price else "max auto", f"fin {when(end, now)}"]
-        blocks.append(f"👀 {escape(card.name)}\n{INDENT}" + " · ".join(details)
-                      + f"\n{INDENT}↳ mise à {int(config.snipe_lead.total_seconds())} s de la fin")
-    return blocks
+        state = f"mise à {money(entry['watch_price'])}" if entry.get("watch_price") else "suivie"
+        rows.append((end, _bid_row("👀", card, state, max_price, end, now)))
+    rows.sort(key=lambda r: (r[0] is None, r[0] or now))
+    return [row for _, row in rows]
+
+
+def _bid_row(icon: str, card, state: str, max_price, end: datetime | None, now: datetime) -> str:
+    parts = [f"{icon} {escape(card.name)}", state, f"max {money(max_price)}" if max_price else "max auto"]
+    return " · ".join(parts + ([f"fin {when(end, now)}"] if end else []))
+
+
+def capped(lines: list[str], limit: int) -> list[str]:
+    """Au plus `limit` lignes, puis « … et N autres » : un bilan reste lisible (et sous
+    la taille maximale d'un message Telegram)."""
+    if len(lines) <= limit:
+        return list(lines)
+    return [*lines[:limit], f"… et {plural(len(lines) - limit, 'autre')}"]
 
 
 def when(moment: datetime, now: datetime) -> str:
@@ -185,9 +185,12 @@ def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], di
     if discarded:
         sections.append(f"<b>🗑️ Défausses · {plural(discarded, 'exemplaire')} · +{money(gained)}</b>")
     if bids:
-        sections.append("<b>🛒 Achats en cours</b>\n" + "\n".join(bids))
+        counts = " ".join(f"{icon} {n}" for icon in ("👀", "✅", "⚠️", "❌")
+                          if (n := sum(line.startswith(icon) for line in bids)))
+        sections.append(f"<b>🛒 Achats en cours · {len(bids)}</b> ({counts})\n"
+                        + "\n".join(capped(bids, MAX_BIDS_LISTED)))
     if lost:
-        sections.append(f"<b>❌ Enchères perdues · {len(lost)}</b>\n" + "\n".join(lost))
+        sections.append(f"<b>❌ Enchères perdues · {len(lost)}</b>\n" + "\n".join(capped(lost, MAX_LOSSES_LISTED)))
     return "\n\n".join(sections)
 
 

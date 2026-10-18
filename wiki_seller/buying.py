@@ -291,7 +291,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
 
             if snipe_only:
                 if auction is not None:
-                    buyer.watch_until_end(card, entry, auction)
+                    buyer.watch_later(card, entry, auction)
                 continue
 
             outbid = auction is not None and (auction["id"] in bidding_ids or entry.get("placed") == auction["id"])
@@ -335,6 +335,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                 buyer.bid_if_needed(card, entry, auction)
             else:  # gardée et surveillée : la mise part juste avant la fin
                 buyer.track(card, entry, auction, outbid=False)
+        buyer.run_watches()  # fins d'enchère proches, toutes en même temps
     finally:
         state.save()
         release_claims(config)
@@ -366,6 +367,37 @@ class _Buyer:
         self.site, self.config, self.state, self.dry_run, self.now = site, config, state, dry_run, now
         self.budget_used = 0
         self.rivals: set[str] = set()  # identifiants des autres comptes du bot
+        self.watches: list[tuple[BuyCard, dict, dict]] = []  # fins d'enchère à surveiller
+        self._budget_lock = threading.Lock()  # plusieurs fins d'enchère surveillées en même temps
+
+    def watch_later(self, card: BuyCard, entry: dict, auction: dict) -> None:
+        self.watches.append((card, entry, auction))
+
+    def run_watches(self) -> None:
+        """Surveille les fins d'enchère toutes en même temps, chacune dans son fil : deux
+        fins rapprochées ne se gênent pas (watch_until_end rend la main tout de suite
+        pour une fin encore loin)."""
+        jobs, self.watches = self.watches, []
+        if len(jobs) <= 1:
+            for job in jobs:
+                self.watch_until_end(*job)
+            return
+        errors: list[BaseException] = []
+
+        def watch(job) -> None:
+            try:
+                self.watch_until_end(*job)
+            except Exception as exc:  # session expirée… : relancée après les autres
+                errors.append(exc)
+
+        threads = [threading.Thread(target=watch, args=(job,), daemon=True,
+                                    name=f"{threading.current_thread().name}·{job[0].name[:20]}") for job in jobs]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        if errors:
+            raise errors[0]
 
     def count_wins(self, card: BuyCard, entry: dict, wins: list[dict]) -> bool:
         """Note les enchères gagnées ; True si le nombre d'exemplaires voulu est atteint."""
@@ -522,7 +554,7 @@ class _Buyer:
         log.info("Achat : « %s » — %s, mise minimale %d (limite %d) ; mise à %d s de la fin (%s).", card.name,
                  f"dépassé ({auction.get('current_bid')})" if outbid else "enchère suivie sans miser", minimum,
                  card.max_price, self.config.snipe_lead.total_seconds(), auction.get("end_at"))
-        self.watch_until_end(card, entry, auction)
+        self.watch_later(card, entry, auction)
 
     def bid_if_needed(self, card: BuyCard, entry: dict, auction: dict) -> None:
         if self.leading(auction):
@@ -625,21 +657,24 @@ class _Buyer:
             self.lost(card, entry, auction)
             _forget(entry)
             return
-        if self.config.max_total_bids and self.budget_used + amount > self.config.max_total_bids:
-            log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; pas de mise sur « %s ».",
-                     self.budget_used, card.name)
-            _forget(entry)
-            return
+        with self._budget_lock:  # mise réservée avant l'envoi : deux fins simultanées ne dépassent pas le budget
+            if self.config.max_total_bids and self.budget_used + amount > self.config.max_total_bids:
+                log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; pas de mise sur « %s ».",
+                         self.budget_used, card.name)
+                _forget(entry)
+                return
+            self.budget_used += amount
         if self.dry_run:
             log.info("Simulation : surenchère de %d sur « %s ».", amount, card.name)
             _forget(entry)
             return
         if self.site.post_bid(auction["id"], amount, self.deadline(auction), self.state.my_id):
-            self.budget_used += amount
             entry["placed"] = auction["id"]
             entry["my_bid"] = {"auction": auction["id"], "amount": amount}
             log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
                      (parse_time(auction.get("end_at")) - self.now()).total_seconds())
             return
+        with self._budget_lock:
+            self.budget_used -= amount  # mise refusée : l'enchère est relue et la mise refaite
         self.bid_if_needed(card, entry, auction)
 
