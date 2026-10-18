@@ -901,13 +901,13 @@ def test_close_auction_ends_are_watched_at_the_same_time(tmp_path):
 
 def test_expensive_card_with_a_single_sale_is_set_aside(tmp_path, caplog):
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site:
-        site.sale_counts = {"B": 1, "C": 2, "D": 3}  # 2 ventes ou moins : mise de côté
+        site.sale_counts = {"B": 1, "C": 3, "D": 4}  # 3 ventes ou moins : mise de côté
         config = make_config(tmp_path, site.url, [])
         with caplog.at_level("INFO"):
             run_once(config)
     titles = [l["title"] for l in site.listings]
-    assert "Château de Versailles" not in titles and titles[0] == "Victor Hugo"  # 3 ventes : vendue
+    assert "Château de Versailles" not in titles and titles[0] == "Victor Hugo"  # 4 ventes : vendue
     assert "mise(s) de côté, trop peu de ventes pour s'y fier : Château de Versailles (1 vente connue" in caplog.text
     cache = json.loads((config.shared_state_dir / "price_cache.json").read_text())
-    assert "Tour Eiffel (2 ventes connues" in caplog.text
-    assert cache["B:R"]["count"] == 1 and cache["D:R"]["count"] == 3
+    assert "Tour Eiffel (3 ventes connues" in caplog.text
+    assert cache["B:R"]["count"] == 1 and cache["D:R"]["count"] == 4

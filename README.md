@@ -173,7 +173,7 @@ script :
    vendus) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
    durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
-   sur **2 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise
+   sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise
    de côté**, jusqu'à ce que d'autres ventes confirment son prix ; la passe ne lit aucun prix :
    ceux qui manquent au cache sont lus en arrière-plan (voir « Prix des cartes ») et la
    carte part à la passe suivante, anticipée dès qu'ils sont lus ;

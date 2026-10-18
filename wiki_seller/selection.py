@@ -11,8 +11,8 @@ from decimal import Decimal
 # Nombre d'exemplaires conservés pour une carte protégée (state/safe_cards.json).
 PROTECTED_COPIES_TO_KEEP = 1
 # Vente automatique : une carte dont le prix repose sur moins de MIN_SALES_TO_SELL ventes
-# (2 au plus : ventes isolées, peut-être des échanges d'argent) est mise de côté.
-MIN_SALES_TO_SELL = 3
+# (3 au plus : ventes isolées, peut-être des échanges d'argent) est mise de côté.
+MIN_SALES_TO_SELL = 4
 
 
 def normalize_name(name: str) -> str:
