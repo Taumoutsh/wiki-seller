@@ -97,9 +97,9 @@ class PriceReader:
         found, fallback = self._market(group)
         if found is not None:
             self.seconds += time.monotonic() - started
-            return self._keep(key, {"average": found.price, "source": "marche"})
+            return self._keep(key, {"average": found.price, "count": found.sales, "source": "marche"})
         try:
-            average = self.site.fetch_average(group.card_id, group.rarity)
+            average, count = self.site.fetch_average(group.card_id, group.rarity)
         except PriceApiUnavailable as exc:
             self.failures += 1
             if exc.transient and self.failures < FAILURES_BEFORE_GIVING_UP:
@@ -113,7 +113,8 @@ class PriceReader:
         finally:
             self.seconds += time.monotonic() - started
         self.failures = 0
-        return self._keep(key, {"average": average, "source": "moyenne", **({"fallback": True} if fallback else {})})
+        return self._keep(key, {"average": average, "count": count, "source": "moyenne",
+                                **({"fallback": True} if fallback else {})})
 
     def _keep(self, key: str, entry: dict) -> tuple[str, float | None]:
         self.fetched += 1

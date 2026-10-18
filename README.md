@@ -172,7 +172,9 @@ script :
    chère à la moins chère**, sauf les cartes protégées (un exemplaire gardé, les doublons
    vendus) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
-   durée de nuit). Une carte sans prix moyen est ignorée ; la passe ne lit aucun prix :
+   durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
+   sur **moins de 2 ventes** (une vente isolée, peut-être un échange d'argent) est **mise
+   de côté**, jusqu'à ce que d'autres ventes confirment son prix ; la passe ne lit aucun prix :
    ceux qui manquent au cache sont lus en arrière-plan (voir « Prix des cartes ») et la
    carte part à la passe suivante, anticipée dès qu'ils sont lus ;
 4. lance la défausse en arrière-plan (voir « Défausse ») ;

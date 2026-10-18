@@ -15,7 +15,7 @@ from .buying import WantedState, auction_title, my_user_id
 from .config import Config
 from .lists import AUTO, AUTO_SELL_RATIO, ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
 from . import price_worker
-from .pricing import PriceReader, fetch_averages
+from .pricing import PriceReader, fetch_averages, load_price_cache
 from .settings import RARITIES
 from .selection import (
     PROTECTED_COPIES_TO_KEEP,
@@ -350,10 +350,15 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     if unknown and price_worker.active():
         log.info("%d prix en cours de lecture en arrière-plan : ces cartes partiront à la passe suivante "
                  "(anticipée dès qu'ils sont lus).", len(unknown))
-    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown)
-    if plan.skipped:
-        log.info("%d carte(s) ignorée(s), ex. : %s", len(plan.skipped),
-                 ", ".join(f"{t} ({r})" for t, r in plan.skipped[:10]))
+    counts = {key: entry.get("count") for key, entry in load_price_cache(config).items()}
+    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown, counts)
+    set_aside = [(t, r) for t, r in plan.skipped if r.startswith("mise de côté")]
+    if set_aside:
+        log.info("%d carte(s) mise(s) de côté, trop peu de ventes pour s'y fier : %s", len(set_aside),
+                 ", ".join(f"{t} ({r.split(' : ', 1)[1]})" for t, r in set_aside[:20]))
+    others = [(t, r) for t, r in plan.skipped if not r.startswith("mise de côté")]
+    if others:
+        log.info("%d carte(s) ignorée(s), ex. : %s", len(others), ", ".join(f"{t} ({r})" for t, r in others[:10]))
     if not plan.items:
         log.info("Aucune carte à mettre en vente.")
         return

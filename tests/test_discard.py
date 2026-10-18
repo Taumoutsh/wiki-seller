@@ -96,7 +96,7 @@ class PriceStub:
         self.asked.append(card_id)
         if card_id in self.refused:
             raise PriceApiUnavailable("trop de requêtes", transient=self.transient)
-        return 5.0
+        return 5.0, 10
 
 
 def price_groups(n):

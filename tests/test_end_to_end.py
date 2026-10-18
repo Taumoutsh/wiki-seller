@@ -897,3 +897,16 @@ def test_close_auction_ends_are_watched_at_the_same_time(tmp_path):
         run_once(config)
     # Une seule surveillance à la fois aurait laissé passer la seconde fin.
     assert sorted(site.bids) == [("l1", 20), ("v1", 50)] and buy_cards(config) == []
+
+
+def test_expensive_card_with_a_single_sale_is_set_aside(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site:
+        site.sale_counts = {"B": 1}  # Château de Versailles : la plus chère, une seule vente
+        config = make_config(tmp_path, site.url, ["tour eiffel"])
+        with caplog.at_level("INFO"):
+            run_once(config)
+    titles = [l["title"] for l in site.listings]
+    assert "Château de Versailles" not in titles and titles[0] == "Victor Hugo"
+    assert "mise(s) de côté, trop peu de ventes pour s'y fier : Château de Versailles (1 vente connue" in caplog.text
+    cache = json.loads((config.shared_state_dir / "price_cache.json").read_text())
+    assert cache["B:R"]["count"] == 1 and cache["D:R"]["count"] == 5
