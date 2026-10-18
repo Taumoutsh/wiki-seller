@@ -66,6 +66,9 @@ class FakeWikiMasters:
         # Site qui bogue : les N prochaines mises restent sans réponse (503, non enregistrées),
         # ou sont enregistrées mais leur réponse se perd ; les N prochaines lectures d'une
         # enchère échouent.
+        # Comme le vrai site : les enchères finies restent un moment dans « Mes enchères »,
+        # toujours marquées « active ».
+        self.stale_bidding = False
         self.bid_failures = 0
         self.bid_lost_responses = 0
         self.auction_read_failures = 0
@@ -155,7 +158,9 @@ class FakeWikiMasters:
                     return self._send(200, {"collection": items})
                 if url.path == "/api/marketplace" and qs.get("mine") == ["1"]:
                     mine = {a for a, _ in site.bids}
-                    bidding = [a for i, a in site.auctions.items() if i in mine and a["status"] == "active"]
+                    bidding = [a if a["status"] == "active" else dict(a, status="active", winner_id=None)
+                               for i, a in site.auctions.items()
+                               if i in mine and (a["status"] == "active" or site.stale_bidding)]
                     won = [a for a in site.auctions.values() if a["winner_id"] == ME]
                     selling = [dict(a, seller_id=ME) for a in site.selling]
                     selling += [a for a in site.auctions.values() if a["seller_id"] == ME and a["status"] == "active"]

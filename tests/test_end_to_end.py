@@ -1,4 +1,4 @@
-"""Parcours complet avec un vrai Chromium contre le faux site local (tests/fake_site.py)."""
+"""Parcours complet contre le faux site local (tests/fake_site.py)."""
 
 import json
 
@@ -775,6 +775,39 @@ def test_lost_auctions_are_announced(tmp_path):
     assert lost == ["❌ Perdue : Victor Hugo, remportée à 120 par un autre (max 100) ; recherche d'une autre enchère.",
                     "❌ Perdue : Victor Hugo, montée à 150, au-dessus de votre max (max 100) ; "
                     "recherche d'une autre enchère."]
+
+
+def test_lost_auction_still_listed_by_the_site_is_announced_once(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller.report import bid_lines
+    from wiki_seller.session import open_site
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    # Seule autre enchère au-dessus du max : rien d'autre à suivre, comme pour le cas réel.
+    auctions = [market_auction("s1", "Victor Hugo", 50, end_at=soon), market_auction("s2", "Victor Hugo", 150)]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site, \
+            FakeTelegram() as tg:
+        site.stale_bidding = True
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+        run_once(config)
+        assert site.bids == [("s1", 50)]
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        site.auctions["s1"].update(status="settled_sold", winner_id="rival", final_price=120, end_at=past,
+                                   current_bid=120, current_bidder_id="rival")
+        for _ in range(3):  # s1 reste dans « Mes enchères » : ni reprise, ni annoncée à nouveau
+            run_once(config)
+        assert site.bids == [("s1", 50)]
+        with open_site(config, False) as wm:
+            mine = wm.fetch_mine()
+        assert [(a["id"], a["status"]) for a in mine["bidding"]] == [("s1", "active")]
+        lines = bid_lines(config, mine, ME)
+    assert [t for t in tg.sent if t.startswith("❌ Perdue")] == [
+        "❌ Perdue : Victor Hugo, remportée à 120 par un autre (max 100) ; recherche d'une autre enchère."]
+    assert lines == []  # l'enchère finie n'est plus « en cours »
 
 
 def test_sale_with_requested_duration(tmp_path):

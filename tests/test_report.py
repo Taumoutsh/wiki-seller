@@ -43,7 +43,7 @@ def test_report_details_auctions_of_the_cards_to_buy(tmp_path):
     config.wanted_state_file.write_text(json.dumps({"cards": {
         "victor hugo": {"my_bid": {"auction": "v1", "amount": 80}, "step": 10},
         "loire": {"my_bid": {"auction": "l1", "amount": 90}}}}))
-    end = "2026-10-15T18:42:00+00:00"
+    end = "2030-10-15T18:42:00+00:00"
     mine = {"bidding": [
         {"id": "t1", "card": {"wikipedia_title": "Tour Eiffel"}, "current_bid": 300, "current_bidder_id": "me",
          "status": "active", "end_at": end},
@@ -59,9 +59,11 @@ def test_report_details_auctions_of_the_cards_to_buy(tmp_path):
                     "   ↳ surenchère à 110 juste avant la fin\n"
                     f"❌ Loire\n   dépassé : 90 → 100 · max 100 · fin {hm}\n"
                     "   ↳ abandonnée (au-dessus du max)")
-    later = datetime.fromisoformat(end) + timedelta(days=2)
+    earlier = datetime.fromisoformat(end) - timedelta(days=2)
     assert "fin " + datetime.fromisoformat(end).astimezone().strftime("%d/%m %H:%M") in bid_lines(
-        config, mine, "me", now=later)[0]
+        config, mine, "me", now=earlier)[0]
+    later = datetime.fromisoformat(end) + timedelta(seconds=1)
+    assert [b.split("\n")[0] for b in bid_lines(config, mine, "me", now=later)] == []  # finies
     stub = Stub()
     send_report(stub, config, stub, [], "me", on_demand=True, mine=mine)
     assert "\n\n<b>🛒 Achats en cours</b>\n✅ Tour Eiffel\n" in stub.sent[0] and "Pas voulue" not in stub.sent[0]

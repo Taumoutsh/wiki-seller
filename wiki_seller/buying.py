@@ -38,6 +38,7 @@ BID_RETRY_LIMIT = timedelta(minutes=2)
 # l'enchère est relue toutes les OUTCOME_POLL s, au plus OUTCOME_WAIT.
 OUTCOME_WAIT = timedelta(minutes=3)
 OUTCOME_POLL = 3
+LOST_KEPT = 50  # enchères perdues retenues par carte, pour ne les annoncer qu'une fois
 
 
 def watch_start(lead: timedelta) -> timedelta:
@@ -226,8 +227,12 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                 continue
             # Une seule enchère à la fois : si vous menez déjà une enchère de cette carte
             # dans « Mes enchères », c'est elle qu'on suit, et on ne mise nulle part ailleurs.
+            # Le site laisse un moment les enchères finies dans « Mes enchères » : celles déjà
+            # gagnées, perdues ou terminées ne sont pas reprises.
+            done = set(entry.get("won") or {}) | set(entry.get("lost") or [])
             mine_for_card = [a for a in bidding if normalize_name(auction_title(a)) == card.key
-                             and a.get("status", "active") == "active"]
+                             and a.get("status", "active") == "active" and a.get("id") not in done
+                             and not ended(a, buyer.now())]
             leading_here = [a for a in mine_for_card if buyer.leading(a)]
             auction_id = entry.get("auction_id")
             if leading_here and auction_id not in {a["id"] for a in leading_here}:
@@ -313,6 +318,13 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
         release_claims(config)
 
 
+def ended(auction: dict, now: datetime) -> bool:
+    end = parse_time(auction.get("end_at"))
+    if end is not None and end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return end is not None and end < now
+
+
 def _forget(entry: dict) -> None:
     entry.pop("my_bid", None)
     entry.pop("auction_id", None)
@@ -380,6 +392,10 @@ class _Buyer:
         if not force and entry.get("placed") != auction.get("id"):
             return
         entry.pop("placed", None)
+        lost = list(entry.get("lost") or [])
+        if auction.get("id") in lost:  # déjà annoncée
+            return
+        entry["lost"] = [*lost, auction.get("id")][-LOST_KEPT:]
         if auction.get("winner_id"):
             price = auction.get("final_price") or auction.get("current_bid")
             why = f"remportée à {price} par un autre"
