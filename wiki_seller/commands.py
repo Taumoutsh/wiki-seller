@@ -41,7 +41,7 @@ HELP_TEXT = ("Commandes :\n"
              "/buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur] : acheter une carte puis la "
              "revendre\n"
              "Prix « auto » (ou omis pour une nouvelle carte) : achat jusqu'à 90 % du prix du marché, vente à "
-             "110 %. « | » termine le nom : /buy Apollo 11 | x2\n"
+             "110 %. « ; » termine le nom : /buy Apollo 11; x2\n"
              "/market [cookies] : session Marché (comptes ayant accès au Marché), qui donne les prix de tous "
              "les comptes\n"
              "Options : x2 = 2 exemplaires ; 10m, 30m, 1h, 3h, 6h, 12h = durée de vente ; "
@@ -63,8 +63,8 @@ SETTINGS_COMMANDS = ("/settings", "/reglages", "/set", "/pause", "/resume", "/si
 LIST_COMMANDS = ("/list", "/safe", "/unsafe", "/buy", "/want", "/unbuy", "/sell", "/unsell", "/buyandsell")
 
 BUY_USAGE = ("Usage : /buy <carte> [prix max] [x2] [@vendeur], ex. /buy Tour Eiffel 500, "
-             "/buy Victor Hugo 120 x2 @Paul, /buy Tour Eiffel (prix auto) ou /buy Apollo 11 | 500 "
-             "(« | » après un nom qui finit par un nombre)")
+             "/buy Victor Hugo 120 x2 @Paul, /buy Tour Eiffel (prix auto) ou /buy Apollo 11; 500 "
+             "(« ; » après un nom qui finit par un nombre)")
 SELL_USAGE = "Usage : /sell <carte> [prix] [x2] [12h], ex. /sell Tour Eiffel 800 12h ou /sell Tour Eiffel (prix auto)"
 BUY_AND_SELL_USAGE = ("Usage : /buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur], "
                       "ex. /buyandsell Tour Eiffel 500 800 ou /buyandsell Tour Eiffel (prix auto)")

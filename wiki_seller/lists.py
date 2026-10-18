@@ -29,7 +29,7 @@ COPIES = re.compile(r"[x×](\d+)", re.I)
 AUTO = "auto"
 AUTO_BUY_RATIO = 0.9
 AUTO_SELL_RATIO = 1.1
-SEPARATOR = "|"  # termine le nom d'une carte (jamais dans un titre Wikipédia)
+SEPARATOR = ";"  # termine le nom d'une carte
 
 
 class ListError(Exception):
@@ -390,7 +390,7 @@ def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, .
 
     optional_prices : les prix peuvent manquer (None) ou s'écrire « auto » (AUTO), les
     premiers étant donnés d'abord : « Tour Eiffel 500 » pour deux prix → [500, None]. Le
-    séparateur « | » termine le nom : « Apollo 11 | x2 » → Apollo 11, sans prix."""
+    séparateur « ; » termine le nom : « Apollo 11; x2 » → Apollo 11, sans prix."""
     if optional_prices:
         return _parse_optional(args, prices, usage, allowed)
     words = args.split()

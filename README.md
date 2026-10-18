@@ -117,8 +117,8 @@ change seulement le nombre d'exemplaires) ; pour la passer en auto, écrivez `au
 (`/buy Tour Eiffel auto`).
 
 Les derniers nombres sont les prix : `/buy Apollo 11 500` vise « Apollo 11 » à 500 au
-plus, mais `/buy Apollo 11` vise « Apollo » à 11. **`|` termine le nom** (ce caractère
-n'existe dans aucun titre Wikipédia) : `/buy Apollo 11 | x2`, `/sell 1984 | 12h`. Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
+plus, mais `/buy Apollo 11` vise « Apollo » à 11. **`;` termine le nom** :
+`/buy Apollo 11; x2`, `/sell 1984; 12h`. Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
 modifications comptent dès la passe suivante. Tout autre message reçoit la liste des
 commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 

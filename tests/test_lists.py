@@ -198,12 +198,12 @@ def test_separator_ends_the_card_name():
     from wiki_seller.lists import AUTO, parse_card_command
 
     options = ("copies", "duree", "vendeur")
-    parsed = parse_card_command("Apollo 11 | x2", 1, "usage", options, optional_prices=True)
+    parsed = parse_card_command("Apollo 11; x2", 1, "usage", options, optional_prices=True)
     assert (parsed.name, parsed.prices, parsed.copies) == ("Apollo 11", [None], 2)
-    assert parse_card_command("Apollo 11|500 auto 12h", 2, "usage", options, optional_prices=True).prices == [500, AUTO]
-    assert parse_card_command("Apollo 11 |", 1, "usage", options, optional_prices=True).prices == [None]
-    assert parse_card_command("Apollo 11", 1, "usage", options, optional_prices=True).name == "Apollo"  # sans « | »
-    for bad in ("Apollo 11 | Lune 500", "| 500", "Apollo 11 | 500 600"):
+    assert parse_card_command("Apollo 11;500 auto 12h", 2, "usage", options, optional_prices=True).prices == [500, AUTO]
+    assert parse_card_command("Apollo 11 ;", 1, "usage", options, optional_prices=True).prices == [None]
+    assert parse_card_command("Apollo 11", 1, "usage", options, optional_prices=True).name == "Apollo"  # sans « ; »
+    for bad in ("Apollo 11; Lune 500", "; 500", "Apollo 11; 500 600"):
         with pytest.raises(ListError, match="usage"):
             parse_card_command(bad, 1, "usage", options, optional_prices=True)
 
