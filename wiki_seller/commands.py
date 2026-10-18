@@ -40,8 +40,8 @@ HELP_TEXT = ("Commandes :\n"
              "/sell <carte> [prix] [x2] [12h] · /unsell <carte> : vendre une carte à ce prix exact, en priorité\n"
              "/buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur] : acheter une carte puis la "
              "revendre\n"
-             "Prix omis ou « auto » : achat jusqu'à 90 % du prix du marché, vente à 110 % (pour un nom qui "
-             "finit par un nombre, écrivez le prix ou « auto »)\n"
+             "Prix « auto » (ou omis pour une nouvelle carte) : achat jusqu'à 90 % du prix du marché, vente à "
+             "110 %. « | » termine le nom : /buy Apollo 11 | x2\n"
              "/market [cookies] : session Marché (comptes ayant accès au Marché), qui donne les prix de tous "
              "les comptes\n"
              "Options : x2 = 2 exemplaires ; 10m, 30m, 1h, 3h, 6h, 12h = durée de vente ; "
@@ -62,8 +62,9 @@ WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouve
 SETTINGS_COMMANDS = ("/settings", "/reglages", "/set", "/pause", "/resume", "/simulation")
 LIST_COMMANDS = ("/list", "/safe", "/unsafe", "/buy", "/want", "/unbuy", "/sell", "/unsell", "/buyandsell")
 
-BUY_USAGE = ("Usage : /buy <carte> [prix max] [x2] [@vendeur], ex. /buy Apollo 11 500, "
-             "/buy Victor Hugo 120 x2 @Paul ou /buy Tour Eiffel (prix auto)")
+BUY_USAGE = ("Usage : /buy <carte> [prix max] [x2] [@vendeur], ex. /buy Tour Eiffel 500, "
+             "/buy Victor Hugo 120 x2 @Paul, /buy Tour Eiffel (prix auto) ou /buy Apollo 11 | 500 "
+             "(« | » après un nom qui finit par un nombre)")
 SELL_USAGE = "Usage : /sell <carte> [prix] [x2] [12h], ex. /sell Tour Eiffel 800 12h ou /sell Tour Eiffel (prix auto)"
 BUY_AND_SELL_USAGE = ("Usage : /buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur], "
                       "ex. /buyandsell Tour Eiffel 500 800 ou /buyandsell Tour Eiffel (prix auto)")
@@ -228,10 +229,13 @@ def _run(config, command: str, args: str) -> str:
     if command == "/buyandsell":
         parsed = parse_card_command(args, 2, BUY_AND_SELL_USAGE, ("copies", "duree", "vendeur"), optional_prices=True)
         price, resale = parsed.prices
+        if resale is None:  # revente au prix déjà demandé, sinon auto
+            known = next((c for c in buy_cards(config) if c.key == normalize_name(parsed.name)), None)
+            resale = (known.sell_price if known else None) or AUTO
         status, card = set_buy(config, parsed.name, price, parsed.copies, sell_price=resale, seller=parsed.seller,
                                sell_duration=parsed.duration)
         warning = "\n⚠️ Prix de vente sous le prix d'achat maximum." \
-            if AUTO not in (price, resale) and resale < price else ""
+            if AUTO not in (card.max_price, card.sell_price) and card.sell_price < card.max_price else ""
         return (f"🔁 « {card.name} » {status} dans les achats ({_max(card.max_price)}, {card.copies} "
                 f"exemplaire(s){_from(card.seller)}), revendue à {_sell(card.sell_price)}{_for(card.sell_duration)} "
                 f"une fois obtenue.{warning}")

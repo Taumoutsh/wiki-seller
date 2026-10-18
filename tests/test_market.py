@@ -27,7 +27,8 @@ def test_isolated_money_transfer_is_removed():
 
 def test_last_sales_out_of_line_mean_a_new_value():
     assert clean_price(sales(100, 100, 102, 98, 100, 101, 300, 320), NOW) == MarketPrice(310, 2, 6, True)
-    assert clean_price(sales(100, 100, 102, 98, 100, 500), NOW) == MarketPrice(500, 1, 5, True)  # dernière vente
+    # Une seule dernière vente aberrante : peut-être un échange d'argent, écartée en attendant.
+    assert clean_price(sales(100, 100, 102, 98, 100, 500), NOW) == MarketPrice(100, 5, 1, False)
     assert clean_price(sales(100, 100, 102, 98, 100, 30, 32), NOW) == MarketPrice(31, 2, 5, True)  # baisse
     # Une vente haute puis une basse : pas de sens commun, les deux sont écartées.
     assert clean_price(sales(100, 100, 102, 98, 100, 500, 20, 101), NOW) == MarketPrice(pytest.approx(601 / 6), 6, 2, False)

@@ -29,6 +29,7 @@ COPIES = re.compile(r"[x×](\d+)", re.I)
 AUTO = "auto"
 AUTO_BUY_RATIO = 0.9
 AUTO_SELL_RATIO = 1.1
+SEPARATOR = "|"  # termine le nom d'une carte (jamais dans un titre Wikipédia)
 
 
 class ListError(Exception):
@@ -197,9 +198,11 @@ def _buy_card(entry: dict) -> BuyCard:
                    entry.get("seller", ""), entry.get("sell_duration", ""))
 
 
-def set_buy(config, name: str, max_price: int | str, copies: int | None = None, sell_price: int | str | None = None,
-            seller: str | None = None, sell_duration: str | None = None) -> tuple[str, BuyCard]:
-    """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées).
+def set_buy(config, name: str, max_price: int | str | None, copies: int | None = None,
+            sell_price: int | str | None = None, seller: str | None = None,
+            sell_duration: str | None = None) -> tuple[str, BuyCard]:
+    """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées) ; sans
+    prix max, celui de la liste est gardé (AUTO pour une nouvelle carte).
     Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
     with LISTS_LOCK:
         data = _buy_raw(config)
@@ -209,7 +212,8 @@ def set_buy(config, name: str, max_price: int | str, copies: int | None = None, 
             entry = {"name": name}
             data.append(entry)
             _forget_purchase(config, name)  # une carte déjà obtenue peut être rachetée
-        entry["max_price"] = max_price
+        if max_price is not None or "max_price" not in entry:
+            entry["max_price"] = AUTO if max_price is None else max_price
         if copies:
             entry["copies"] = copies
         if sell_price:
@@ -281,20 +285,23 @@ def sell_cards(config) -> list[SellCard]:
         return [_sell_card(e) for e in _sell_raw(config)]
 
 
-def set_sell(config, name: str, price: int | str, copies: int | None = None,
+def set_sell(config, name: str, price: int | str | None, copies: int | None = None,
              duration: str | None = None) -> tuple[str, SellCard]:
     """Ajoute une carte aux ventes, ou met à jour son prix (les exemplaires indiqués
-    s'ajoutent alors à ceux restant à vendre, la durée indiquée remplace l'ancienne).
+    s'ajoutent alors à ceux restant à vendre, la durée indiquée remplace l'ancienne) ;
+    sans prix, celui de la liste est gardé (AUTO pour une nouvelle carte).
     Renvoie (statut, carte)."""
     with LISTS_LOCK:
         data = _sell_raw(config)
         entry = next((e for e in data if normalize_name(e["name"]) == normalize_name(name)), None)
         if entry is None:
-            entry = {"name": name, "price": price, "copies": copies or 1, "added_at": now_utc().isoformat()}
+            entry = {"name": name, "price": AUTO if price is None else price, "copies": copies or 1,
+                     "added_at": now_utc().isoformat()}
             data.append(entry)
             status = "ajoutée"
         else:
-            entry["price"] = price
+            if price is not None:
+                entry["price"] = price
             if copies:
                 entry["copies"] = entry.get("copies", 1) + copies
             status = "mise à jour"
@@ -381,8 +388,9 @@ def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, .
     (vendeur). Le nom peut lui-même finir par un nombre : « Apollo 11 500 » →
     Apollo 11 à 500 ; « Victor Hugo 120 x2 12h » → 2 exemplaires, vendus 12h.
 
-    optional_prices : les prix peuvent manquer ou s'écrire « auto » (AUTO), les premiers
-    étant donnés d'abord : « Tour Eiffel 500 » pour deux prix → [500, AUTO]."""
+    optional_prices : les prix peuvent manquer (None) ou s'écrire « auto » (AUTO), les
+    premiers étant donnés d'abord : « Tour Eiffel 500 » pour deux prix → [500, None]. Le
+    séparateur « | » termine le nom : « Apollo 11 | x2 » → Apollo 11, sans prix."""
     if optional_prices:
         return _parse_optional(args, prices, usage, allowed)
     words = args.split()
@@ -406,21 +414,29 @@ def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, .
 
 
 def _parse_optional(args: str, prices: int, usage: str, allowed: tuple[str, ...]) -> CardArgs:
-    words = args.split()
+    name, separated, rest = args.partition(SEPARATOR)
+    words = name.split()
+    tail = rest.split() if separated else []
     numbers: list[int | str] = []
     options: dict[str, object] = {}
-    while len(words) > 1:  # prix et options de la fin, sans jamais vider le nom
-        word = words[-1]
+
+    def take(word: str) -> bool:  # prix ou option, lus depuis la fin
         if len(numbers) < prices and (word.lower() == AUTO or (word.isdigit() and int(word) >= 1)):
             numbers.insert(0, AUTO if word.lower() == AUTO else int(word))
-        elif (option := _option(word, allowed)) and option[0] not in options:
+            return True
+        if (option := _option(word, allowed)) and option[0] not in options:
             options[option[0]] = option[1]
-        else:
-            break
+            return True
+        return False
+
+    while tail:  # après le séparateur : seulement des prix et des options
+        if not take(tail.pop()):
+            raise ListError(usage)
+    while not separated and len(words) > 1 and take(words[-1]):  # sans jamais vider le nom
         words.pop()
     if not words or options.get("copies") == 0 or (words[-1].isdigit() and int(words[-1]) == 0):
         raise ListError(usage)
-    return CardArgs(" ".join(words), numbers + [AUTO] * (prices - len(numbers)), options.get("copies"),
+    return CardArgs(" ".join(words), numbers + [None] * (prices - len(numbers)), options.get("copies"),
                     _duration(options.get("duree")), options.get("vendeur", ""))
 
 

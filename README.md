@@ -108,15 +108,17 @@ quel ordre : `x2` (2 exemplaires), `12h` (durée de vente : `10m`, `30m`, `1h`, 
 `12h` ; `/sell` et `/buyandsell`), `@Pseudo` (n'acheter qu'à ce vendeur ; `/buy` et
 `/buyandsell`). Exemple : `/buyandsell Tour Eiffel 500 800 x2 12h @Paul`.
 
-**Prix omis ou `auto` :** calculé à chaque passe d'après le prix du marché (voir « Prix
-des cartes ») : achat jusqu'à **90 %**, vente à **110 %**. `/buy Tour Eiffel`,
-`/sell Tour Eiffel 12h`, `/buyandsell Tour Eiffel` (les deux auto) ou
-`/buyandsell Tour Eiffel 500` (achat à 500 au plus, revente auto). Une carte déjà dans la
-liste renvoyée sans prix passe en auto.
+**Prix `auto` :** calculé à chaque passe d'après le prix du marché (voir « Prix des
+cartes ») : achat jusqu'à **90 %**, vente à **110 %**. Une **nouvelle** carte sans prix
+est en auto : `/buy Tour Eiffel`, `/sell Tour Eiffel 12h`, `/buyandsell Tour Eiffel` (les
+deux auto) ou `/buyandsell Tour Eiffel 500` (achat à 500 au plus, revente auto). Une carte
+**déjà dans la liste** garde son prix si vous n'en donnez pas (`/buy Tour Eiffel x3`
+change seulement le nombre d'exemplaires) ; pour la passer en auto, écrivez `auto`
+(`/buy Tour Eiffel auto`).
 
-Les derniers nombres sont toujours les prix : `/buy Apollo 11 500` vise « Apollo 11 » à
-500 au plus, mais `/buy Apollo 11` vise « Apollo » à 11 : pour un nom qui finit par un
-nombre, écrivez le prix ou `auto` (`/buy Apollo 11 auto`). Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
+Les derniers nombres sont les prix : `/buy Apollo 11 500` vise « Apollo 11 » à 500 au
+plus, mais `/buy Apollo 11` vise « Apollo » à 11. **`|` termine le nom** (ce caractère
+n'existe dans aucun titre Wikipédia) : `/buy Apollo 11 | x2`, `/sell 1984 | 12h`. Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
 modifications comptent dès la passe suivante. Tout autre message reçoit la liste des
 commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 
@@ -261,8 +263,10 @@ est calculé sur les ventes des 30 derniers jours (50 au plus) :
 - une vente est **aberrante** si elle s'écarte de la médiane de plus de 3 écarts
   « robustes » (écart absolu médian, au moins 10 % de la médiane) : un échange d'argent
   ne fausse pas le calcul de l'écart lui-même, comme il fausserait un écart type ;
-- si **les dernières ventes** sont aberrantes, toutes dans le même sens (dès la toute
-  dernière), la carte **change de valeur** : le prix est la moyenne de ces ventes ;
+- si **les dernières ventes** (au moins 2) sont aberrantes, toutes dans le même sens, la
+  carte **change de valeur** : le prix est la moyenne de ces ventes. Une seule dernière
+  vente aberrante peut être un échange d'argent : elle est écartée jusqu'à ce qu'une
+  autre la confirme (sans quoi un `/buy` auto pourrait miser sur un prix gonflé) ;
 - sinon les ventes aberrantes isolées (échanges d'argent) sont écartées, et le prix est la
   **moyenne des autres** ;
 - moins de 3 ventes récentes : la moyenne du site.

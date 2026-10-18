@@ -192,3 +192,29 @@ def test_sale_duration_and_seller_are_kept(config):
     assert [(c.name, c.price, c.duration) for c in sell_cards(config)] == [("Tour Eiffel", 800, "12h")]
     set_sell(config, "Tour Eiffel", 900, duration="30m")
     assert sell_cards(config)[0].duration == "30m"
+
+
+def test_separator_ends_the_card_name():
+    from wiki_seller.lists import AUTO, parse_card_command
+
+    options = ("copies", "duree", "vendeur")
+    parsed = parse_card_command("Apollo 11 | x2", 1, "usage", options, optional_prices=True)
+    assert (parsed.name, parsed.prices, parsed.copies) == ("Apollo 11", [None], 2)
+    assert parse_card_command("Apollo 11|500 auto 12h", 2, "usage", options, optional_prices=True).prices == [500, AUTO]
+    assert parse_card_command("Apollo 11 |", 1, "usage", options, optional_prices=True).prices == [None]
+    assert parse_card_command("Apollo 11", 1, "usage", options, optional_prices=True).name == "Apollo"  # sans « | »
+    for bad in ("Apollo 11 | Lune 500", "| 500", "Apollo 11 | 500 600"):
+        with pytest.raises(ListError, match="usage"):
+            parse_card_command(bad, 1, "usage", options, optional_prices=True)
+
+
+def test_price_left_out_keeps_the_price_of_the_list(config):
+    from wiki_seller.lists import AUTO
+
+    set_buy(config, "Tour Eiffel", 500)
+    assert set_buy(config, "Tour Eiffel", None, 3) == ("mise à jour", BuyCard("Tour Eiffel", 500, 3))
+    assert set_buy(config, "Pomme", None)[1].max_price == AUTO  # nouvelle carte : prix auto
+    set_sell(config, "Loire", 80)
+    assert set_sell(config, "Loire", None, 2)[1].price == 80
+    assert set_sell(config, "Rhône", None)[1].price == AUTO
+    assert set_sell(config, "Loire", AUTO)[1].price == AUTO  # « auto » écrit : prix auto

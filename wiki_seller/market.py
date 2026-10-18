@@ -7,8 +7,9 @@ Prix nettoyé, par rareté, sur les ventes des 30 derniers jours (50 au plus) :
 - une vente est aberrante si elle s'écarte de la médiane de plus de 3 écarts robustes
   (écart absolu médian, au moins 10 % de la médiane) : un écart type ordinaire serait
   gonflé par la vente aberrante elle-même ;
-- si les dernières ventes sont aberrantes, toutes dans le même sens, la carte change de
-  valeur : le prix est leur moyenne ;
+- si les dernières ventes (au moins 2) sont aberrantes, toutes dans le même sens, la
+  carte change de valeur : le prix est leur moyenne ; une seule dernière vente aberrante
+  peut être un échange d'argent : elle est écartée, jusqu'à ce qu'une autre la confirme ;
 - sinon, les ventes aberrantes isolées (échanges d'argent) sont écartées et le prix est
   la moyenne des autres.
 Moins de 3 ventes : pas de prix nettoyé, la moyenne du site sert."""
@@ -32,7 +33,7 @@ MAX_SALES = 50
 MIN_SALES = 3
 OUTLIER_SPREAD = 3  # écarts robustes au-delà desquels une vente est aberrante
 MIN_SPREAD_RATIO = 0.1  # écart robuste minimal, en part de la médiane (prix très réguliers)
-TREND_MIN_SALES = 1  # dernières ventes aberrantes (même sens) pour conclure à un changement de valeur
+TREND_MIN_SALES = 2  # dernières ventes aberrantes (même sens) pour conclure à un changement de valeur
 MAD_TO_STDEV = 1.4826  # écart absolu médian → écart type, pour des prix sans valeurs aberrantes
 
 
