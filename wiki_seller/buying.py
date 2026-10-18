@@ -6,16 +6,20 @@ est enregistré dans state/wanted_state.json.
 Une fois tous les exemplaires obtenus, la carte quitte la liste d'achat et devient
 protégée, ou part dans les ventes au prix demandé (/buyandsell)."""
 
+import dataclasses
 import logging
+import math
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from .config import Config
-from .lists import BuyCard, buy_cards, complete_purchase
+from .lists import AUTO, AUTO_BUY_RATIO, BuyCard, buy_cards, complete_purchase
+from .pricing import PriceReader
 from .selection import normalize_name
-from .site import SiteError, min_bid
+from .site import SiteError, entry_rarity, min_bid
 from .state import parse_time, read_json, write_json
 from .telegram import notify
 
@@ -225,6 +229,9 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
             if buyer.count_wins(card, entry, won_since(mine, card, parse_time(entry["since"]))):
                 buyer.complete(card)
                 continue
+            card = buyer.resolve_max(card, entry, snipe_only)  # prix max « auto »
+            if card is None:
+                continue
             # Une seule enchère à la fois : si vous menez déjà une enchère de cette carte
             # dans « Mes enchères », c'est elle qu'on suit, et on ne mise nulle part ailleurs.
             # Le site laisse un moment les enchères finies dans « Mes enchères » : celles déjà
@@ -318,6 +325,13 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
         release_claims(config)
 
 
+def card_ref(auction: dict) -> dict | None:
+    """{"id", "rarity"} de la carte d'une enchère, pour lire son prix."""
+    card = auction.get("card") if isinstance(auction.get("card"), dict) else {}
+    card_id = auction.get("card_id") or card.get("id")
+    return {"id": str(card_id), "rarity": entry_rarity(auction)} if card_id else None
+
+
 def ended(auction: dict, now: datetime) -> bool:
     end = parse_time(auction.get("end_at"))
     if end is not None and end.tzinfo is None:
@@ -376,6 +390,45 @@ class _Buyer:
         del self.state.data["cards"][card.key]  # redemandée plus tard, elle repartira de zéro
         log.info("Achat : %s", message)
         notify(self.config, message)
+
+    def resolve_max(self, card: BuyCard, entry: dict, snipe_only: bool) -> BuyCard | None:
+        """Prix max « auto » : AUTO_BUY_RATIO du prix du marché, recalculé à chaque passe
+        (pas en fin d'enchère : la dernière valeur sert). None tant qu'il est inconnu."""
+        if card.max_price != AUTO:
+            return card
+        if not snipe_only and (value := self._auto_max(card, entry)):
+            entry["auto_max"] = value
+        if not entry.get("auto_max"):
+            log.info("Achat : « %s » — prix du marché inconnu pour l'instant ; carte laissée de côté.", card.name)
+            return None
+        return dataclasses.replace(card, max_price=entry["auto_max"])
+
+    def _auto_max(self, card: BuyCard, entry: dict) -> int | None:
+        ref = entry.get("card_ref")
+        if not ref:  # carte jamais vue : son identifiant vient d'une enchère en cours
+            try:
+                found = self.site.search_auctions(card.name)
+            except SiteError as exc:
+                log.warning("Achat : « %s » — enchères illisibles (%s).", card.name, exc)
+                return None
+            ref = next((r for a in found if normalize_name(auction_title(a)) == card.key and (r := card_ref(a))),
+                       None)
+            if ref is None:
+                return None
+            entry["card_ref"] = ref
+        reader = PriceReader(self.site, self.config)
+        try:
+            _, price = reader.read(SimpleNamespace(card_id=ref["id"], rarity=ref.get("rarity") or None,
+                                                   title=card.name))
+        finally:
+            reader.save()
+        if not price:
+            return None
+        value = max(1, math.floor(price * AUTO_BUY_RATIO))
+        if value != entry.get("auto_max"):
+            log.info("Achat : « %s » — prix max auto %d (%d %% du prix du marché, %.0f).", card.name, value,
+                     round(AUTO_BUY_RATIO * 100), price)
+        return value
 
     def blocked_by_fellow(self, card: BuyCard, entry: dict) -> None:
         """Seules enchères possibles déjà suivies par un autre compte du bot : prévenu une fois."""

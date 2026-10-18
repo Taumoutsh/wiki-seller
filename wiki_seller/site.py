@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 COLLECTION_PAGE_GUARD = 500
 DEFAULT_MAX_AUCTIONS = 5
 MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
+MARKET_SALES_PATH = "/api/marketplace/cards/{card_id}/sales"  # détail des ventes (Marché)
 API_TIMEOUT = 60  # s : une requête à l'API sans réponse est abandonnée
 QUICK_TIMEOUT = 5  # s : lecture d'une enchère pendant sa fin
 BID_TIMEOUT = 8  # s : mise sans réponse, vérifiée puis renvoyée
@@ -406,6 +407,11 @@ class WikiMasters:
         except SiteError as exc:
             raise PriceApiUnavailable(str(exc), transient=True) from exc
         return self._average_from(data, rarity)
+
+    def fetch_market_sales(self, card_id: str) -> object:
+        """Détail des ventes de la carte (comptes ayant accès au Marché) ; SessionExpired
+        si le site le refuse."""
+        return self.api_get_ok(MARKET_SALES_PATH.format(card_id=card_id))
 
     @staticmethod
     def _average_from(data: object, rarity: str | None) -> float | None:

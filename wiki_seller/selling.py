@@ -5,6 +5,7 @@ moins chère, à PRICE_RATIO du prix moyen."""
 
 import dataclasses
 import logging
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -12,8 +13,8 @@ from datetime import datetime
 
 from .buying import WantedState, auction_title, my_user_id
 from .config import Config
-from .lists import ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
-from .pricing import fetch_averages
+from .lists import AUTO, AUTO_SELL_RATIO, ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
+from .pricing import PriceReader, fetch_averages
 from .selection import (
     PROTECTED_COPIES_TO_KEEP,
     CardGroup,
@@ -175,8 +176,9 @@ def record_sales(config: Config, cards: list[SellCard], history: list, my_id: st
 
 
 def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup], selling: list[dict],
-                   safe_names: set[str], dry_run: bool) -> list[SaleItem]:
-    """Exemplaires des cartes à vendre à mettre en vente, au prix demandé. Une carte
+                   safe_names: set[str], dry_run: bool, auto_price=None) -> list[SaleItem]:
+    """Exemplaires des cartes à vendre à mettre en vente, au prix demandé (prix « auto » :
+    auto_price(carte de la collection), None tant que le prix du marché est inconnu). Une carte
     protégée en un seul exemplaire quitte les cartes protégées ; en plusieurs, elle le
     reste et le dernier exemplaire est gardé. Une carte absente de la collection est
     signalée une fois et reste dans la liste."""
@@ -207,9 +209,24 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
             log.info("Vente demandée : « %s » — %d exemplaire(s) déjà en vente.", card.name, listed)
             continue
         copy_ids = tuple(c for g in matching for c in copies_not_on_sale(g, selling))
-        items.append(SaleItem(matching[0].card_id, matching[0].title, matching[0].rarity, 0, card.price,
+        price = card.price
+        if price == AUTO:
+            price = auto_price(matching[0]) if auto_price else None
+            if not price:
+                log.info("Vente demandée : « %s » — prix du marché inconnu pour l'instant ; vente reportée.",
+                         card.name)
+                continue
+            log.info("Vente demandée : « %s » à %d (%d %% du prix du marché).", card.name, price,
+                     round(AUTO_SELL_RATIO * 100))
+        items.append(SaleItem(matching[0].card_id, matching[0].title, matching[0].rarity, 0, price,
                               count, copy_ids, exact=True, duration=card.duration))
     return items
+
+
+def auto_sell_price(reader: PriceReader, group: CardGroup) -> int | None:
+    """Prix de vente « auto » : AUTO_SELL_RATIO du prix du marché."""
+    _, price = reader.read(group)
+    return max(1, math.floor(price * AUTO_SELL_RATIO)) if price else None
 
 
 def _settle_protection(config: Config, card: SellCard, keep_one: bool, owned: int, safe_names: set[str],
@@ -258,7 +275,12 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
     listings = _Listings(site, config, dry_run, market.free_slots, my_ids)
     if priority:
         groups = parse_collection(entries, excluded_copy_ids=in_trade)
-        items = priority_items(config, priority, groups, market.selling, safe_names, dry_run)
+        reader = PriceReader(site, config)
+        try:
+            items = priority_items(config, priority, groups, market.selling, safe_names, dry_run,
+                                   lambda group: auto_sell_price(reader, group))
+        finally:
+            reader.save()
         if items:
             log.info("Ventes demandées : %s", ", ".join(f"{i.title} ×{i.copies_to_sell} à {i.price}" for i in items))
         _list_all(listings, items)

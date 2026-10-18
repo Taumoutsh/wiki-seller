@@ -1,12 +1,17 @@
-"""Prix moyens des cartes, partagés par la vente et la défausse : cache
-state/price_cache.json (PRICE_CACHE_HOURS), sinon l'API du site, carte par carte."""
+"""Prix des cartes, partagés par tous les comptes (vente, défausse, prix automatiques
+des achats et ventes) : cache state/price_cache.json (cache_prix), sinon le prix nettoyé
+du Marché (market.py) s'il y a une session Marché, sinon la moyenne donnée par le site,
+carte par carte."""
 
 import logging
 import threading
 import time
+from datetime import timedelta
 
+from . import market
 from .config import Config
 from .site import PriceApiUnavailable, WikiMasters
+from .market import MarketUnavailable
 from .state import now_utc, read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -15,6 +20,8 @@ SAVE_EVERY = 50  # prix lus entre deux écritures du cache
 RETRY_PAUSE = 30  # s de pause après un refus passager de l'API des prix
 FAILURES_BEFORE_GIVING_UP = 5  # refus passagers de suite avant d'abandonner l'API des prix
 REQUEST_PAUSE = 0.3  # s entre deux lectures de prix
+MARKET_FAILURES_BEFORE_GIVING_UP = 3  # échecs du Marché de suite avant la moyenne du site seule
+FALLBACK_TTL = timedelta(hours=1)  # moyenne du site prise faute de Marché : relue plus tôt
 _CACHE_LOCK = threading.Lock()
 
 
@@ -25,7 +32,9 @@ def cache_file(config: Config):
 def load_price_cache(config: Config) -> dict:
     cache = read_json(cache_file(config), {})
     limit = (now_utc() - config.price_cache_ttl).isoformat()
-    return {k: v for k, v in cache.items() if isinstance(v, dict) and v.get("at", "") > limit}
+    fallback_limit = max(limit, (now_utc() - FALLBACK_TTL).isoformat())
+    return {k: v for k, v in cache.items()
+            if isinstance(v, dict) and v.get("at", "") > (fallback_limit if v.get("fallback") else limit)}
 
 
 def pause(seconds: float, should_stop) -> bool:
@@ -54,6 +63,8 @@ class PriceReader:
         self.fetched = 0  # prix demandés au site
         self.seconds = 0.0  # temps passé à les demander
         self.retries_at_start = site.retries
+        self.market_ok = True
+        self.market_failures = 0  # échecs du Marché de suite
 
     def read(self, group, should_stop=lambda: False) -> tuple[str, float | None]:
         """(OK, prix ou None si aucune vente connue), (UNKNOWN, None) si le prix n'a pas
@@ -66,6 +77,10 @@ class PriceReader:
         if should_stop():
             return self.STOPPED, None
         started = time.monotonic()
+        found, fallback = self._market(group)
+        if found is not None:
+            self.seconds += time.monotonic() - started
+            return self._keep(key, {"average": found.price, "source": "marche"})
         try:
             average = self.site.fetch_average(group.card_id, group.rarity)
         except PriceApiUnavailable as exc:
@@ -81,12 +96,40 @@ class PriceReader:
         finally:
             self.seconds += time.monotonic() - started
         self.failures = 0
+        return self._keep(key, {"average": average, "source": "moyenne", **({"fallback": True} if fallback else {})})
+
+    def _keep(self, key: str, entry: dict) -> tuple[str, float | None]:
         self.fetched += 1
-        self.cache[key] = {"average": average, "at": now_utc().isoformat()}
+        self.cache[key] = {**entry, "at": now_utc().isoformat()}
         if self.fetched % SAVE_EVERY == 0:
             self.save()  # une passe interrompue ne perd pas les prix déjà lus
         time.sleep(REQUEST_PAUSE)
-        return self.OK, average
+        return self.OK, entry["average"]
+
+    def _market(self, group) -> tuple[market.MarketPrice | None, bool]:
+        """(prix nettoyé du Marché ou None, True si le Marché aurait dû répondre : la
+        moyenne du site prise à la place sera relue plus tôt)."""
+        if not market.configured(self.config):
+            return None, market.owner(self.config) is not None  # session Marché expirée : à renouveler
+        if not self.market_ok:
+            return None, True
+        try:
+            found = market.market_price(self.config, group.card_id, group.rarity)
+        except MarketUnavailable as exc:
+            self.market_failures += 1
+            if self.market_failures >= MARKET_FAILURES_BEFORE_GIVING_UP or not market.configured(self.config):
+                log.warning("Marché indisponible (%s) : moyenne du site jusqu'à la prochaine fois.", exc)
+                self.market_ok = False
+            else:
+                log.info("Marché : ventes de « %s » non lues (%s) ; moyenne du site.", group.title, exc)
+            return None, True
+        self.market_failures = 0
+        if found is None:
+            log.info("Marché : trop peu de ventes récentes de « %s » ; moyenne du site.", group.title)
+        else:
+            log.info("Marché : « %s » à %.0f (%d vente(s) retenue(s), %d écartée(s)%s).", group.title, found.price,
+                     found.sales, found.removed, ", changement de valeur" if found.trend else "")
+        return found, False
 
     def stats(self) -> str:
         """« 120 prix demandés au site, 7,9 s en moyenne, 85 nouvel(s) essai(s) après refus »."""

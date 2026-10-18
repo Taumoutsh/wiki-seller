@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from html import escape
 
 from .buying import auction_title, ended
-from .lists import ListError, buy_cards
+from .lists import AUTO, ListError, buy_cards
 from .selection import normalize_name
 from .site import min_bid
 from .state import now_utc, parse_time, read_json, write_json
@@ -94,7 +94,10 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
         entry = tracked.get(card.key) or {}
         current = auction.get("current_bid")
         end = parse_time(auction.get("end_at"))
-        details = [f"max {money(card.max_price)}"] + ([f"fin {when(end, now)}"] if end else [])
+        max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
+        limit = f"max {money(max_price)}" if max_price else "max auto"
+        details = [limit + (" (auto)" if max_price and card.max_price == AUTO else "")]
+        details += [f"fin {when(end, now)}"] if end else []
         name = escape(card.name)
         if my_id and auction.get("current_bidder_id") == my_id:
             blocks.append(f"✅ {name}\n{INDENT}" + " · ".join([f"en tête à {money(current)}", *details]))
@@ -106,7 +109,7 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
             continue
         outbid = f"dépassé : {money(placed)} → {money(current)}" if placed else f"dépassé à {money(current)}"
         following = min_bid(auction)
-        if following > card.max_price:
+        if max_price and following > max_price:
             icon, plan = "❌", "abandonnée (au-dessus du max)"
         else:
             icon, plan = "⚠️", f"surenchère à {money(following)} juste avant la fin"

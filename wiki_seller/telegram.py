@@ -264,7 +264,8 @@ class CommandListener:
                 _INBOX.notify_all()
                 return
         from . import accounts
-        from .commands import ADMIN_COMMANDS, SETTINGS_COMMANDS, help_text, run_admin_command, run_settings_command
+        from .commands import (ADMIN_COMMANDS, SETTINGS_COMMANDS, help_text, run_admin_command, run_market_command,
+                               run_settings_command)
 
         reply = self.bot.for_chat(chat)
         text = message.get("text") or ""
@@ -281,6 +282,11 @@ class CommandListener:
             if session_cookie_names(text):
                 self._delete(reply, message)
             reply.send(UNKNOWN_TEXT.format(chat=chat))
+        elif command == "/market" and self.config is not None:
+            if session_cookie_names(text):
+                self._delete(reply, message)
+                reply.send("⏳ Session Marché reçue : vérification…")
+            reply.send(run_market_command(self.config, chat, args))
         elif session_cookie_names(text):
             self._delete(reply, message)
             if account is None:

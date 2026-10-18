@@ -95,9 +95,10 @@ s'ils ne fonctionnent pas.
 | `/ventes` (ou `/historique`) | Vos enchères terminées telles que le site les renvoie (40 au plus) : ✅ vendue, ❌ invendue, période couverte |
 | `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
 | `/safe <carte>` · `/unsafe <carte>` | Protège une carte (jamais défaussée, un exemplaire toujours gardé), ou la retire des protégées |
-| `/buy <carte> <prix max>` · `/unbuy <carte>` | Achète la carte à ce prix au plus (voir « Achats ») ; protégée une fois obtenue |
-| `/sell <carte> <prix>` · `/unsell <carte>` | Vend la carte à ce prix exact, en priorité, jusqu'à la vente (voir « Ventes à prix fixé ») |
-| `/buyandsell <carte> <prix max> <prix de vente>` | Achète la carte, puis la revend à ce prix |
+| `/buy <carte> [prix max]` · `/unbuy <carte>` | Achète la carte à ce prix au plus (voir « Achats ») ; protégée une fois obtenue |
+| `/sell <carte> [prix]` · `/unsell <carte>` | Vend la carte à ce prix exact, en priorité, jusqu'à la vente (voir « Ventes à prix fixé ») |
+| `/buyandsell <carte> [prix max] [prix de vente]` | Achète la carte, puis la revend à ce prix |
+| `/market [cookies]` | État de la session Marché, ou nouvelle session Marché (voir « Prix des cartes ») |
 | `/settings` · `/set <réglage> <valeur>` | Réglages du compte (voir « Réglages par compte ») |
 | `/pause` · `/resume` | Arrête ou reprend ventes, achats et défausse (reprise dans la minute) |
 | `/simulation on\|off` | Tout simuler, sans rien envoyer au site |
@@ -107,8 +108,15 @@ quel ordre : `x2` (2 exemplaires), `12h` (durée de vente : `10m`, `30m`, `1h`, 
 `12h` ; `/sell` et `/buyandsell`), `@Pseudo` (n'acheter qu'à ce vendeur ; `/buy` et
 `/buyandsell`). Exemple : `/buyandsell Tour Eiffel 500 800 x2 12h @Paul`.
 
+**Prix omis ou `auto` :** calculé à chaque passe d'après le prix du marché (voir « Prix
+des cartes ») : achat jusqu'à **90 %**, vente à **110 %**. `/buy Tour Eiffel`,
+`/sell Tour Eiffel 12h`, `/buyandsell Tour Eiffel` (les deux auto) ou
+`/buyandsell Tour Eiffel 500` (achat à 500 au plus, revente auto). Une carte déjà dans la
+liste renvoyée sans prix passe en auto.
+
 Les derniers nombres sont toujours les prix : `/buy Apollo 11 500` vise « Apollo 11 » à
-500 au plus. Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
+500 au plus, mais `/buy Apollo 11` vise « Apollo » à 11 : pour un nom qui finit par un
+nombre, écrivez le prix ou `auto` (`/buy Apollo 11 auto`). Les noms sont comparés sans majuscules, accents ni espaces en trop. Les
 modifications comptent dès la passe suivante. Tout autre message reçoit la liste des
 commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 
@@ -118,7 +126,7 @@ commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 |---|---|
 | `/adduser <chat_id> <nom>` | Ouvre l'accès ; la personne reçoit un message de bienvenue |
 | `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
-| `/users` | Comptes : état (actif, pause, simulation), session, nombre de cartes par liste |
+| `/users` | Comptes : état (actif, pause, simulation), session, accès au Marché 🏪, nombre de cartes par liste |
 | `/set cache_prix 168` | Durée de validité des prix en cache, pour tous les comptes (`168`, `168h` ou `7j`) |
 
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant.
@@ -168,7 +176,8 @@ suivies, pour surenchérir.
 
 ### Achats
 
-`/buy Tour Eiffel 500` achète la carte à 500 au plus ; `x2` pour 2 exemplaires, l'un
+`/buy Tour Eiffel 500` achète la carte à 500 au plus (sans prix : 90 % du prix du
+marché, recalculé à chaque passe) ; `x2` pour 2 exemplaires, l'un
 après l'autre ; `@Pseudo` pour n'acheter qu'aux enchères de ce vendeur (si rien ne
 correspond, le journal liste les vendeurs vus). Pour chaque carte :
 
@@ -204,7 +213,7 @@ Acheter une carte mise en vente par un autre compte du bot reste possible.
 ### Ventes à prix fixé
 
 `/sell Tour Eiffel 800` met la carte en vente **à 800 exactement** (ni `prix`, ni
-ajustement), quelle que soit sa rareté et même avec `raretes aucune`, pour la durée
+ajustement ; sans prix : 110 % du prix du marché au moment de la mise en vente), quelle que soit sa rareté et même avec `raretes aucune`, pour la durée
 demandée (`12h`…) ou à défaut la durée habituelle.
 
 - Ces cartes passent **en priorité** dans les places libres ; les enchères en cours ne
@@ -234,13 +243,40 @@ exemplaire).
   pu être lu (redemandées la fois suivante).
 - La défausse laisse la place aux passes du compte, puis reprend où elle en était.
 
-### Prix moyens
+### Prix des cartes
 
-Lus sur `/api/marketplace/cards/<id>/sales?scope=summary` (une requête par carte,
-environ 5 s), et gardés dans `state/price_cache.json`, commun à tous les comptes, pendant
-`cache_prix` (24 h ; `/set cache_prix` ou `PRICE_CACHE_HOURS`). Un refus passager du site
-ne fait laisser de côté que la carte concernée, après 30 s de pause ; l'API n'est
-abandonnée qu'après 5 refus de suite.
+Un seul prix par carte (et par rareté) sert à tous les comptes : ventes automatiques,
+défausse, et prix `auto` des achats et ventes. Il est gardé dans `state/price_cache.json`,
+commun, pendant `cache_prix` (24 h ; `/set cache_prix` ou `PRICE_CACHE_HOURS`), puis
+relu par le premier compte qui en a besoin.
+
+**Avec le Marché** (prix nettoyé). Certains comptes ont accès au Marché, qui détaille
+toutes les ventes d'une carte. Un de ces comptes ouvre une **nouvelle fenêtre privée**,
+s'y connecte, copie les cookies (voir « Copier la ligne de cookies ») et envoie
+`/market` suivi de la ligne, puis ferme la fenêtre. Il faut une autre fenêtre que celle
+de sa session de compte : les deux se gêneraient (le bot refuse la même session). Cette
+session, dans `state/market/`, ne sert qu'à lire les prix, pour tous les comptes. Le prix
+est calculé sur les ventes des 30 derniers jours (50 au plus) :
+
+- une vente est **aberrante** si elle s'écarte de la médiane de plus de 3 écarts
+  « robustes » (écart absolu médian, au moins 10 % de la médiane) : un échange d'argent
+  ne fausse pas le calcul de l'écart lui-même, comme il fausserait un écart type ;
+- si **les dernières ventes** sont aberrantes, toutes dans le même sens (dès la toute
+  dernière), la carte **change de valeur** : le prix est la moyenne de ces ventes ;
+- sinon les ventes aberrantes isolées (échanges d'argent) sont écartées, et le prix est la
+  **moyenne des autres** ;
+- moins de 3 ventes récentes : la moyenne du site.
+
+Le journal donne pour chaque carte le prix retenu, les ventes gardées et écartées.
+
+**Sans le Marché**, ou s'il ne répond pas : la moyenne donnée par le site
+(`/api/marketplace/cards/<id>/sales?scope=summary`). Si la session Marché expire, le
+compte qui l'a fournie est prévenu une fois ; en attendant sa nouvelle session, les prix
+pris à la place sont relus au bout d'une heure plutôt que de `cache_prix`.
+
+Une requête par carte (environ 5 s). Un refus passager du site ne fait laisser de côté que
+la carte concernée, après 30 s de pause ; l'API n'est abandonnée qu'après 5 refus de
+suite.
 
 ### Bilan
 
@@ -340,7 +376,8 @@ n'ont plus d'effet ; le journal le signale au démarrage.
 |---|---|
 | `state/users.json` | Liste des comptes |
 | `state/users/<chat_id>/` | Un compte : `session.json`, `settings.json`, `safe_cards.json`, `buy_cards.json`, `sell_cards.json`, `wanted_state.json` (achats suivis), `report.json` (bilans), `discard_progress.json`, `unsold.json`, `debug/` |
-| `state/price_cache.json` | Prix moyens, communs à tous les comptes |
+| `state/price_cache.json` | Prix des cartes, communs à tous les comptes |
+| `state/market/` | Session Marché (`/market`) et compte qui l'a fournie |
 | `state/global_settings.json` | Réglages communs (`cache_prix`) |
 | `state/telegram.json` · `state/site.json` | État du bot ; clé publique du site |
 | `state/seller.log` | Journal, avec le compte entre crochets sur chaque ligne (`[Paul]`, `[défausse-Paul]`) |
@@ -372,7 +409,8 @@ processus à la fois peut être annulée.
 | `session.py` / `auth.py` | Connexion par cookies ; session Supabase et son renouvellement |
 | `site.py` | Client HTTP de l'API du site |
 | `selling.py` / `buying.py` | Passe de vente ; achats et surenchères |
-| `discard.py` / `pricing.py` | Défausse en arrière-plan ; prix moyens et leur cache |
+| `discard.py` / `pricing.py` | Défausse en arrière-plan ; prix des cartes et leur cache |
+| `market.py` | Session Marché et prix nettoyé des ventes du Marché |
 | `lists.py` / `commands.py` | Listes de cartes ; commandes du bot |
 | `selection.py` / `unsold.py` | Logique pure (collection, plan de vente, ajustement) ; invendues mises de côté |
 | `telegram.py` / `report.py` | Bot Telegram ; bilans et historique |

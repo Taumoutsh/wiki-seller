@@ -32,6 +32,7 @@ class Account:
     chat_id: str
     name: str
     added_at: str = ""
+    has_market: bool = False  # accès au Marché (session Marché fournie par /market)
 
 
 def _file(base: Config):
@@ -45,7 +46,7 @@ def admin_id(base: Config) -> str:
 def accounts(base: Config) -> list[Account]:
     with _LOCK:
         data = read_json(_file(base), {})
-    return [Account(chat_id, info.get("name", ""), info.get("added_at", ""))
+    return [Account(chat_id, info.get("name", ""), info.get("added_at", ""), bool(info.get("has_market")))
             for chat_id, info in (data.get("users") or {}).items()]
 
 
@@ -73,6 +74,15 @@ def add(base: Config, chat_id: str, name: str) -> bool:
         if not (config.state_dir / "safe_cards.json").exists():  # aucune carte protégée au départ
             write_json(config.state_dir / "safe_cards.json", [])
     return new
+
+
+def set_market(base: Config, chat_id: str, has_market: bool) -> None:
+    with _LOCK:
+        data = read_json(_file(base), {})
+        entry = (data.get("users") or {}).get(str(chat_id))
+        if entry is not None and entry.get("has_market") != has_market:
+            entry["has_market"] = has_market
+            write_json(_file(base), data)
 
 
 def remove(base: Config, chat_id: str) -> bool:

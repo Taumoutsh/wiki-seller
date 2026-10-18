@@ -131,8 +131,9 @@ def test_list_commands_edit_the_lists(tmp_path):
     base = make_config(tmp_path, "http://127.0.0.1:1", ["Tour Eiffel"], wanted=[], telegram_chat_id=CHAT_ID)
     accounts.migrate(base)
     config = accounts.account_config(base, CHAT_ID)
-    commands = ["/safe Victor Hugo", "/want Gustave Eiffel 300 x2", "/buy Gustave Eiffel", "/sell Tour Eiffel 800",
-                "/buyandsell Apollo 11 500 900", "/unsell Pomme", "/unsafe Victor Hugo", "/list"]
+    commands = ["/safe Victor Hugo", "/want Gustave Eiffel 300 x2", "/buy", "/sell Tour Eiffel 800",
+                "/buyandsell Apollo 11 500 900", "/unsell Pomme", "/unsafe Victor Hugo", "/buy Pomme x3",
+                "/sell Loire", "/buyandsell Rhône 40", "/list"]
     with FakeTelegram() as fake:
         listener = CommandListener(bot(tmp_path, fake), lambda chat, kind: None, base).start()
         try:
@@ -142,7 +143,7 @@ def test_list_commands_edit_the_lists(tmp_path):
                 assert wait_for(lambda: len(fake.sent) == n)
         finally:
             listener.stop()
-    safe, want, buy_usage, sell, buy_and_sell, unsell, unsafe, listing = fake.sent
+    safe, want, buy_usage, sell, buy_and_sell, unsell, unsafe, buy_auto, sell_auto, buy_and_sell_auto, listing = fake.sent
     assert safe.startswith("🛡️ « Victor Hugo » protégée")
     assert "Gustave Eiffel » ajoutée dans les achats (300 max, 2 exemplaire(s))" in want and "/want est l'ancien" in want
     assert buy_usage.startswith("❌ Usage : /buy")
@@ -150,15 +151,25 @@ def test_list_commands_edit_the_lists(tmp_path):
     assert "Apollo 11 » ajoutée dans les achats (500 max, 1 exemplaire(s)), revendue à 900" in buy_and_sell
     assert unsell == "« Pomme » n'est pas dans les ventes."
     assert unsafe == "« Victor Hugo » n'est plus protégée."
-    assert listing.splitlines() == ["🛡️ Protégées (1) : Tour Eiffel", "🛒 À acheter (2) :",
+    assert "Pomme » ajoutée dans les achats (max auto (90 % du marché), 3 exemplaire(s))" in buy_auto
+    assert "1 exemplaire(s) à auto (110 % du marché)" in sell_auto
+    assert "Rhône » ajoutée dans les achats (40 max, 1 exemplaire(s)), revendue à auto (110 % du marché)" \
+        in buy_and_sell_auto
+    assert listing.splitlines() == ["🛡️ Protégées (1) : Tour Eiffel", "🛒 À acheter (4) :",
                                     "• Gustave Eiffel : 300 max, 0/2 obtenu(s)",
                                     "• Apollo 11 : 500 max, 0/1 obtenu(s), revente à 900",
-                                    "💰 À vendre (1) :", "• Tour Eiffel : 800, 0/1 vendu(s)"]
+                                    "• Pomme : max auto (90 % du marché), 0/3 obtenu(s)",
+                                    "• Rhône : 40 max, 0/1 obtenu(s), revente à auto (110 % du marché)",
+                                    "💰 À vendre (2) :", "• Tour Eiffel : 800, 0/1 vendu(s)",
+                                    "• Loire : auto (110 % du marché), 0/1 vendu(s)"]
     assert json.loads(safe_file(config).read_text()) == ["Tour Eiffel"]
     assert json.loads(buy_file(config).read_text()) == [
         {"name": "Gustave Eiffel", "max_price": 300, "copies": 2},
-        {"name": "Apollo 11", "max_price": 500, "sell_price": 900}]
-    assert [(c["name"], c["price"]) for c in json.loads(sell_file(config).read_text())] == [("Tour Eiffel", 800)]
+        {"name": "Apollo 11", "max_price": 500, "sell_price": 900},
+        {"name": "Pomme", "max_price": "auto", "copies": 3},
+        {"name": "Rhône", "max_price": 40, "sell_price": "auto"}]
+    assert [(c["name"], c["price"]) for c in json.loads(sell_file(config).read_text())] == [
+        ("Tour Eiffel", 800), ("Loire", "auto")]
 
 
 def test_formatting_refused_by_telegram_falls_back_to_plain_text(tmp_path):

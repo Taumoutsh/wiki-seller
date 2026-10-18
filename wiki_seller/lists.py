@@ -24,6 +24,11 @@ from .state import LISTS_LOCK, now_utc, read_json, write_json
 log = logging.getLogger(__name__)
 
 COPIES = re.compile(r"[x×](\d+)", re.I)
+# Prix « auto » (prix omis dans /buy, /sell, /buyandsell) : calculé à chaque passe d'après
+# le prix du marché (pricing.py) : achat jusqu'à 90 %, vente à 110 %.
+AUTO = "auto"
+AUTO_BUY_RATIO = 0.9
+AUTO_SELL_RATIO = 1.1
 
 
 class ListError(Exception):
@@ -33,9 +38,9 @@ class ListError(Exception):
 @dataclass(frozen=True)
 class BuyCard:
     name: str
-    max_price: int
+    max_price: int | str  # AUTO : 90 % du prix du marché
     copies: int = 1  # exemplaires à acheter
-    sell_price: int | None = None  # /buyandsell : revendue à ce prix une fois obtenue
+    sell_price: int | str | None = None  # /buyandsell : revendue à ce prix (AUTO : 110 % du marché)
     seller: str = ""  # @Pseudo : n'acheter qu'à ce vendeur
     sell_duration: str = ""  # /buyandsell : durée de la revente (ex. 12h) ; vide = habituelle
 
@@ -47,7 +52,7 @@ class BuyCard:
 @dataclass(frozen=True)
 class SellCard:
     name: str
-    price: int  # prix exact de mise en vente
+    price: int | str  # prix exact de mise en vente ; AUTO : 110 % du prix du marché
     copies: int = 1  # exemplaires à vendre
     added_at: str = ""  # les ventes conclues avant ne comptent pas
     sold: tuple[str, ...] = field(default=())  # enchères vendues déjà comptées
@@ -160,14 +165,23 @@ def _positive(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
+def _price(value) -> bool:
+    return value == AUTO or _positive(value)
+
+
+def price_text(value, ratio: float) -> str:
+    """« 500 », ou « auto (90 % du marché) »."""
+    return f"auto ({round(ratio * 100)} % du marché)" if value == AUTO else str(value)
+
+
 def _buy_raw(config) -> list[dict]:
     data = _load(buy_file(config), config.wanted_cards_file) or []
     if not isinstance(data, list):
         raise ListError(f"{buy_file(config)} doit contenir une liste.")
     for item in data:
         if (not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip()
-                or not _positive(item.get("max_price")) or not _positive(item.get("copies", 1))
-                or (item.get("sell_price") is not None and not _positive(item["sell_price"]))
+                or not _price(item.get("max_price")) or not _positive(item.get("copies", 1))
+                or (item.get("sell_price") is not None and not _price(item["sell_price"]))
                 or not isinstance(item.get("seller", ""), str) or not isinstance(item.get("sell_duration", ""), str)):
             raise ListError(f"{buy_file(config)} : entrée invalide {item!r}.")
     return data
@@ -183,7 +197,7 @@ def _buy_card(entry: dict) -> BuyCard:
                    entry.get("seller", ""), entry.get("sell_duration", ""))
 
 
-def set_buy(config, name: str, max_price: int, copies: int | None = None, sell_price: int | None = None,
+def set_buy(config, name: str, max_price: int | str, copies: int | None = None, sell_price: int | str | None = None,
             seller: str | None = None, sell_duration: str | None = None) -> tuple[str, BuyCard]:
     """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées).
     Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
@@ -237,7 +251,8 @@ def complete_purchase(config, card: BuyCard, bought: int) -> str:
         if card.sell_price:
             set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None)
             duration = f" pour {card.sell_duration}" if card.sell_duration else ""
-            return (f"🔁 « {card.name} » : achat terminé, mise en vente à {card.sell_price}{duration} "
+            return (f"🔁 « {card.name} » : achat terminé, mise en vente à "
+                    f"{price_text(card.sell_price, AUTO_SELL_RATIO)}{duration} "
                     f"({bought} exemplaire(s)).")
         add_safe(config, card.name)
         return f"🛡️ « {card.name} » : achat terminé ({bought} exemplaire(s)), ajoutée aux cartes protégées."
@@ -249,7 +264,7 @@ def complete_purchase(config, card: BuyCard, bought: int) -> str:
 def _sell_raw(config) -> list[dict]:
     data = _load(sell_file(config)) or []
     if not isinstance(data, list) or not all(
-            isinstance(i, dict) and isinstance(i.get("name"), str) and _positive(i.get("price"))
+            isinstance(i, dict) and isinstance(i.get("name"), str) and _price(i.get("price"))
             and _positive(i.get("copies", 1)) for i in data):
         raise ListError(f"{sell_file(config)} : contenu invalide.")
     return data
@@ -266,7 +281,7 @@ def sell_cards(config) -> list[SellCard]:
         return [_sell_card(e) for e in _sell_raw(config)]
 
 
-def set_sell(config, name: str, price: int, copies: int | None = None,
+def set_sell(config, name: str, price: int | str, copies: int | None = None,
              duration: str | None = None) -> tuple[str, SellCard]:
     """Ajoute une carte aux ventes, ou met à jour son prix (les exemplaires indiqués
     s'ajoutent alors à ceux restant à vendre, la durée indiquée remplace l'ancienne).
@@ -342,7 +357,7 @@ SELLER = re.compile(r"@(\S+)")
 @dataclass(frozen=True)
 class CardArgs:
     name: str
-    prices: list[int]
+    prices: list[int | str]  # AUTO pour un prix omis (optional_prices)
     copies: int | None = None
     duration: str = ""  # durée de vente, ex. 12h
     seller: str = ""  # pseudo du vendeur, sans @
@@ -359,11 +374,17 @@ def _option(word: str, allowed: tuple[str, ...]) -> tuple[str, object] | None:
     return None
 
 
-def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, ...] = ("copies",)) -> CardArgs:
+def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, ...] = ("copies",),
+                       optional_prices: bool = False) -> CardArgs:
     """Nom de carte suivi de `prices` nombres (les derniers), avec des options avant ou
     après eux : « x2 » (exemplaires), « 12h » ou « 30m » (durée de vente), « @Pseudo »
     (vendeur). Le nom peut lui-même finir par un nombre : « Apollo 11 500 » →
-    Apollo 11 à 500 ; « Victor Hugo 120 x2 12h » → 2 exemplaires, vendus 12h."""
+    Apollo 11 à 500 ; « Victor Hugo 120 x2 12h » → 2 exemplaires, vendus 12h.
+
+    optional_prices : les prix peuvent manquer ou s'écrire « auto » (AUTO), les premiers
+    étant donnés d'abord : « Tour Eiffel 500 » pour deux prix → [500, AUTO]."""
+    if optional_prices:
+        return _parse_optional(args, prices, usage, allowed)
     words = args.split()
     options: dict[str, object] = {}
 
@@ -380,11 +401,35 @@ def parse_card_command(args: str, prices: int, usage: str, allowed: tuple[str, .
     take_options()
     if options.get("copies") == 0:
         raise ListError(usage)
-    duration = options.get("duree")
-    if duration is not None and int(duration.total_seconds() // 60) not in SALE_MINUTES:
+    return CardArgs(" ".join(words), numbers, options.get("copies"), _duration(options.get("duree")),
+                    options.get("vendeur", ""))
+
+
+def _parse_optional(args: str, prices: int, usage: str, allowed: tuple[str, ...]) -> CardArgs:
+    words = args.split()
+    numbers: list[int | str] = []
+    options: dict[str, object] = {}
+    while len(words) > 1:  # prix et options de la fin, sans jamais vider le nom
+        word = words[-1]
+        if len(numbers) < prices and (word.lower() == AUTO or (word.isdigit() and int(word) >= 1)):
+            numbers.insert(0, AUTO if word.lower() == AUTO else int(word))
+        elif (option := _option(word, allowed)) and option[0] not in options:
+            options[option[0]] = option[1]
+        else:
+            break
+        words.pop()
+    if not words or options.get("copies") == 0 or (words[-1].isdigit() and int(words[-1]) == 0):
+        raise ListError(usage)
+    return CardArgs(" ".join(words), numbers + [AUTO] * (prices - len(numbers)), options.get("copies"),
+                    _duration(options.get("duree")), options.get("vendeur", ""))
+
+
+def _duration(duration) -> str:
+    if duration is None:
+        return ""
+    if int(duration.total_seconds() // 60) not in SALE_MINUTES:
         raise ListError("Durées de vente possibles : 10m, 30m, 1h, 3h, 6h, 12h.")
-    return CardArgs(" ".join(words), numbers, options.get("copies"),
-                    short_duration(duration) if duration is not None else "", options.get("vendeur", ""))
+    return short_duration(duration)
 
 
 def parse_card_args(args: str, prices: int, usage: str) -> tuple[str, list[int], int | None]:

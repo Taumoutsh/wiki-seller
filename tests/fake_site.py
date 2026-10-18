@@ -69,6 +69,10 @@ class FakeWikiMasters:
         # Comme le vrai site : les enchères finies restent un moment dans « Mes enchères »,
         # toujours marquées « active ».
         self.stale_bidding = False
+        # Marché : détail des ventes par carte (GET …/sales sans scope=summary), visible
+        # seulement si le compte y a accès.
+        self.has_market = True
+        self.market_sales: dict[str, list[dict]] = {}
         self.bid_failures = 0
         self.bid_lost_responses = 0
         self.auction_read_failures = 0
@@ -182,10 +186,16 @@ class FakeWikiMasters:
                     if site.sales_forbidden:
                         return self._send(403, {"error": "forbidden"})
                     card_id = url.path.split("/")[4]
+                    if qs.get("scope") != ["summary"]:
+                        site.events.append(("marché", card_id))
+                        if not site.has_market:
+                            return self._send(403, {"error": "Accès au Marché requis"})
+                        return self._send(200, {"sales": site.market_sales.get(card_id, [])})
                     site.events.append(("prix", card_id))
                     avg = site.averages.get(card_id)
-                    card = next(c["card"] for c in site.collection if c["card"]["id"] == card_id)
-                    summary = {card["rarity"]: {"average": avg, "count": 5}} if avg else {}
+                    cards = [c["card"] for c in site.collection] + [a["card"] for a in site.auctions.values()]
+                    rarity = next((c.get("rarity", "R") for c in cards if c.get("id") == card_id), "R")
+                    summary = {rarity: {"average": avg, "count": 5}} if avg else {}
                     return self._send(200, {"summary": summary})
                 return self._send(404, {})
 
