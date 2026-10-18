@@ -149,11 +149,16 @@ class SessionStore:
 
     # ─────────────────────────── Renouvellement ───────────────────────────
 
-    def ensure_fresh(self, force: bool = False) -> None:
-        """Renouvelle la session si elle expire dans moins de REFRESH_MARGIN (ou si force)."""
+    def ensure_fresh(self, force: bool = False, refused_token: str | None = None) -> None:
+        """Renouvelle la session si elle expire dans moins de REFRESH_MARGIN (ou si force).
+        Un seul fil à la fois (plusieurs fins d'enchère sont surveillées en même temps) :
+        refused_token, jeton refusé par le site, n'est pas renouvelé une seconde fois si un
+        autre fil l'a déjà fait entre-temps (un jeton de renouvellement ne sert qu'une fois)."""
         with self._lock:
             if not self.has_session():
                 return
+            if refused_token and self.session.get("access_token") != refused_token:
+                return  # déjà renouvelée par un autre fil
             expires_at = self.session.get("expires_at") or 0
             if not force and expires_at - time.time() > REFRESH_MARGIN:
                 return

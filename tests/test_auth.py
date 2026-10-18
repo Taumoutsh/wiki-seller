@@ -63,6 +63,28 @@ def test_client_retries_once_after_a_refused_token(tmp_path):
     assert response.status == 200 and response.data == {"balance": 1747} and site.refreshes == 1
 
 
+def test_parallel_requests_refresh_the_session_only_once(tmp_path):
+    import threading
+
+    with FakeWikiMasters([], {}) as site:
+        store = SessionStore(tmp_path / "session.json", site.url, site.url)
+        store.adopt(*decode_session(pairs(site.session_cookies())))
+        site.access_tokens.clear()  # jeton refusé pour tous les fils en même temps
+        start, statuses = threading.Barrier(8), []
+
+        def get():
+            client = SiteClient(site.url, store)
+            start.wait()
+            statuses.append(client.request("GET", "/api/wikibidous").status)
+
+        threads = [threading.Thread(target=get) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    assert statuses == [200] * 8 and site.refreshes == 1  # un seul jeton de renouvellement utilisé
+
+
 def test_min_bid_follows_the_site_rule():
     assert min_bid({"current_bid": None, "base_amount": 20}) == 20
     assert min_bid({"current_bid": 100}) == 110

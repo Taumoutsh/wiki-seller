@@ -76,6 +76,7 @@ class SiteClient:
                 accept: str = "application/json") -> Response:
         for attempt in (1, 2):
             self._fresh()
+            used = (self.store.session or {}).get("access_token")
             headers = {"User-Agent": USER_AGENT, "Accept": accept, "Accept-Language": "fr-FR,fr;q=0.9",
                        "Referer": f"{self.base_url}/marketplace"}
             cookie = "; ".join(f"{k}={v}" for k, v in [*self.store.cookies(), *self.cookies.items()])
@@ -96,7 +97,7 @@ class SiteClient:
                 status, raw, reply_headers = exc.code, exc.read(), exc.headers
             self._take_cookies(reply_headers)
             if status == 401 and attempt == 1 and self.store.has_session():
-                if self._fresh(force=True):
+                if self._fresh(force=True, refused=used):
                     continue  # jeton refusé : renouvelé, on réessaie une fois
             break
         text = raw.decode("utf-8", "replace")
@@ -107,9 +108,9 @@ class SiteClient:
         self.last = Response(status, parsed, text, reply_headers)
         return self.last
 
-    def _fresh(self, force: bool = False) -> bool:
+    def _fresh(self, force: bool = False, refused: str | None = None) -> bool:
         try:
-            self.store.ensure_fresh(force)
+            self.store.ensure_fresh(force, refused)
             return True
         except SessionDead as exc:
             raise SessionExpired(str(exc)) from exc
