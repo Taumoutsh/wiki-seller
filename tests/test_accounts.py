@@ -160,7 +160,8 @@ def test_bot_accounts_never_bid_against_each_other(tmp_path):
         admin = accounts.account_config(base, CHAT_ID)
         set_buy(admin, "Gustave Eiffel", 300)
         run_once(admin)
-        assert site.bids == [("e1", 200)]  # e2, moins chère, est suivie par Paul
+        assert json.loads(admin.wanted_state_file.read_text())["cards"]["gustave eiffel"]["auction_id"] == "e1"
+        site.we_bid("e1", 200)  # e2, moins chère, est suivie par Paul
 
         # Paul mène maintenant e1 : plus aucune enchère pour l'administrateur, prévenu une fois.
         site.auctions["e1"].update(current_bid=220, current_bidder_id="paul-id")

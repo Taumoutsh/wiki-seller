@@ -234,3 +234,16 @@ def test_lost_auctions_are_listed_in_the_report_then_reset(tmp_path):
     assert "Enchères perdues · 1" in stub.sent[1]
     send_report(stub, config, stub, [], "me", on_demand=True)
     assert "perdues" not in stub.sent[-1]
+
+
+def test_watched_auction_without_bid_is_in_the_report(tmp_path):
+    from wiki_seller.lists import set_buy
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", [], snipe_lead=timedelta(seconds=30))
+    set_buy(config, "Tour Eiffel", 500)
+    end = "2030-10-15T18:42:00+00:00"
+    config.wanted_state_file.write_text(json.dumps({"cards": {"tour eiffel": {
+        "auction_id": "t1", "status": "bidding", "end_at": end, "watch_price": 120}}}))
+    hm = datetime.fromisoformat(end).astimezone().strftime("%d/%m %H:%M")
+    assert bid_lines(config, {"bidding": []}, "me", now=NOW) == [
+        f"👀 Tour Eiffel\n   mise minimale 120 · max 500 · fin {hm}\n   ↳ mise à 30 s de la fin"]

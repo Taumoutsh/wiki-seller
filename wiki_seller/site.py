@@ -19,7 +19,7 @@ from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from .auth import USER_AGENT, RefreshUnavailable, SessionDead, SessionStore, decode_session
+from .auth import USER_AGENT, RefreshUnavailable, SessionDead, SessionStore, decode_session, jwt_claims
 from .config import Config, parse_duration
 from .selection import normalize_name, sale_price
 from .state import parse_time
@@ -297,6 +297,12 @@ class WikiMasters:
             self.retries += 1
             time.sleep(2 * (attempt + 1))
         raise SiteError(f"{path} indisponible")
+
+    def user_id(self) -> str | None:
+        """Identifiant du compte sur le site, tiré de la session (utilisateur Supabase)."""
+        session = self.client.store.session or {}
+        user = session.get("user") if isinstance(session.get("user"), dict) else {}
+        return user.get("id") or jwt_claims(session.get("access_token") or "").get("sub")
 
     def is_logged_in(self) -> bool:
         """True si le site accepte la session, False s'il la refuse. Site injoignable ou

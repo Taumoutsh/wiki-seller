@@ -260,6 +260,16 @@ class FakeWikiMasters:
     def outbid(self, auction_id, amount):
         self.auctions[auction_id].update(current_bid=amount, effective_bid=amount, current_bidder_id="rival")
 
+    def we_bid(self, auction_id, amount):
+        """Notre mise (celle de fin d'enchère, sans attendre la fin réelle)."""
+        self.bids.append((auction_id, amount))
+        self.auctions[auction_id].update(current_bid=amount, effective_bid=amount, current_bidder_id=ME)
+
+    def we_win(self, auction_id, amount):
+        """Fin d'enchère gagnée par notre mise de dernière seconde."""
+        self.we_bid(auction_id, amount)
+        self.settle(auction_id)
+
     def settle(self, auction_id):
         a = self.auctions[auction_id]
         a.update(status="settled_sold", winner_id=a["current_bidder_id"], final_price=a["current_bid"])

@@ -150,7 +150,8 @@ def test_auto_prices_follow_the_market(tmp_path):
         set_buy(config, "Victor Hugo", AUTO)
         run_once(config)
     assert [(l["title"], l["price"]) for l in site.listings] == [("Loire", "165")]  # 110 % de 150
-    assert site.bids == [("v2", 250)]  # max 270 : 90 % de 300
+    assert site.bids == []  # suivie, mise à la fin seulement
+    assert json.loads(config.wanted_state_file.read_text())["cards"]["victor hugo"]["auction_id"] == "v2"  # max 270
     state = json.loads(config.wanted_state_file.read_text())["cards"]["victor hugo"]
     assert state["auto_max"] == 270 and state["card_ref"] == {"id": "D", "rarity": "R"}
 
@@ -191,6 +192,6 @@ def test_rarity_option_buys_and_sells_only_that_rarity(tmp_path):
         assert "« Victor Hugo » (SR) ajoutée" in run_list_command(config, "/sell", "Victor Hugo 900 SR")
         assert "• Gustave Eiffel (SR) : 100 max" in run_list_command(config, "/list", "")
         run_once(config)
-    assert site.bids == [("s1", 50)]  # pas l'enchère C, moins chère
+    assert json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]["auction_id"] == "s1"  # pas C
     assert [(l["card_id"], l["price"]) for l in site.listings] == [("h1", "900")]  # l'exemplaire SR
     assert buy_cards(config)[0].rarity == "SR" and sell_cards(config)[0].rarity == "SR"

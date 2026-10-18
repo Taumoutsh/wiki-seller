@@ -93,7 +93,8 @@ def sales_between(history: list, my_id: str | None, start: datetime, end: dateti
 
 def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None) -> list[str]:
     """Enchères en cours sur les cartes à acheter, une par bloc (HTML Telegram) : ✅ vous
-    menez, ⚠️ dépassé avec surenchère prévue avant la fin, ❌ abandonnée (au-dessus du max)."""
+    menez, ⚠️ dépassé avec surenchère prévue avant la fin, ❌ abandonnée (au-dessus du max),
+    👀 suivie sans mise encore (mise juste avant la fin)."""
     try:
         cards = {c.key: c for c in buy_cards(config)}
     except ListError:
@@ -130,6 +131,24 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
         else:
             icon, plan = "⚠️", f"surenchère à {money(following)} juste avant la fin"
         blocks.append(f"{icon} {name}\n{INDENT}" + " · ".join([outbid, *details]) + f"\n{INDENT}↳ {plan}")
+    blocks += _watched_lines(config, cards, tracked, mine, now)
+    return blocks
+
+
+def _watched_lines(config, cards: dict, tracked: dict, mine: dict, now: datetime) -> list[str]:
+    """Enchères gardées sans mise : la mise part juste avant la fin."""
+    mine_ids = {a.get("id") for a in mine.get("bidding") or [] if isinstance(a, dict)}
+    blocks = []
+    for key, entry in tracked.items():
+        card, end = cards.get(key), parse_time(entry.get("end_at"))
+        if (card is None or entry.get("status") != "bidding" or not entry.get("auction_id")
+                or entry["auction_id"] in mine_ids or not end or end < now):
+            continue
+        max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
+        details = [f"mise minimale {money(entry.get('watch_price'))}" if entry.get("watch_price") else "suivie",
+                   f"max {money(max_price)}" if max_price else "max auto", f"fin {when(end, now)}"]
+        blocks.append(f"👀 {escape(card.name)}\n{INDENT}" + " · ".join(details)
+                      + f"\n{INDENT}↳ mise à {int(config.snipe_lead.total_seconds())} s de la fin")
     return blocks
 
 

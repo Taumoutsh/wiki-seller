@@ -134,41 +134,44 @@ def test_session_of_the_old_browser_is_taken_over(tmp_path):
     assert result.listed == 5 and config.session_file.exists() and not config.storage_state_file.exists()
 
 
+def tracked(config, key):
+    """Suivi d'achat d'une carte (state/wanted_state.json)."""
+    return json.loads(config.wanted_state_file.read_text())["cards"][key]
+
+
 def eiffel_auctions():
     return [market_auction("e1", "Gustave Eiffel", 200), market_auction("e2", "Gustave Eiffel", 150),
             market_auction("e3", "Gustave Eiffel (homonymie)", 10),
             market_auction("e4", "Gustave Eiffel", 100, seller=ME)]
 
 
-def test_bids_once_then_rebids_only_at_the_end_or_moves_on(tmp_path):
+def test_watches_without_bidding_then_bids_at_the_end_or_moves_on(tmp_path):
     from datetime import datetime, timedelta, timezone
 
     wanted = [{"name": "gustave eiffel", "max_price": 300}]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted, snipe_lead=timedelta(seconds=25))
         run_once(config)
-        assert site.bids == [("e2", 150)]  # la moins chère, ni l'homonyme ni la nôtre
+        assert site.bids == []  # gardée sans miser : la moins chère, ni l'homonyme ni la nôtre
+        state = tracked(config, "gustave eiffel")
+        assert (state["status"], state["auction_id"], state["watch_price"]) == ("bidding", "e2", 150)
 
         site.outbid("e2", 250)
-        run_once(config)  # dépassé mais dans la limite : pas de surenchère pendant une passe
-        assert len(site.bids) == 1
-        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-        assert state["status"] == "bidding" and state["auction_id"] == "e2"
+        run_once(config)  # un autre a misé, toujours dans la limite : toujours suivie, sans mise
+        assert site.bids == [] and tracked(config, "gustave eiffel")["watch_price"] == 275
 
-        # Réveil de fin d'enchère : surenchère, dans la limite.
+        # Réveil de fin d'enchère : mise, dans la limite.
         site.auctions["e2"]["end_at"] = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
         run_snipe(config)
-        assert site.bids[-1] == ("e2", 275)  # 250 × 1,1
+        assert site.bids == [("e2", 275)]  # 250 × 1,1
 
-        # Dépassé au-delà de la limite : abandon, et mise sur une autre enchère de la carte.
+        # Dépassé au-delà de la limite : abandon, et une autre enchère de la carte est suivie.
         site.auctions["e2"]["end_at"] = "2030-01-01T10:00:00+00:00"
         site.outbid("e2", 295)
         run_once(config)
-        assert site.bids[-1] == ("e1", 200)
-        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-        assert state["auction_id"] == "e1"
+        assert site.bids == [("e2", 275)] and tracked(config, "gustave eiffel")["auction_id"] == "e1"
 
-        site.settle("e1")  # gagnée : la carte quitte les achats et devient protégée
+        site.we_win("e1", 200)  # gagnée : la carte quitte les achats et devient protégée
         run_once(config)
     assert buy_cards(config) == [] and "gustave eiffel" in safe_names(config)
     assert "gustave eiffel" not in json.loads(config.wanted_state_file.read_text())["cards"]
@@ -179,13 +182,12 @@ def test_copies_buys_several_one_after_the_other(tmp_path):
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted)
         run_once(config)
-        assert site.bids == [("e2", 150)]
-        site.settle("e2")
+        assert tracked(config, "gustave eiffel")["auction_id"] == "e2"
+        site.we_win("e2", 150)
         run_once(config)  # 1/2 : on passe à une autre enchère
-        assert site.bids[-1] == ("e1", 200)
-        state = json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]
-        assert state["status"] == "bidding" and list(state["won"]) == ["e2"]
-        site.settle("e1")
+        state = tracked(config, "gustave eiffel")
+        assert state["status"] == "bidding" and state["auction_id"] == "e1" and list(state["won"]) == ["e2"]
+        site.we_win("e1", 200)
         run_once(config)
     assert len(site.bids) == 2 and buy_cards(config) == [] and "gustave eiffel" in safe_names(config)
 
@@ -210,18 +212,30 @@ def test_buying_dry_run_places_no_bid(tmp_path):
 def test_snipe_bids_just_before_the_end(tmp_path):
     from datetime import datetime, timedelta, timezone
 
-    end = (datetime.now(timezone.utc) + timedelta(seconds=40)).isoformat()
-    auction = market_auction("s1", "Victor Hugo", 50, end_at=end)
+    import threading
+    import time
+
+    end = datetime.now(timezone.utc) + timedelta(seconds=25)
+    auction = market_auction("s1", "Victor Hugo", 50, end_at=end.isoformat())
+    first_bid_at = []
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
-                             snipe_lead=timedelta(seconds=25))
-        run_once(config)
-        assert site.bids == [("s1", 50)]
-        site.outbid("s1", 70)
-        run_snipe(config)
-        # La surenchère n'est partie qu'une fois arrivé à 25 s de la fin.
-        assert site.bids[-1] == ("s1", 77)  # 70 × 1,1
-        assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=26)
+                             snipe_lead=timedelta(seconds=15))
+
+        def rival():  # un autre surenchérit après notre mise, puis le site clôt l'enchère
+            while not site.bids:
+                time.sleep(0.1)
+            first_bid_at.append(datetime.now(timezone.utc))
+            site.outbid("s1", 70)
+            time.sleep(max(0.0, (end - datetime.now(timezone.utc)).total_seconds()) + 1)
+            site.settle("s1")
+
+        threading.Thread(target=rival, daemon=True).start()
+        run_once(config)  # fin toute proche : surveillée pendant la passe
+    # Première mise seulement à 15 s de la fin, puis surenchère quand un autre passe devant.
+    assert first_bid_at[0] >= end - timedelta(seconds=16)
+    assert site.bids == [("s1", 50), ("s1", 77)]  # 70 × 1,1
+    assert buy_cards(config) == []  # gagnée
 
 
 def test_card_with_parentheses_is_found_without_them(tmp_path):
@@ -229,7 +243,7 @@ def test_card_with_parentheses_is_found_without_them(tmp_path):
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=auctions) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Dewey Martin (acteur)", "max_price": 5}])
         run_once(config)
-    assert site.bids == [("d1", 1)]
+    assert tracked(config, "dewey martin (acteur)")["auction_id"] == "d1"
 
 
 def test_listing_sends_copy_ids_and_api_average(tmp_path):
@@ -315,7 +329,7 @@ def test_snipe_rebids_at_the_site_minimum(tmp_path, caplog):
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
                              snipe_lead=timedelta(seconds=6))
         run_once(config)
-        assert site.bids == [("s1", 50)]
+        assert site.bids == []
         site.outbid("s1", 70)
         end = datetime.now(timezone.utc) + timedelta(seconds=14)
         site.auctions["s1"]["end_at"] = end.isoformat()
@@ -665,8 +679,8 @@ def test_buy_and_sell_lists_the_card_once_bought(tmp_path):
         config = make_config(tmp_path, site.url, [])
         set_buy(config, "Gustave Eiffel", 300, sell_price=900)
         run_once(config)
-        assert site.bids == [("e2", 150)]
-        site.settle("e2")
+        assert tracked(config, "gustave eiffel")["auction_id"] == "e2"
+        site.we_win("e2", 150)
         site.collection.append(entry("ge1", "GE", "Gustave Eiffel"))
         site.selling.clear()
         run_once(config)
@@ -690,41 +704,62 @@ def test_sell_list_dry_run_changes_nothing(tmp_path, caplog):
     assert sell_file(config).read_text() == before and safe_names(config) == {"tour eiffel"}
 
 
+def ending_auction(seconds=8):
+    """Enchère qui se termine dans quelques secondes : la mise part pendant la passe."""
+    from datetime import datetime, timedelta, timezone
+
+    end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return market_auction("s1", "Victor Hugo", 50, end_at=end.isoformat()), end
+
+
+def close_after(site, end, auction_id="s1"):
+    """Le site désigne le gagnant une seconde après la fin."""
+    import threading
+    import time
+    from datetime import datetime, timezone
+
+    def close():
+        time.sleep(max(0.0, (end - datetime.now(timezone.utc)).total_seconds()) + 1)
+        site.settle(auction_id)
+
+    threading.Thread(target=close, daemon=True).start()
+
+
 def test_bid_is_resent_until_the_site_answers(tmp_path):
-    auction = market_auction("s1", "Victor Hugo", 50)
+    auction, end = ending_auction()
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
         site.bid_failures = 2  # deux mises sans réponse, puis le site répond
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+        close_after(site, end)
         run_once(config)
     assert site.bids == [("s1", 50)] and site.bid_attempts == 3
 
 
 def test_bid_whose_answer_is_lost_is_not_sent_twice(tmp_path):
-    auction = market_auction("s1", "Victor Hugo", 50)
+    auction, end = ending_auction()
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
         site.bid_lost_responses = 1  # mise enregistrée, mais la réponse se perd
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+        close_after(site, end)
         run_once(config)
     assert site.bids == [("s1", 50)] and site.bid_attempts == 1
-    state = json.loads(config.wanted_state_file.read_text())["cards"]["victor hugo"]
-    assert state["status"] == "bidding" and state["my_bid"] == {"auction": "s1", "amount": 50}
+    assert buy_cards(config) == []  # la mise était bien passée : gagnée
 
 
 def test_snipe_keeps_watching_when_the_site_does_not_answer(tmp_path):
     from datetime import datetime, timedelta, timezone
 
-    end = (datetime.now(timezone.utc) + timedelta(seconds=40)).isoformat()
-    auction = market_auction("s1", "Victor Hugo", 50, end_at=end)
+    auction, end = ending_auction(seconds=12)
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
-                             snipe_lead=timedelta(seconds=30))
-        run_once(config)
+                             snipe_lead=timedelta(seconds=10))
         site.outbid("s1", 70)
         site.auction_read_failures = 6  # l'enchère est illisible quelques secondes
         site.bid_failures = 1
-        run_snipe(config)
-    assert site.bids[-1] == ("s1", 77)  # 70 × 1,1
-    assert datetime.now(timezone.utc) >= datetime.fromisoformat(end) - timedelta(seconds=31)
+        close_after(site, end)
+        run_once(config)
+    assert site.bids == [("s1", 77)]  # 70 × 1,1
+    assert datetime.now(timezone.utc) >= end
 
 
 def test_watched_auction_result_is_announced_right_away(tmp_path):
@@ -741,8 +776,10 @@ def test_watched_auction_result_is_announced_right_away(tmp_path):
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
                              snipe_lead=timedelta(seconds=10), telegram_token=TOKEN, telegram_chat_id=CHAT_ID,
                              telegram_api_url=tg.url)
+        site.auctions["s1"]["end_at"] = "2030-01-01T10:00:00+00:00"
         run_once(config)
-        assert site.bids == [("s1", 50)]
+        assert site.bids == []  # suivie, pas encore de mise
+        site.auctions["s1"]["end_at"] = end.isoformat()
 
         def close_auction():  # le site désigne le gagnant un peu après la fin
             time.sleep(max(0.0, (end - datetime.now(timezone.utc)).total_seconds()) + 2)
@@ -750,6 +787,7 @@ def test_watched_auction_result_is_announced_right_away(tmp_path):
 
         threading.Thread(target=close_auction, daemon=True).start()
         run_snipe(config)
+        assert site.bids == [("s1", 50)]
     assert "🛒 Obtenue : Victor Hugo pour 50 (1/1)" in tg.sent
     assert any("achat terminé" in t for t in tg.sent) and buy_cards(config) == []
 
@@ -763,12 +801,13 @@ def test_lost_auctions_are_announced(tmp_path):
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
                              telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
         run_once(config)
-        assert site.bids == [("s1", 50)]
-        # Enchère suivie terminée, remportée par un autre : annoncée, puis une autre est cherchée.
+        site.we_bid("s1", 50)  # notre mise de fin d'enchère
+        # Enchère suivie terminée, remportée par un autre : notée, puis une autre est cherchée.
         site.auctions["s1"].update(status="settled_sold", winner_id="rival", final_price=120)
         run_once(config)
-        assert site.bids[-1] == ("s2", 60)
-        # Dépassé au-delà du max : abandon annoncé.
+        assert tracked(config, "victor hugo")["auction_id"] == "s2"
+        site.we_bid("s2", 60)
+        # Dépassé au-delà du max : abandon noté.
         site.outbid("s2", 150)
         run_once(config)
     assert not [t for t in tg.sent if "Perdue" in t]  # pas de message : seulement au bilan
@@ -797,7 +836,7 @@ def test_lost_auction_still_listed_by_the_site_is_announced_once(tmp_path):
         config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
                              telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
         run_once(config)
-        assert site.bids == [("s1", 50)]
+        site.we_bid("s1", 50)  # notre mise de fin d'enchère
         past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
         site.auctions["s1"].update(status="settled_sold", winner_id="rival", final_price=120, end_at=past,
                                    current_bid=120, current_bidder_id="rival")
@@ -835,9 +874,9 @@ def test_purchase_only_from_the_requested_seller(tmp_path, caplog):
         reply = run_list_command(config, "/buy", "Victor Hugo 100 @ami-id")
         assert "chez @ami-id seulement" in reply
         run_once(config)
-        assert site.bids == [("v2", 60)]  # pas v1, pourtant moins chère
+        assert tracked(config, "victor hugo")["auction_id"] == "v2"  # pas v1, pourtant moins chère
         run_list_command(config, "/buy", "Loire 100 @inconnu")
         with caplog.at_level("INFO"):
             run_once(config)
-    assert site.bids == [("v2", 60)]  # aucune enchère de Loire chez @inconnu
+    assert "auction_id" not in tracked(config, "loire")  # aucune enchère de Loire chez @inconnu
     assert "« Loire » — vendeurs des enchères en cours : other" in caplog.text

@@ -191,16 +191,17 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
 
 - une enchère que vous menez déjà sur cette carte (« Mes enchères ») est reprise ;
 - sinon, le script choisit dans le Marché l'enchère la moins chère dont la mise minimale
-  ne dépasse pas votre maximum, et mise **la mise minimale**, calculée comme le site (la
-  mise de départ, puis 10 % de plus que la mise en cours, au moins +1) ;
-- dépassé, il **ne surenchérit pas tout de suite** : il revient pour la dernière minute,
-  relit l'enchère **chaque seconde** et surenchérit à `surenchere` secondes (30) de la
-  fin, puis **à chaque fois qu'il est dépassé**, dans la limite ; une mise des 10
-  dernières secondes prolonge l'enchère de 60 s, la surveillance continue jusqu'à la
-  vraie fin ;
+  ne dépasse pas votre maximum, et **la garde sans miser** : à chaque passe, il vérifie
+  qu'elle reste dans la limite (sinon il en cherche une autre) ;
+- il revient pour la dernière minute, relit l'enchère **chaque seconde** et mise à
+  `surenchere` secondes (30) de la fin **la mise minimale**, calculée comme le site (la
+  mise de départ, puis 10 % de plus que la mise en cours, au moins +1), puis surenchérit
+  **à chaque fois qu'il est dépassé**, dans la limite ; une mise des 10 dernières
+  secondes prolonge l'enchère de 60 s, la surveillance continue jusqu'à la vraie fin ;
+  une enchère qui finit dans les 3 minutes est surveillée tout de suite, pendant la passe ;
 - au-dessus de votre maximum, il abandonne cette enchère et en cherche une autre ;
 - **une seule enchère à la fois par carte** ; `budget` limite la somme des mises en
-  cours.
+  cours, vérifiée au moment de miser.
 
 Le site ne répond pas toujours pendant les enchères : une mise sans réponse (8 s, ou
 erreur du site) est vérifiée sur l'enchère ; passée malgré tout, elle n'est pas renvoyée,
@@ -308,6 +309,9 @@ Toutes les `bilan` heures (2), ou à la demande avec `/update` :
 🗑️ Défausses · 120 exemplaires · +120
 
 🛒 Achats en cours
+👀 Gustave Eiffel
+   mise minimale 150 · max 300 · fin 20:10
+   ↳ mise à 30 s de la fin
 ✅ Tour Eiffel
    en tête à 300 · max 500 · fin 18:42
 ⚠️ Victor Hugo
@@ -327,8 +331,9 @@ Toutes les `bilan` heures (2), ou à la demande avec `/update` :
   chacune comptée une seule fois : une vente qui arrive en retard dans l'historique
   compte au bilan suivant.
 - **Défausses :** 1 wikibidou par exemplaire.
-- **Achats en cours :** ✅ en tête ; ⚠️ dépassé (votre mise → prix actuel), surenchère
-  prévue ; ❌ abandonnée, au-dessus du max. Fin : l'heure seule si c'est aujourd'hui.
+- **Achats en cours :** 👀 suivie sans mise encore (mise juste avant la fin) ; ✅ en
+  tête ; ⚠️ dépassé (votre mise → prix actuel), surenchère prévue ; ❌ abandonnée,
+  au-dessus du max. Fin : l'heure seule si c'est aujourd'hui.
 - **Enchères perdues :** celles où vous aviez misé, terminées au profit d'un autre ou
   montées au-dessus de votre max depuis le dernier bilan automatique, une fois chacune.
 

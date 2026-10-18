@@ -220,7 +220,8 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
     offset = site.server_clock_offset()
     buyer = _Buyer(site, config, state, dry_run, lambda: datetime.now(timezone.utc) + offset)
     mine = site.fetch_mine()
-    state.my_id = my_user_id(mine, state.my_id)
+    # Sans vente ni gain, l'identifiant vient de la session : sans lui, le bot ne se saurait pas en tête.
+    state.my_id = my_user_id(mine, state.my_id) or site.user_id()
     bidding = [a for a in mine.get("bidding") or [] if isinstance(a, dict)]
     buyer.budget_used = sum(int(a.get("current_bid") or 0) for a in bidding
                             if state.my_id and a.get("current_bidder_id") == state.my_id
@@ -293,19 +294,18 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                     buyer.watch_until_end(card, entry, auction)
                 continue
 
+            outbid = auction is not None and (auction["id"] in bidding_ids or entry.get("placed") == auction["id"])
             if auction is not None and not buyer.leading(auction) \
-                    and (auction["id"] in bidding_ids or entry.get("placed") == auction["id"]):
-                # Déjà misé et dépassé : pas de surenchère maintenant, seulement à la fin
-                # (réveil SNIPE_LEAD avant), tant que la limite le permet.
+                    and (outbid or entry.get("auction_id") == auction["id"]):
+                # Enchère déjà suivie (dépassé, ou pas encore misé) : pas de mise maintenant,
+                # seulement à la fin (réveil SNIPE_LEAD avant), tant que la limite le permet.
                 minimum = min_next_bid(auction)
                 if minimum <= card.max_price:
-                    entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
-                    log.info("Achat : « %s » — dépassé (%s), surenchère juste avant la fin (%s).",
-                             card.name, auction.get("current_bid"), auction.get("end_at"))
+                    buyer.track(card, entry, auction, outbid)
                     continue
                 log.info("Achat : « %s » dépasse la limite (%d > %d) ; abandon de cette enchère.",
                          card.name, minimum, card.max_price)
-                buyer.lost(card, entry, auction)
+                buyer.lost(card, entry, auction, force=outbid)  # perdue seulement si vous y aviez misé
                 abandoned.add(auction["id"])
                 _forget(entry)
                 auction = None
@@ -330,8 +330,11 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                         buyer.blocked_by_fellow(card, entry)
                     continue
             entry.pop("blocked_notified", None)
-            entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
-            buyer.bid_if_needed(card, entry, auction)
+            if buyer.leading(auction):  # misée à la main, ou déjà menée
+                entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
+                buyer.bid_if_needed(card, entry, auction)
+            else:  # gardée et surveillée : la mise part juste avant la fin
+                buyer.track(card, entry, auction, outbid=False)
     finally:
         state.save()
         release_claims(config)
@@ -510,6 +513,17 @@ class _Buyer:
     def leading(self, auction: dict) -> bool:
         return bool(self.state.my_id) and auction.get("current_bidder_id") == self.state.my_id
 
+    def track(self, card: BuyCard, entry: dict, auction: dict, outbid: bool) -> None:
+        """Enchère gardée sans miser : la mise part à SNIPE_LEAD de la fin
+        (watch_until_end), si l'enchère est toujours dans la limite. Une fin toute proche
+        est surveillée tout de suite, la passe suivante viendrait trop tard."""
+        minimum = min_next_bid(auction)
+        entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding", watch_price=minimum)
+        log.info("Achat : « %s » — %s, mise minimale %d (limite %d) ; mise à %d s de la fin (%s).", card.name,
+                 f"dépassé ({auction.get('current_bid')})" if outbid else "enchère suivie sans miser", minimum,
+                 card.max_price, self.config.snipe_lead.total_seconds(), auction.get("end_at"))
+        self.watch_until_end(card, entry, auction)
+
     def bid_if_needed(self, card: BuyCard, entry: dict, auction: dict) -> None:
         if self.leading(auction):
             log.info("Achat : « %s » — vous menez à %s (fin %s).", card.name, auction.get("current_bid"),
@@ -611,11 +625,17 @@ class _Buyer:
             self.lost(card, entry, auction)
             _forget(entry)
             return
+        if self.config.max_total_bids and self.budget_used + amount > self.config.max_total_bids:
+            log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; pas de mise sur « %s ».",
+                     self.budget_used, card.name)
+            _forget(entry)
+            return
         if self.dry_run:
             log.info("Simulation : surenchère de %d sur « %s ».", amount, card.name)
             _forget(entry)
             return
         if self.site.post_bid(auction["id"], amount, self.deadline(auction), self.state.my_id):
+            self.budget_used += amount
             entry["placed"] = auction["id"]
             entry["my_bid"] = {"auction": auction["id"], "amount": amount}
             log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
