@@ -28,6 +28,7 @@ class SessionGate:
         self._cond = threading.Condition()
         self._busy = False
         self._priority_waiting = 0
+        self._in_pass = False  # la session est tenue par une passe (pas par la défausse)
 
     @contextmanager
     def priority(self):
@@ -38,7 +39,7 @@ class SessionGate:
                     self._cond.wait()
             finally:
                 self._priority_waiting -= 1
-            self._busy = True
+            self._busy = self._in_pass = True
         try:
             yield
         finally:
@@ -55,13 +56,17 @@ class SessionGate:
         finally:
             self._release()
 
+    def in_pass(self) -> bool:
+        """Une passe utilise la session, ou l'attend : le fil des prix ne s'en sert pas."""
+        return self._in_pass or self._priority_waiting > 0
+
     def should_yield(self) -> bool:
         """Vrai si une passe attend la session : la tâche de fond doit s'interrompre."""
         return self._priority_waiting > 0
 
     def _release(self) -> None:
         with self._cond:
-            self._busy = False
+            self._busy = self._in_pass = False
             self._cond.notify_all()
 
 

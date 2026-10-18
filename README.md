@@ -172,8 +172,9 @@ script :
    chère à la moins chère**, sauf les cartes protégées (un exemplaire gardé, les doublons
    vendus) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
-   durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix n'a pas
-   pu être lu attend la passe suivante ;
+   durée de nuit). Une carte sans prix moyen est ignorée ; la passe ne lit aucun prix :
+   ceux qui manquent au cache sont lus en arrière-plan (voir « Prix des cartes ») et la
+   carte part à la passe suivante, anticipée dès qu'ils sont lus ;
 4. lance la défausse en arrière-plan (voir « Défausse ») ;
 5. envoie le bilan si son heure est venue (voir « Bilan »).
 
@@ -243,7 +244,8 @@ demandée (`12h`…) ou à défaut la durée habituelle.
 À chaque réveil, un fil à part par compte lit la collection, sauf s'il tourne déjà ou a
 fini il y a moins d'une heure (15 min si des prix n'avaient pas pu être lus). Au-delà de
 `seuil_defausse` exemplaires (150), il examine les cartes **des plus communes aux plus
-rares** (`C`, `PC`, `R`, `SR`, `UR`, `L`), lit le prix de chacune (cache, sinon le site)
+rares** (`C`, `PC`, `R`, `SR`, `UR`, `L`), prend le prix de chacune (cache, sinon le fil
+des prix, après les prix utiles aux ventes)
 et la **défausse aussitôt** si elle vaut moins de `defausse` (1 wikibidou par
 exemplaire).
 
@@ -291,9 +293,23 @@ Le journal donne pour chaque carte le prix retenu, les ventes gardées et écart
 compte qui l'a fournie est prévenu une fois ; en attendant sa nouvelle session, les prix
 pris à la place sont relus au bout d'une heure plutôt que de `cache_prix`.
 
-Une requête par carte (environ 5 s). Un refus passager du site ne fait laisser de côté que
-la carte concernée, après 30 s de pause ; l'API n'est abandonnée qu'après 5 refus de
-suite.
+**Lecture en arrière-plan** (mode `--loop`) : **un seul fil pour tous les comptes** lit
+les prix qui manquent au cache, une requête par carte (environ 5 s). Les passes n'en
+lisent aucun : elles prennent le cache et lui demandent les autres.
+
+- **Ordre :** d'abord les prix utiles aux ventes et aux prix `auto` de tous les comptes,
+  ensuite ceux de la défausse. Une carte demandée par plusieurs comptes n'est lue qu'une
+  fois.
+- **Session :** celle du Marché s'il y en a une ; sinon celle d'un compte qui a demandé
+  la carte (le prix moyen d'une carte se lit avec la session d'un compte qui la possède),
+  jamais pendant une passe de ce compte.
+- **Fins d'enchère :** le fil se met en pause dès qu'un compte approche d'une fin
+  d'enchère suivie, pour qu'aucune requête de prix ne gêne la mise de dernière seconde.
+- **Passe anticipée :** quand tous les prix de vente demandés par un compte sont lus,
+  sa boucle est réveillée pour mettre en vente sans attendre `intervalle`.
+- Un refus passager du site fait réessayer la carte 30 s plus tard (3 essais au plus).
+
+Sans la boucle (passe unique), les prix sont lus pendant la passe, comme avant.
 
 ### Bilan
 

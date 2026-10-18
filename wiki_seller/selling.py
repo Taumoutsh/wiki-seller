@@ -14,6 +14,7 @@ from datetime import datetime
 from .buying import WantedState, auction_title, my_user_id
 from .config import Config
 from .lists import AUTO, AUTO_SELL_RATIO, ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
+from . import price_worker
 from .pricing import PriceReader, fetch_averages
 from .settings import RARITIES
 from .selection import (
@@ -346,6 +347,9 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     log.info("%d carte(s) distincte(s), dont %d avec des exemplaires à vendre.", len(groups), len(sellable))
 
     averages, unknown, _ = fetch_averages(site, config, sellable)
+    if unknown and price_worker.active():
+        log.info("%d prix en cours de lecture en arrière-plan : ces cartes partiront à la passe suivante "
+                 "(anticipée dès qu'ils sont lus).", len(unknown))
     plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown)
     if plan.skipped:
         log.info("%d carte(s) ignorée(s), ex. : %s", len(plan.skipped),

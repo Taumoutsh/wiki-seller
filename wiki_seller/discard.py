@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 
 from .config import Config
 from .lists import protected_names
+from .price_worker import DISCARD
 from .pricing import PriceReader
 from .report import record_discard
 from .selection import CardGroup, copies_not_on_sale, count_listed, normalize_name, parse_collection
@@ -241,7 +242,11 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
             return False
         if progress.cards is None:
             return True  # seuil non dépassé
-        reader = PriceReader(site, config)
+        reader = PriceReader(site, config, priority=DISCARD, wait=True)
+        if reader.worker is not None:  # prix lus par le fil commun : toute la suite est demandée d'avance
+            for item in progress.cards[progress.position:]:
+                if f"{item.card_id}:{item.rarity}" not in reader.cache:
+                    reader.worker.request(item, config, DISCARD)
         try:
             while progress.position < len(progress.cards):
                 item = progress.cards[progress.position]

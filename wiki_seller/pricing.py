@@ -55,14 +55,23 @@ class PriceReader:
 
     OK, UNKNOWN, STOPPED = "ok", "unknown", "stopped"
 
-    def __init__(self, site: WikiMasters, config: Config):
+    def __init__(self, site: WikiMasters, config: Config, priority: int = 0, wait: bool = False,
+                 inline: bool = False):
+        """Quand le fil des prix tourne (price_worker), un prix absent du cache est demandé à
+        ce fil (priority : SALES ou DISCARD) : la lecture rend UNKNOWN tout de suite, ou
+        attend le prix (wait, pour la défausse). inline : lu sur place (le fil lui-même, ou
+        une passe unique sans boucle)."""
+        from . import price_worker
+
         self.site, self.config = site, config
+        self.worker = None if inline else price_worker.active()
+        self.priority, self.wait = priority, wait
         self.cache = load_price_cache(config)
         self.api_ok = True
         self.failures = 0  # refus passagers de suite
         self.fetched = 0  # prix demandés au site
         self.seconds = 0.0  # temps passé à les demander
-        self.retries_at_start = site.retries
+        self.retries_at_start = site.retries if site is not None else 0
         self.market_ok = True
         self.market_failures = 0  # échecs du Marché de suite
 
@@ -72,6 +81,14 @@ class PriceReader:
         key = f"{group.card_id}:{group.rarity}"
         if key in self.cache:
             return self.OK, self.cache[key]["average"]
+        if self.worker is not None:  # lu par le fil des prix
+            self.worker.request(group, self.config, self.priority)
+            if not self.wait:
+                return self.UNKNOWN, None
+            status, average = self.worker.wait(key, should_stop)
+            if status == self.OK:
+                self.cache[key] = {"average": average, "at": now_utc().isoformat()}
+            return status, average
         if not self.api_ok:
             return self.UNKNOWN, None
         if should_stop():
@@ -135,7 +152,7 @@ class PriceReader:
         """« 120 prix demandés au site, 7,9 s en moyenne, 85 nouvel(s) essai(s) après refus »."""
         if not self.fetched:
             return "aucun prix demandé au site"
-        retries = self.site.retries - self.retries_at_start
+        retries = (self.site.retries if self.site is not None else 0) - self.retries_at_start
         average = f"{self.seconds / self.fetched:.1f}".replace(".", ",")
         return (f"{self.fetched} prix demandé(s) au site, {average} s en moyenne, "
                 f"{retries} nouvel(s) essai(s) après refus du site")

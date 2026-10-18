@@ -156,19 +156,24 @@ def report_now(config: Config, debug: bool, kinds: set[str] = frozenset({"report
         bot.send(f"❌ Impossible pour l'instant : {str(exc).splitlines()[0][:200]}")
 
 
-def sleep_until(wake: datetime, config: Config, debug: bool) -> None:
+def sleep_until(wake: datetime, config: Config, debug: bool) -> bool:
     """Attend le prochain réveil ; un /update reçu entre-temps envoie le bilan aussitôt,
-    sauf juste avant le réveil (une surenchère ne doit pas attendre) : il part après."""
+    sauf juste avant le réveil (une surenchère ne doit pas attendre) : il part après.
+    True si une passe est demandée plus tôt (prix de vente lus en arrière-plan)."""
     requests = _requests(config.telegram_chat_id if config else "")
     while True:
         remaining = (wake - now_utc()).total_seconds()
         if remaining <= 0:
-            return
+            return False
         if remaining <= REPORT_GUARD_SECONDS:
             time.sleep(remaining)
-            return
+            return False
         if requests.event.wait(remaining - REPORT_GUARD_SECONDS):
-            report_now(config, debug, requests.take())
+            kinds = requests.take()
+            if kinds - {"pass"}:
+                report_now(config, debug, kinds - {"pass"})
+            if "pass" in kinds:
+                return True
 
 
 def next_run_at(result: RunResult, config: Config, now: datetime) -> datetime:
@@ -258,4 +263,6 @@ def _loop(current, dry_run: bool, debug: bool) -> None:
         wake, snipe = next_wake(next_pass, config, now_utc())
         log.info("Prochain réveil à %s%s.", wake.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
                  " (surenchère avant la fin d'une enchère)" if snipe else "")
-        sleep_until(wake, config, debug)
+        if sleep_until(wake, config, debug):
+            log.info("Prix de vente lus en arrière-plan : passe anticipée.")
+            snipe = False

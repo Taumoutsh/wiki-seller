@@ -134,6 +134,11 @@ def _store(config: Config) -> SessionStore:
         return _STORES[path]
 
 
+def market_site(config: Config) -> WikiMasters:
+    """Site avec la session Marché (lecture des prix seulement)."""
+    return WikiMasters(SiteClient(config.base_url, _store(config)), config)
+
+
 def configured(config: Config) -> bool:
     return _store(config).has_session()
 

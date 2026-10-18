@@ -7,7 +7,7 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 
-from . import accounts
+from . import accounts, price_worker
 from .config import OBSOLETE_SETTINGS, Config, ConfigError, load_config, obsolete_settings
 from .discard import DISCARDER
 from .lists import ListError, buy_cards, legacy_files, safe_titles
@@ -86,6 +86,10 @@ def run_accounts(base: Config, dry_run: bool, debug: bool) -> None:
         time.sleep(SUPERVISE_EVERY)
 
 
+def _account_configs(base: Config) -> list[Config]:
+    return [accounts.account_config(base, a.chat_id) for a in accounts.accounts(base)]
+
+
 def _account_loop(base: Config, chat_id: str, dry_run: bool, debug: bool) -> None:
     def current():
         return accounts.account_config(base, chat_id) if accounts.find(base, chat_id) else None
@@ -118,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             bot = telegram_bot(base)
             if bot is not None:  # une seule écoute pour toutes les conversations
                 CommandListener(bot, request, base).start()
+            price_worker.start(lambda: _account_configs(base), lambda config: request(config.telegram_chat_id, "pass"))
             run_accounts(base, args.dry_run, args.debug)
         else:
             run_once(config, dry_run=args.dry_run or config.simulation, debug=args.debug)
