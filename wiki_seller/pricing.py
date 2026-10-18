@@ -82,6 +82,10 @@ class PriceReader:
         if key in self.cache:
             return self.OK, self.cache[key]["average"]
         if self.worker is not None:  # lu par le fil des prix
+            done = self.worker.result(key)
+            if done is not None and done[0] == self.OK:  # déjà lu (demandé d'avance, ou par un autre compte)
+                self.cache[key] = {"average": done[1], "at": now_utc().isoformat()}
+                return done
             self.worker.request(group, self.config, self.priority)
             if not self.wait:
                 return self.UNKNOWN, None

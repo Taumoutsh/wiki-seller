@@ -34,7 +34,7 @@ SNIPE_GUARD = timedelta(seconds=30)  # pause du fil avant le réveil de fin d'en
 IDLE_WAIT = 2  # s entre deux vérifications quand il n'y a rien à lire
 MAX_TRIES = 3  # lectures ratées d'une carte avant de la rendre « inconnue »
 RETRY_AFTER = 30  # s avant de réessayer une carte dont la lecture a échoué
-RESULTS_KEPT = 5000
+RESULTS_KEPT = 200_000  # une défausse demande d'avance toute sa collection
 
 OK, UNKNOWN, STOPPED = "ok", "unknown", "stopped"
 
@@ -73,21 +73,29 @@ class PriceWorker:
     # ─────────────────────────── Demandes (fils des comptes) ───────────────────────────
 
     def request(self, group, config: Config, priority: int) -> str:
-        """Ajoute la carte à la file (une seule fois, même demandée par plusieurs comptes)."""
+        """Ajoute la carte à la file (une seule fois, même demandée par plusieurs comptes).
+        Un prix déjà lu n'est pas relu ; seul un prix illisible est redemandé."""
         key = f"{group.card_id}:{group.rarity}"
         with self._cond:
+            if self._results.get(key, (None,))[0] == OK:
+                return key
             self._results.pop(key, None)
             item = self._items.get(key)
             if item is None:
                 item = self._items[key] = _Item(key, group.card_id, group.rarity, group.title, priority,
                                                 next(self._order))
-            elif priority < item.priority:
-                item.priority, item.order = priority, next(self._order)
+            elif priority < item.priority:  # demandée aussi pour une vente : sa place dans la file est gardée
+                item.priority = priority
             item.requesters[_account(config)] = config
             if priority == SALES:
                 self._sales.setdefault(_account(config), set()).add(key)
             self._cond.notify_all()
         return key
+
+    def result(self, key: str) -> tuple[str, float | None] | None:
+        """Prix déjà lu (ou illisible) pour cette carte, s'il y en a un."""
+        with self._cond:
+            return self._results.get(key)
 
     def wait(self, key: str, should_stop: Callable[[], bool] = lambda: False) -> tuple[str, float | None]:
         """Attend le prix demandé : (OK, prix), (UNKNOWN, None) s'il n'a pas pu être lu, ou

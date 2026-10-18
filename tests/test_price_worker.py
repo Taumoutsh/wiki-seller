@@ -133,3 +133,36 @@ def test_sales_and_discard_prices_are_read_in_turn(tmp_path, worker):
             prices.request(card(card_id), config, DISCARD)
         drain(prices)
     assert [c for kind, c in site.events if kind == "prix"] == ["A", "F", "B", "G", "C"]
+
+
+def test_prices_read_ahead_are_not_read_again_when_the_discard_gets_there(tmp_path, worker):
+    import time
+
+    from wiki_seller.pricing import PriceReader
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [])
+        with open_site(config, background=True) as wm:
+            prices = worker([config])
+            reader = PriceReader(wm, config, priority=DISCARD, wait=True)
+            for card_id in ("A", "D", "F"):  # demandées d'avance, comme la défausse
+                prices.request(card(card_id), config, DISCARD)
+            drain(prices)
+            reads = len(site.events)
+            deadline = time.monotonic() + 2  # sans prix déjà lu, l'attente s'arrêterait là
+            assert reader.read(card("D"), lambda: time.monotonic() > deadline) == ("ok", 300)
+            assert len(site.events) == reads and prices.pending() == 0  # rien de relu
+
+
+def test_card_asked_for_a_sale_keeps_its_place_in_the_queue(tmp_path, worker):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [])
+        with open_site(config):
+            pass
+        prices = worker([config])
+        for card_id in ("A", "B"):
+            prices.request(card(card_id), config, DISCARD)
+        prices.request(card("C"), config, SALES)
+        prices.request(card("B"), config, SALES)  # déjà demandée par la défausse
+        drain(prices)
+    assert [c for kind, c in site.events if kind == "prix"] == ["B", "A", "C"]
