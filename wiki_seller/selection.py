@@ -23,13 +23,19 @@ def normalize_name(name: str) -> str:
 
 @dataclass
 class CardGroup:
-    """Tous les exemplaires possédés d'une même carte."""
+    """Tous les exemplaires possédés d'une même carte, dans une même rareté (une carte
+    peut exister en plusieurs raretés, à des prix très différents)."""
 
     card_id: str
     title: str
     rarity: str | None
     copy_ids: list[str] = field(default_factory=list)
     count: int = 0
+
+    @property
+    def key(self) -> str:
+        """Carte et rareté : clé des prix (state/price_cache.json)."""
+        return f"{self.card_id}:{self.rarity}"
 
 
 def _str(value) -> str:
@@ -41,7 +47,7 @@ def parse_collection(entries: list[dict], excluded_copy_ids: set[str] = frozense
 
     Selon les versions du site, une entrée représente soit un exemplaire, soit une
     carte avec un champ `count` : on gère les deux."""
-    groups: dict[str, CardGroup] = {}
+    groups: dict[tuple[str, str | None], CardGroup] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -55,9 +61,9 @@ def parse_collection(entries: list[dict], excluded_copy_ids: set[str] = frozense
             continue
         rarity = _str(card.get("rarity")).upper() or _str(entry.get("rarity")).upper() or None
 
-        group = groups.get(card_id)
+        group = groups.get((card_id, rarity))
         if group is None:
-            group = groups[card_id] = CardGroup(card_id=card_id, title=title, rarity=rarity)
+            group = groups[(card_id, rarity)] = CardGroup(card_id=card_id, title=title, rarity=rarity)
         try:
             declared = int(entry.get("count") or 0)
         except (TypeError, ValueError):
@@ -78,10 +84,17 @@ def auction_refs(auction: dict) -> set[str]:
     return {r for r in (_str(auction.get("card_id")), _str(auction.get("user_card_id")), _str(card.get("id"))) if r}
 
 
+def _rarity(auction: dict) -> str:
+    card = auction.get("card") if isinstance(auction.get("card"), dict) else {}
+    return _str(auction.get("snapshot_rarity") or card.get("rarity")).upper()
+
+
 def count_listed(group: CardGroup, selling: list[dict]) -> int:
-    """Nombre d'enchères en cours portant sur un exemplaire de cette carte."""
+    """Nombre d'enchères en cours portant sur un exemplaire de cette carte (de cette
+    rareté, quand l'enchère la donne)."""
     ids = {group.card_id, *group.copy_ids}
-    return sum(1 for a in selling if isinstance(a, dict) and auction_refs(a) & ids)
+    return sum(1 for a in selling if isinstance(a, dict) and auction_refs(a) & ids
+               and (not group.rarity or _rarity(a) in ("", group.rarity)))
 
 
 def copies_not_on_sale(group: CardGroup, selling: list[dict]) -> list[str]:
@@ -127,18 +140,19 @@ def build_sale_plan(
     ratio: float,
     unknown_prices: set[str] = frozenset(),
 ) -> SalePlan:
-    """Liste des cartes à vendre, de la plus chère à la moins chère. Les cartes dont le
-    prix n'a pas pu être lu (`unknown_prices`) sont laissées pour la passe suivante."""
+    """Liste des cartes à vendre, de la plus chère à la moins chère. Prix par carte et
+    rareté (CardGroup.key) ; les cartes dont le prix n'a pas pu être lu (`unknown_prices`)
+    sont laissées pour la passe suivante."""
     items: list[SaleItem] = []
     skipped: list[tuple[str, str]] = []
     for group in groups:
         copies = copies_available(group, safe_names, selling)
         if copies <= 0:
             continue
-        if group.card_id in unknown_prices:
+        if group.key in unknown_prices:
             skipped.append((group.title, "prix illisible pour l'instant"))
             continue
-        average = averages.get(group.card_id)
+        average = averages.get(group.key)
         if not average or average <= 0:
             skipped.append((group.title, "pas de prix moyen"))
             continue

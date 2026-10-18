@@ -151,8 +151,8 @@ class PriceReader:
 
 
 def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda: False):
-    """Prix moyens d'une liste de cartes. Renvoie (prix par carte, cartes dont le prix n'a
-    pas pu être lu, True si tout a été lu sans interruption)."""
+    """Prix d'une liste de cartes. Renvoie (prix par carte et rareté (CardGroup.key),
+    cartes dont le prix n'a pas pu être lu, True si tout a été lu sans interruption)."""
     reader = PriceReader(site, config)
     averages: dict[str, float | None] = {}
     unknown: set[str] = set()
@@ -162,9 +162,9 @@ def fetch_averages(site: WikiMasters, config: Config, groups, should_stop=lambda
             if status == reader.STOPPED:
                 return averages, unknown, False
             if status == reader.UNKNOWN:
-                unknown.add(group.card_id)
+                unknown.add(group.key)
             else:
-                averages[group.card_id] = average
+                averages[group.key] = average
     finally:
         reader.save()
     return averages, unknown, True

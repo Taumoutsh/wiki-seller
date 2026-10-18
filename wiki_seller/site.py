@@ -208,7 +208,8 @@ def parse_int(text: str) -> int | None:
 
 def entry_rarity(entry: dict) -> str:
     card = entry.get("card") if isinstance(entry.get("card"), dict) else entry
-    return str(card.get("rarity") or entry.get("rarity") or "").upper()
+    # snapshot_rarity : rareté de l'exemplaire mis en vente (une carte existe en plusieurs raretés)
+    return str(entry.get("snapshot_rarity") or card.get("rarity") or entry.get("rarity") or "").upper()
 
 
 def auction_minutes(label: str) -> int:

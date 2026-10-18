@@ -253,7 +253,9 @@ exemplaire).
 
 ### Prix des cartes
 
-Un seul prix par carte (et par rareté) sert à tous les comptes : ventes automatiques,
+Une même carte existe parfois en plusieurs raretés, à des prix très différents (en C
+vers 1 100, en L vers 6 300) : exemplaires, prix et ventes sont toujours comptés par carte
+**et** rareté. Un seul prix par carte et rareté sert à tous les comptes : ventes automatiques,
 défausse, et prix `auto` des achats et ventes. Il est gardé dans `state/price_cache.json`,
 commun, pendant `cache_prix` (24 h ; `/set cache_prix` ou `PRICE_CACHE_HOURS`), puis
 relu par le premier compte qui en a besoin.
@@ -270,9 +272,11 @@ est calculé sur les ventes des 30 derniers jours (50 au plus) :
   « robustes » (écart absolu médian, au moins 10 % de la médiane) : un échange d'argent
   ne fausse pas le calcul de l'écart lui-même, comme il fausserait un écart type ;
 - si **les dernières ventes** (au moins 2) sont aberrantes, toutes dans le même sens, la
-  carte **change de valeur** : le prix est la moyenne de ces ventes. Une seule dernière
-  vente aberrante peut être un échange d'argent : elle est écartée jusqu'à ce qu'une
-  autre la confirme (sans quoi un `/buy` auto pourrait miser sur un prix gonflé) ;
+  carte **change de valeur** : le prix est la **médiane** des dernières ventes nettement
+  de ce côté, qu'un échange d'argent parmi elles ne fausse pas (ventes réelles 700, 700…,
+  1651, 1232, 1706, 4835 → 1678). Une seule dernière vente aberrante peut être un échange
+  d'argent : elle est écartée jusqu'à ce qu'une autre la confirme (sans quoi un `/buy`
+  auto pourrait miser sur un prix gonflé) ;
 - sinon les ventes aberrantes isolées (échanges d'argent) sont écartées, et le prix est la
   **moyenne des autres** ;
 - moins de 3 ventes récentes : la moyenne du site.

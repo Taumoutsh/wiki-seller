@@ -113,8 +113,8 @@ def test_transient_price_refusal_skips_only_that_card(tmp_path, monkeypatch):
     config = make_config(tmp_path, "http://127.0.0.1:1", [])
     site = PriceStub(refused={"X1"})
     averages, unknown, complete = main.fetch_averages(site, config, price_groups(4))
-    assert complete and unknown == {"X1"}
-    assert averages == {"X0": 5.0, "X2": 5.0, "X3": 5.0}
+    assert complete and unknown == {"X1:C"}
+    assert averages == {"X0:C": 5.0, "X2:C": 5.0, "X3:C": 5.0}
     # La carte refusée n'est pas mise en cache : elle sera redemandée la prochaine fois.
     site = PriceStub()
     main.fetch_averages(site, config, price_groups(4))

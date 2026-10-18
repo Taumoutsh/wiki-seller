@@ -8,8 +8,10 @@ Prix nettoyé, par rareté, sur les ventes des 30 derniers jours (50 au plus) :
   (écart absolu médian, au moins 10 % de la médiane) : un écart type ordinaire serait
   gonflé par la vente aberrante elle-même ;
 - si les dernières ventes (au moins 2) sont aberrantes, toutes dans le même sens, la
-  carte change de valeur : le prix est leur moyenne ; une seule dernière vente aberrante
-  peut être un échange d'argent : elle est écartée, jusqu'à ce qu'une autre la confirme ;
+  carte change de valeur : le prix est la médiane des dernières ventes nettement de ce
+  côté (plus d'un écart robuste), qu'un échange d'argent parmi elles ne fausse pas ; une
+  seule dernière vente aberrante peut être un échange d'argent : elle est écartée,
+  jusqu'à ce qu'une autre la confirme ;
 - sinon, les ventes aberrantes isolées (échanges d'argent) sont écartées et le prix est
   la moyenne des autres.
 Moins de 3 ventes : pas de prix nettoyé, la moyenne du site sert."""
@@ -63,8 +65,13 @@ def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
     while tail < len(sides) and sides[-1 - tail] != 0 and sides[-1 - tail] == sides[-1]:
         tail += 1
     if tail >= TREND_MIN_SALES:
-        kept = prices[-tail:]
-        return MarketPrice(statistics.fmean(kept), len(kept), len(prices) - len(kept), True)
+        # Nouvelle valeur : les dernières ventes nettement du même côté (au-delà d'un écart),
+        # et leur médiane, qu'un échange d'argent parmi elles ne fausse pas.
+        side, start = sides[-1], len(prices)
+        while start > 0 and (prices[start - 1] - median) * side > spread:
+            start -= 1
+        kept = prices[start:]
+        return MarketPrice(statistics.median(kept), len(kept), len(prices) - len(kept), True)
     kept = [p for p, side in zip(prices, sides) if side == 0]
     return MarketPrice(statistics.fmean(kept), len(kept), len(prices) - len(kept), False)
 
@@ -217,11 +224,14 @@ def _check(site: WikiMasters, probe_card: str | None):
     if probe_card is None:
         return True
     try:
+        summary = site.api_get_ok(f"/api/marketplace/cards/{probe_card}/sales?scope=summary")
         data = site.fetch_market_sales(probe_card)
     except SessionExpired:
         return "❌ Ce compte n'a pas accès au Marché."
     except SiteError:
         return "⏳ Le Marché ne répond pas : renvoyez /market dans quelques minutes."
-    if parse_sales(data, None) or (isinstance(data, dict) and isinstance(data.get("sales"), list)):
+    if isinstance(summary, dict) and summary.get("isPro") is False:  # accès au Marché, selon le site
+        return "❌ Ce compte n'a pas accès au Marché."
+    if isinstance(data, dict) and isinstance(data.get("sales"), list):
         return True
     return "❌ Le Marché n'a pas renvoyé le détail des ventes : ce compte n'y a sans doute pas accès."

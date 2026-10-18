@@ -27,6 +27,12 @@ def test_parse_collection_groups_per_copy_entries():
     assert len(groups) == 1 and groups[0].count == 2 and groups[0].copy_ids == ["c1", "c2"]
 
 
+def test_same_card_in_two_rarities_makes_two_groups():
+    groups = parse_collection([entry("c1", "k1", "Paris", "PC"), entry("c2", "k1", "Paris", "R"),
+                               entry("c3", "k1", "Paris", "R")])
+    assert [(g.key, g.copy_ids) for g in groups] == [("k1:PC", ["c1"]), ("k1:R", ["c2", "c3"])]
+
+
 def test_parse_collection_uses_declared_count():
     groups = parse_collection([entry("c1", "k1", "Paris", count=3)])
     assert groups[0].count == 3
@@ -45,7 +51,7 @@ def test_plan_sorts_by_price_and_keeps_one_protected_copy():
         entry("d1", "D", "Expensive"),
         entry("e1", "E", "No price"),
     ])
-    averages = {"A": 10, "B": 500, "C": 900, "D": 300, "E": None}
+    averages = {"A:R": 10, "B:R": 500, "C:R": 900, "D:R": 300, "E:R": None}
     plan = build_sale_plan(groups, {normalize_name("chateau de versailles"), normalize_name("TOUR EIFFEL")},
                            averages, [], 0.7)
     assert [(i.title, i.copies_to_sell, i.price) for i in plan.items] == [
@@ -59,13 +65,13 @@ def test_plan_sorts_by_price_and_keeps_one_protected_copy():
 def test_plan_counts_copies_already_on_auction():
     groups = parse_collection([entry("b1", "B", "Protégée"), entry("b2", "B", "Protégée"), entry("x1", "X", "Libre")])
     selling = [{"card_id": "b2", "status": "active"}, {"card_id": "x1", "status": "active"}]
-    plan = build_sale_plan(groups, {"protegee"}, {"B": 100, "X": 100}, selling, 0.7)
+    plan = build_sale_plan(groups, {"protegee"}, {"B:R": 100, "X:R": 100}, selling, 0.7)
     assert plan.items == []  # b2 déjà en vente => il ne reste que l'exemplaire à garder
 
 
 def test_cards_with_unreadable_price_wait_for_the_next_pass():
     groups = parse_collection([entry("a1", "A", "Zèbre"), entry("b1", "B", "Abeille"), entry("c1", "C", "Connue")])
-    plan = build_sale_plan(groups, set(), {"C": 50}, [], 0.7, unknown_prices={"A", "B"})
+    plan = build_sale_plan(groups, set(), {"C:R": 50}, [], 0.7, unknown_prices={"A:R", "B:R"})
     assert [(i.title, i.price) for i in plan.items] == [("Connue", 35)]
     assert sorted(plan.skipped) == [("Abeille", "prix illisible pour l'instant"), ("Zèbre", "prix illisible pour l'instant")]
 

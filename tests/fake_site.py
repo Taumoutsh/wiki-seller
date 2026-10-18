@@ -196,7 +196,7 @@ class FakeWikiMasters:
                     cards = [c["card"] for c in site.collection] + [a["card"] for a in site.auctions.values()]
                     rarity = next((c.get("rarity", "R") for c in cards if c.get("id") == card_id), "R")
                     summary = {rarity: {"average": avg, "count": 5}} if avg else {}
-                    return self._send(200, {"summary": summary})
+                    return self._send(200, {"summary": summary, "isPro": site.has_market})
                 return self._send(404, {})
 
             def do_POST(self):

@@ -42,6 +42,25 @@ def test_regular_prices_and_window():
     assert clean_price(sales(*([1] * 10 + [100] * 50)), NOW).price == 100  # 50 dernières ventes
 
 
+# Ventes réelles d'une carte en rareté C (Marché, octobre 2026) : ~700, puis une hausse
+# vers ~1600, et une dernière vente à 4835.
+REAL_C = [("2026-10-01T00:24", 600), ("2026-10-01T02:12", 700), ("2026-10-01T23:11", 980),
+          ("2026-10-02T20:42", 733), ("2026-10-07T19:29", 535), ("2026-10-08T08:15", 800),
+          ("2026-10-08T12:26", 800), ("2026-10-11T01:04", 750), ("2026-10-11T06:20", 800),
+          ("2026-10-12T07:00", 605), ("2026-10-12T08:49", 550), ("2026-10-13T09:14", 1651),
+          ("2026-10-14T07:37", 1232), ("2026-10-15T09:01", 1706), ("2026-10-17T17:02", 4835)]
+
+
+def test_real_rise_is_priced_by_the_median_of_the_new_level():
+    data = {"wikipedia_title": "Carte", "recent": [],
+            "sales": [{"id": str(i), "final_price": p, "settled_at": f"{t}:00.000000+00:00", "rarity": "C"}
+                      for i, (t, p) in enumerate(REAL_C)] + [
+                     {"id": "l", "final_price": 6000, "settled_at": "2026-10-16T10:00:00+00:00", "rarity": "L"}]}
+    found = clean_price(parse_sales(data, "C"), NOW)
+    assert found == MarketPrice(1678.5, 4, 11, True)  # 1651, 1232, 1706, 4835 : 4835 ne pèse pas
+    assert clean_price(parse_sales(data, "L"), NOW) is None  # une seule vente L
+
+
 def test_parse_sales():
     data = {"sales": [
         {"final_price": 120, "settled_at": "2026-10-10T10:00:00Z", "rarity": "R"},

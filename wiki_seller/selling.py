@@ -15,6 +15,7 @@ from .buying import WantedState, auction_title, my_user_id
 from .config import Config
 from .lists import AUTO, AUTO_SELL_RATIO, ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
 from .pricing import PriceReader, fetch_averages
+from .settings import RARITIES
 from .selection import (
     PROTECTED_COPIES_TO_KEEP,
     CardGroup,
@@ -188,6 +189,9 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
             continue
         matching = [g for g in groups if normalize_name(g.title) == card.key
                     and (not card.rarity or g.rarity == card.rarity)]
+        matching.sort(key=lambda g: RARITIES.index(g.rarity) if g.rarity in RARITIES else len(RARITIES))
+        if card.price == AUTO and matching:  # prix d'une rareté : la plus rare possédée d'abord
+            matching = [g for g in matching if g.rarity == matching[0].rarity]
         owned = sum(g.count for g in matching)
         if not owned:
             log.info("Vente demandée : « %s » introuvable dans la collection.", card.name)
