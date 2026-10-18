@@ -11,7 +11,7 @@ import threading
 from datetime import datetime, timedelta
 from html import escape
 
-from .buying import auction_title, ended
+from .buying import auction_title, ended, rarity_matches
 from .lists import AUTO, ListError, buy_cards
 from .selection import normalize_name
 from .site import min_bid
@@ -89,7 +89,7 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
         if not isinstance(auction, dict) or auction.get("status", "active") != "active":
             continue
         card = cards.get(normalize_name(auction_title(auction)))
-        if card is None or ended(auction, now):  # finie, pas encore retirée par le site
+        if card is None or ended(auction, now) or not rarity_matches(auction, card, unknown_ok=True):
             continue
         entry = tracked.get(card.key) or {}
         current = auction.get("current_bid")

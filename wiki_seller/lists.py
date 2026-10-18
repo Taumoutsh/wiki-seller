@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .config import parse_duration, short_duration
 from .selection import normalize_name
+from .settings import RARITIES
 from .state import LISTS_LOCK, now_utc, read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class BuyCard:
     sell_price: int | str | None = None  # /buyandsell : revendue à ce prix (AUTO : 110 % du marché)
     seller: str = ""  # @Pseudo : n'acheter qu'à ce vendeur
     sell_duration: str = ""  # /buyandsell : durée de la revente (ex. 12h) ; vide = habituelle
+    rarity: str = ""  # n'acheter que cette rareté (ex. SR) ; vide = toutes
 
     @property
     def key(self) -> str:
@@ -61,6 +63,7 @@ class SellCard:
     keep_one: bool | None = None  # carte protégée en plusieurs exemplaires : le dernier est gardé
                                   # (None : pas encore trouvée dans la collection)
     duration: str = ""  # durée des ventes (ex. 12h) ; vide = durée habituelle du compte
+    rarity: str = ""  # ne vendre que cette rareté (ex. SR) ; vide = toutes
 
     @property
     def key(self) -> str:
@@ -183,7 +186,8 @@ def _buy_raw(config) -> list[dict]:
         if (not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip()
                 or not _price(item.get("max_price")) or not _positive(item.get("copies", 1))
                 or (item.get("sell_price") is not None and not _price(item["sell_price"]))
-                or not isinstance(item.get("seller", ""), str) or not isinstance(item.get("sell_duration", ""), str)):
+                or not isinstance(item.get("seller", ""), str) or not isinstance(item.get("sell_duration", ""), str)
+                or item.get("rarity", "") not in ("", *RARITIES)):
             raise ListError(f"{buy_file(config)} : entrée invalide {item!r}.")
     return data
 
@@ -195,12 +199,12 @@ def buy_cards(config) -> list[BuyCard]:
 
 def _buy_card(entry: dict) -> BuyCard:
     return BuyCard(entry["name"].strip(), entry["max_price"], entry.get("copies", 1), entry.get("sell_price"),
-                   entry.get("seller", ""), entry.get("sell_duration", ""))
+                   entry.get("seller", ""), entry.get("sell_duration", ""), entry.get("rarity", ""))
 
 
 def set_buy(config, name: str, max_price: int | str | None, copies: int | None = None,
             sell_price: int | str | None = None, seller: str | None = None,
-            sell_duration: str | None = None) -> tuple[str, BuyCard]:
+            sell_duration: str | None = None, rarity: str | None = None) -> tuple[str, BuyCard]:
     """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées) ; sans
     prix max, celui de la liste est gardé (AUTO pour une nouvelle carte).
     Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
@@ -222,6 +226,8 @@ def set_buy(config, name: str, max_price: int | str | None, copies: int | None =
             entry["seller"] = seller
         if sell_duration:
             entry["sell_duration"] = sell_duration
+        if rarity:
+            entry["rarity"] = rarity
         status = "ajoutée" if before is None else "inchangée" if entry == before else "mise à jour"
         if status != "inchangée":
             write_json(buy_file(config), data)
@@ -253,7 +259,7 @@ def complete_purchase(config, card: BuyCard, bought: int) -> str:
     with LISTS_LOCK:
         remove_buy(config, card.name)
         if card.sell_price:
-            set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None)
+            set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None, card.rarity or None)
             duration = f" pour {card.sell_duration}" if card.sell_duration else ""
             return (f"🔁 « {card.name} » : achat terminé, mise en vente à "
                     f"{price_text(card.sell_price, AUTO_SELL_RATIO)}{duration} "
@@ -269,7 +275,7 @@ def _sell_raw(config) -> list[dict]:
     data = _load(sell_file(config)) or []
     if not isinstance(data, list) or not all(
             isinstance(i, dict) and isinstance(i.get("name"), str) and _price(i.get("price"))
-            and _positive(i.get("copies", 1)) for i in data):
+            and _positive(i.get("copies", 1)) and i.get("rarity", "") in ("", *RARITIES) for i in data):
         raise ListError(f"{sell_file(config)} : contenu invalide.")
     return data
 
@@ -277,7 +283,7 @@ def _sell_raw(config) -> list[dict]:
 def _sell_card(entry: dict) -> SellCard:
     return SellCard(entry["name"], entry["price"], entry.get("copies", 1), entry.get("added_at", ""),
                     tuple(entry.get("sold", ())), bool(entry.get("missing_notified")), entry.get("keep_one"),
-                    entry.get("duration", ""))
+                    entry.get("duration", ""), entry.get("rarity", ""))
 
 
 def sell_cards(config) -> list[SellCard]:
@@ -286,7 +292,7 @@ def sell_cards(config) -> list[SellCard]:
 
 
 def set_sell(config, name: str, price: int | str | None, copies: int | None = None,
-             duration: str | None = None) -> tuple[str, SellCard]:
+             duration: str | None = None, rarity: str | None = None) -> tuple[str, SellCard]:
     """Ajoute une carte aux ventes, ou met à jour son prix (les exemplaires indiqués
     s'ajoutent alors à ceux restant à vendre, la durée indiquée remplace l'ancienne) ;
     sans prix, celui de la liste est gardé (AUTO pour une nouvelle carte).
@@ -307,6 +313,8 @@ def set_sell(config, name: str, price: int | str | None, copies: int | None = No
             status = "mise à jour"
         if duration:
             entry["duration"] = duration
+        if rarity:
+            entry["rarity"] = rarity
         write_json(sell_file(config), data)
         return status, _sell_card(entry)
 
@@ -368,16 +376,20 @@ class CardArgs:
     copies: int | None = None
     duration: str = ""  # durée de vente, ex. 12h
     seller: str = ""  # pseudo du vendeur, sans @
+    rarity: str = ""  # rareté voulue (L, UR, SR, R, PC, C)
 
 
 def _option(word: str, allowed: tuple[str, ...]) -> tuple[str, object] | None:
-    """(« copies » | « duree » | « vendeur », valeur) si le mot est une option permise."""
+    """(« copies » | « duree » | « vendeur » | « rarete », valeur) si le mot est une option
+    permise."""
     if "copies" in allowed and (match := COPIES.fullmatch(word)):
         return "copies", int(match.group(1))
     if "vendeur" in allowed and (match := SELLER.fullmatch(word)):
         return "vendeur", match.group(1)
     if "duree" in allowed and not word.isdigit() and (duration := parse_duration(word)) is not None:
         return "duree", duration
+    if "rarete" in allowed and word.upper() in RARITIES:
+        return "rarete", word.upper()
     return None
 
 
@@ -437,7 +449,7 @@ def _parse_optional(args: str, prices: int, usage: str, allowed: tuple[str, ...]
     if not words or options.get("copies") == 0 or (words[-1].isdigit() and int(words[-1]) == 0):
         raise ListError(usage)
     return CardArgs(" ".join(words), numbers + [None] * (prices - len(numbers)), options.get("copies"),
-                    _duration(options.get("duree")), options.get("vendeur", ""))
+                    _duration(options.get("duree")), options.get("vendeur", ""), options.get("rarete", ""))
 
 
 def _duration(duration) -> str:

@@ -186,13 +186,15 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
     for card in cards:
         if card.remaining <= 0:
             continue
-        matching = [g for g in groups if normalize_name(g.title) == card.key]
+        matching = [g for g in groups if normalize_name(g.title) == card.key
+                    and (not card.rarity or g.rarity == card.rarity)]
         owned = sum(g.count for g in matching)
         if not owned:
             log.info("Vente demandée : « %s » introuvable dans la collection.", card.name)
             if not card.missing_notified and not dry_run:
                 update_sell(config, card.name, missing_notified=True)
-                notify(config, f"❓ « {card.name} » est introuvable dans votre collection : elle reste dans "
+                notify(config, f"❓ « {card.name} »{f' {card.rarity}' if card.rarity else ''} est introuvable dans "
+                               "votre collection : elle reste dans "
                                "les ventes et partira dès qu'elle y sera (/unsell pour l'annuler).")
             continue
         if not dry_run and (card.missing_notified or card.name != matching[0].title):

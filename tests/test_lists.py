@@ -218,3 +218,16 @@ def test_price_left_out_keeps_the_price_of_the_list(config):
     assert set_sell(config, "Loire", None, 2)[1].price == 80
     assert set_sell(config, "Rhône", None)[1].price == AUTO
     assert set_sell(config, "Loire", AUTO)[1].price == AUTO  # « auto » écrit : prix auto
+
+
+def test_rarity_option():
+    from wiki_seller.lists import parse_card_command
+
+    options = ("copies", "vendeur", "rarete")
+    parsed = parse_card_command("Tour Eiffel 500 sr x2", 1, "usage", options, optional_prices=True)
+    assert (parsed.name, parsed.prices, parsed.copies, parsed.rarity) == ("Tour Eiffel", [500], 2, "SR")
+    assert parse_card_command("Vitamine C", 1, "usage", options, optional_prices=True).name == "Vitamine"
+    assert parse_card_command("Vitamine C; L", 1, "usage", options, optional_prices=True).rarity == "L"
+    assert parse_card_command("Vitamine C;", 1, "usage", options, optional_prices=True).name == "Vitamine C"
+    with pytest.raises(ListError, match="usage"):  # une seule rareté
+        parse_card_command("Tour Eiffel; SR L", 1, "usage", options, optional_prices=True)

@@ -106,7 +106,13 @@ s'ils ne fonctionnent pas.
 **Options** de `/buy`, `/sell` et `/buyandsell`, avant ou après les prix, dans n'importe
 quel ordre : `x2` (2 exemplaires), `12h` (durée de vente : `10m`, `30m`, `1h`, `3h`, `6h`,
 `12h` ; `/sell` et `/buyandsell`), `@Pseudo` (n'acheter qu'à ce vendeur ; `/buy` et
-`/buyandsell`). Exemple : `/buyandsell Tour Eiffel 500 800 x2 12h @Paul`.
+`/buyandsell`), `L`, `UR`, `SR`, `R`, `PC` ou `C` (seulement cette rareté : une même carte
+existe parfois en plusieurs raretés). Exemple : `/buyandsell Tour Eiffel 500 800 x2 12h @Paul SR`.
+
+Avec une rareté, l'achat ne vise que les enchères de cette rareté, et la vente (ou la
+revente de `/buyandsell`) que vos exemplaires de cette rareté. Une carte n'a qu'une ligne
+par liste : renvoyer `/buy Tour Eiffel L` change la rareté voulue. Pour un nom qui finit
+par un code de rareté (« Vitamine C »), terminez le nom par `;` : `/buy Vitamine C; 50`.
 
 **Prix `auto` :** calculé à chaque passe d'après le prix du marché (voir « Prix des
 cartes ») : achat jusqu'à **90 %**, vente à **110 %**. Une **nouvelle** carte sans prix

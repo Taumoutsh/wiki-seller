@@ -35,17 +35,17 @@ HELP_TEXT = ("Commandes :\n"
              "/list : cartes protégées, à acheter et à vendre\n"
              "/safe <carte> · /unsafe <carte> : protéger une carte (jamais défaussée, un exemplaire "
              "toujours gardé)\n"
-             "/buy <carte> [prix max] [x2] [@vendeur] · /unbuy <carte> : acheter une carte, protégée une fois "
+             "/buy <carte> [prix max] [x2] [@vendeur] [SR] · /unbuy <carte> : acheter une carte, protégée une fois "
              "obtenue\n"
-             "/sell <carte> [prix] [x2] [12h] · /unsell <carte> : vendre une carte à ce prix exact, en priorité\n"
-             "/buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur] : acheter une carte puis la "
+             "/sell <carte> [prix] [x2] [12h] [SR] · /unsell <carte> : vendre une carte à ce prix exact, en priorité\n"
+             "/buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur] [SR] : acheter une carte puis la "
              "revendre\n"
              "Prix « auto » (ou omis pour une nouvelle carte) : achat jusqu'à 90 % du prix du marché, vente à "
              "110 %. « ; » termine le nom : /buy Apollo 11; x2\n"
              "/market [cookies] : session Marché (comptes ayant accès au Marché), qui donne les prix de tous "
              "les comptes\n"
              "Options : x2 = 2 exemplaires ; 10m, 30m, 1h, 3h, 6h, 12h = durée de vente ; "
-             "@Pseudo = n'acheter qu'à ce vendeur")
+             "@Pseudo = n'acheter qu'à ce vendeur ; L, UR, SR, R, PC, C = seulement cette rareté")
 ADMIN_HELP = ("\nAdministration :\n"
               "/users : comptes du bot\n"
               "/adduser <chat_id> <nom> : ouvrir l'accès à une conversation\n"
@@ -62,11 +62,11 @@ WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouve
 SETTINGS_COMMANDS = ("/settings", "/reglages", "/set", "/pause", "/resume", "/simulation")
 LIST_COMMANDS = ("/list", "/safe", "/unsafe", "/buy", "/want", "/unbuy", "/sell", "/unsell", "/buyandsell")
 
-BUY_USAGE = ("Usage : /buy <carte> [prix max] [x2] [@vendeur], ex. /buy Tour Eiffel 500, "
+BUY_USAGE = ("Usage : /buy <carte> [prix max] [x2] [@vendeur] [SR], ex. /buy Tour Eiffel 500 SR, "
              "/buy Victor Hugo 120 x2 @Paul, /buy Tour Eiffel (prix auto) ou /buy Apollo 11; 500 "
              "(« ; » après un nom qui finit par un nombre)")
-SELL_USAGE = "Usage : /sell <carte> [prix] [x2] [12h], ex. /sell Tour Eiffel 800 12h ou /sell Tour Eiffel (prix auto)"
-BUY_AND_SELL_USAGE = ("Usage : /buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur], "
+SELL_USAGE = "Usage : /sell <carte> [prix] [x2] [12h] [SR], ex. /sell Tour Eiffel 800 12h ou /sell Tour Eiffel (prix auto)"
+BUY_AND_SELL_USAGE = ("Usage : /buyandsell <carte> [prix max] [prix de vente] [x2] [12h] [@vendeur] [SR], "
                       "ex. /buyandsell Tour Eiffel 500 800 ou /buyandsell Tour Eiffel (prix auto)")
 MARKET_HOWTO = ("Un compte ayant accès au Marché ouvre une nouvelle fenêtre privée, s'y connecte, copie les "
                 "cookies avec le favori « cookies » et envoie /market suivi de la ligne copiée, puis ferme la "
@@ -219,34 +219,37 @@ def _run(config, command: str, args: str) -> str:
         return (f"« {args} » retirée des ventes (une enchère déjà lancée continue)." if remove_sell(config, args)
                 else f"« {args} » n'est pas dans les ventes.")
     if command in ("/buy", "/want"):
-        parsed = parse_card_command(args, 1, BUY_USAGE, ("copies", "vendeur"), optional_prices=True)
-        status, card = set_buy(config, parsed.name, parsed.prices[0], parsed.copies, seller=parsed.seller)
+        parsed = parse_card_command(args, 1, BUY_USAGE, ("copies", "vendeur", "rarete"), optional_prices=True)
+        status, card = set_buy(config, parsed.name, parsed.prices[0], parsed.copies, seller=parsed.seller,
+                               rarity=parsed.rarity)
         resale = f", revendue à {_sell(card.sell_price)}{_for(card.sell_duration)} une fois obtenue" \
             if card.sell_price else ""
-        return (f"🛒 « {card.name} » {status} dans les achats ({_max(card.max_price)}, {card.copies} "
+        return (f"🛒 « {card.name} »{_rarity(card)} {status} dans les achats ({_max(card.max_price)}, {card.copies} "
                 f"exemplaire(s){_from(card.seller)}{resale}) : prise en compte à la prochaine passe."
                 + (WANT_NOTICE if command == "/want" else ""))
     if command == "/buyandsell":
-        parsed = parse_card_command(args, 2, BUY_AND_SELL_USAGE, ("copies", "duree", "vendeur"), optional_prices=True)
+        parsed = parse_card_command(args, 2, BUY_AND_SELL_USAGE, ("copies", "duree", "vendeur", "rarete"),
+                                    optional_prices=True)
         price, resale = parsed.prices
         if resale is None:  # revente au prix déjà demandé, sinon auto
             known = next((c for c in buy_cards(config) if c.key == normalize_name(parsed.name)), None)
             resale = (known.sell_price if known else None) or AUTO
         status, card = set_buy(config, parsed.name, price, parsed.copies, sell_price=resale, seller=parsed.seller,
-                               sell_duration=parsed.duration)
+                               sell_duration=parsed.duration, rarity=parsed.rarity)
         warning = "\n⚠️ Prix de vente sous le prix d'achat maximum." \
             if AUTO not in (card.max_price, card.sell_price) and card.sell_price < card.max_price else ""
-        return (f"🔁 « {card.name} » {status} dans les achats ({_max(card.max_price)}, {card.copies} "
+        return (f"🔁 « {card.name} »{_rarity(card)} {status} dans les achats ({_max(card.max_price)}, {card.copies} "
                 f"exemplaire(s){_from(card.seller)}), revendue à {_sell(card.sell_price)}{_for(card.sell_duration)} "
                 f"une fois obtenue.{warning}")
     if command == "/sell":
-        parsed = parse_card_command(args, 1, SELL_USAGE, ("copies", "duree"), optional_prices=True)
-        status, card = set_sell(config, parsed.name, parsed.prices[0], parsed.copies, parsed.duration or None)
+        parsed = parse_card_command(args, 1, SELL_USAGE, ("copies", "duree", "rarete"), optional_prices=True)
+        status, card = set_sell(config, parsed.name, parsed.prices[0], parsed.copies, parsed.duration or None,
+                                parsed.rarity or None)
         protected = ""
         if card.key in _safe_names(config):
             protected = ("\n🛡️ Elle est protégée : si vous n'en avez qu'un exemplaire, elle ne le sera plus ; "
                          "sinon le dernier exemplaire est gardé.")
-        return (f"💰 « {card.name} » {status} dans les ventes : {card.remaining} exemplaire(s) à {_sell(card.price)}"
+        return (f"💰 « {card.name} »{_rarity(card)} {status} dans les ventes : {card.remaining} exemplaire(s) à {_sell(card.price)}"
                 f"{_for(card.duration)}, mis en vente en priorité dès la prochaine passe.{protected}")
     raise ListError(HELP_TEXT)
 
@@ -261,6 +264,10 @@ def _max(price, current: int | None = None) -> str:
 
 def _sell(price) -> str:
     return price_text(price, AUTO_SELL_RATIO)
+
+
+def _rarity(card) -> str:
+    return f" ({card.rarity})" if card.rarity else ""
 
 
 def _for(duration: str) -> str:
@@ -291,12 +298,12 @@ def list_text(config) -> str:
     for card in buy:
         tracked = won.get(card.key) or {}
         got = len(tracked.get("won") or {})
-        lines.append(f"• {card.name} : {_max(card.max_price, tracked.get('auto_max'))}, {got}/{card.copies} obtenu(s)"
+        lines.append(f"• {card.name}{_rarity(card)} : {_max(card.max_price, tracked.get('auto_max'))}, {got}/{card.copies} obtenu(s)"
                      f"{_from(card.seller)}"
                      + (f", revente à {_sell(card.sell_price)}{_for(card.sell_duration)}" if card.sell_price else ""))
     lines.append(f"💰 À vendre ({len(sell)})" + (" :" if sell else " : aucune"))
     for card in sell:
-        lines.append(f"• {card.name} : {_sell(card.price)}{_for(card.duration)}, {len(card.sold)}/{card.copies} "
+        lines.append(f"• {card.name}{_rarity(card)} : {_sell(card.price)}{_for(card.duration)}, {len(card.sold)}/{card.copies} "
                      "vendu(s)")
     text = "\n".join(lines)
     return text if len(text) <= MAX_MESSAGE else text[:MAX_MESSAGE] + "…"

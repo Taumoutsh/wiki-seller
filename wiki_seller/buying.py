@@ -73,6 +73,7 @@ def choose_auction(auctions: list[dict], card: BuyCard, my_id: str | None, now: 
                 or auction.get("id") in exclude
                 or (auction.get("current_bidder_id") and auction.get("current_bidder_id") in rivals)
                 or (card.seller and not seller_matches(auction, card.seller))
+                or not rarity_matches(auction, card)
                 or not end or end - now < TOO_LATE or min_next_bid(auction) > card.max_price):
             continue
         candidates.append((min_next_bid(auction), end, auction))
@@ -96,11 +97,18 @@ def seller_matches(auction: dict, seller: str) -> bool:
     return normalize_name(seller).lstrip("@") in seller_names(auction)
 
 
+def rarity_matches(auction: dict, card: BuyCard, unknown_ok: bool = False) -> bool:
+    """Enchère de la rareté voulue (toujours vrai sans rareté demandée)."""
+    rarity = entry_rarity(auction)
+    return not card.rarity or rarity == card.rarity or (unknown_ok and not rarity)
+
+
 def won_since(mine: dict, card: BuyCard, since: datetime | None) -> list[dict]:
     """Enchères de cette carte dans « Gagnées », réglées depuis `since`."""
     found = []
     for auction in mine.get("won") or []:
-        if not isinstance(auction, dict) or normalize_name(auction_title(auction)) != card.key:
+        if (not isinstance(auction, dict) or normalize_name(auction_title(auction)) != card.key
+                or not rarity_matches(auction, card, unknown_ok=True)):
             continue
         settled = parse_time(auction.get("settled_at")) or parse_time(auction.get("end_at"))
         if since is None or (settled and settled >= since):
@@ -239,7 +247,7 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
             done = set(entry.get("won") or {}) | set(entry.get("lost") or [])
             mine_for_card = [a for a in bidding if normalize_name(auction_title(a)) == card.key
                              and a.get("status", "active") == "active" and a.get("id") not in done
-                             and not ended(a, buyer.now())]
+                             and rarity_matches(a, card, unknown_ok=True) and not ended(a, buyer.now())]
             leading_here = [a for a in mine_for_card if buyer.leading(a)]
             auction_id = entry.get("auction_id")
             if leading_here and auction_id not in {a["id"] for a in leading_here}:
@@ -308,12 +316,16 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
                 if auction is not None and not claim(config, auction["id"]):
                     auction = None  # choisie au même instant par un autre compte
                 if auction is None:
-                    log.info("Achat : aucune enchère de « %s » à %d ou moins%s.", card.name, card.max_price,
+                    log.info("Achat : aucune enchère de « %s »%s à %d ou moins%s.", card.name,
+                             f" {card.rarity}" if card.rarity else "", card.max_price,
                              f" chez @{card.seller}" if card.seller else "")
                     same_card = [a for a in found if normalize_name(auction_title(a)) == card.key]
                     if card.seller and same_card:  # pour vérifier comment le site nomme les vendeurs
                         log.info("Achat : « %s » — vendeurs des enchères en cours : %s", card.name,
                                  ", ".join(sorted(set().union(*(seller_names(a) for a in same_card))))[:300])
+                    if card.rarity and same_card:
+                        log.info("Achat : « %s » — raretés des enchères en cours : %s", card.name,
+                                 ", ".join(sorted({entry_rarity(a) or "inconnue" for a in same_card})))
                     if choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned) is not None:
                         buyer.blocked_by_fellow(card, entry)
                     continue
@@ -405,14 +417,16 @@ class _Buyer:
 
     def _auto_max(self, card: BuyCard, entry: dict) -> int | None:
         ref = entry.get("card_ref")
+        if ref and card.rarity and ref.get("rarity") != card.rarity:
+            ref = None  # rareté changée depuis
         if not ref:  # carte jamais vue : son identifiant vient d'une enchère en cours
             try:
                 found = self.site.search_auctions(card.name)
             except SiteError as exc:
                 log.warning("Achat : « %s » — enchères illisibles (%s).", card.name, exc)
                 return None
-            ref = next((r for a in found if normalize_name(auction_title(a)) == card.key and (r := card_ref(a))),
-                       None)
+            ref = next((r for a in found if normalize_name(auction_title(a)) == card.key
+                        and rarity_matches(a, card) and (r := card_ref(a))), None)
             if ref is None:
                 return None
             entry["card_ref"] = ref

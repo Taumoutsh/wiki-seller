@@ -154,3 +154,24 @@ def test_market_command_through_telegram_deletes_the_cookies(tmp_path):
             listener.stop()
     assert fake.deleted == [message_id]
     assert fake.sent[0].startswith("⏳ Session Marché reçue") and fake.sent[1].startswith("✅ Session Marché")
+
+
+def test_rarity_option_buys_and_sells_only_that_rarity(tmp_path):
+    from wiki_seller.commands import run_list_command
+    from wiki_seller.lists import buy_cards, sell_cards
+
+    from .test_end_to_end import entry
+
+    collection = COLLECTION + [entry("h1", "D2", "Victor Hugo", "SR")]
+    auctions = [market_auction("c1", "Gustave Eiffel", 10), market_auction("s1", "Gustave Eiffel", 50)]
+    auctions[0]["card"].update(id="GC", rarity="C")
+    auctions[1]["card"].update(id="GS", rarity="SR")
+    with FakeWikiMasters(collection, {**API_AVERAGES, "D2": 1000}, max_auctions=1, auctions=auctions) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[], selling=False)
+        assert "« Gustave Eiffel » (SR) ajoutée" in run_list_command(config, "/buy", "Gustave Eiffel 100 sr")
+        assert "« Victor Hugo » (SR) ajoutée" in run_list_command(config, "/sell", "Victor Hugo 900 SR")
+        assert "• Gustave Eiffel (SR) : 100 max" in run_list_command(config, "/list", "")
+        run_once(config)
+    assert site.bids == [("s1", 50)]  # pas l'enchère C, moins chère
+    assert [(l["card_id"], l["price"]) for l in site.listings] == [("h1", "900")]  # l'exemplaire SR
+    assert buy_cards(config)[0].rarity == "SR" and sell_cards(config)[0].rarity == "SR"
