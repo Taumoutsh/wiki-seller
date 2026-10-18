@@ -20,7 +20,7 @@ import dataclasses
 import logging
 import statistics
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from .auth import SessionStore, decode_session
@@ -51,6 +51,7 @@ class MarketPrice:
     sales: int  # ventes retenues
     removed: int  # ventes écartées (aberrantes, ou d'avant un changement de valeur)
     trend: bool  # dernières ventes aberrantes dans le même sens : la carte change de valeur
+    low: float | None = field(default=None, compare=False)  # vente retenue la plus basse
 
 
 def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
@@ -71,9 +72,9 @@ def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
         while start > 0 and (prices[start - 1] - median) * side > spread:
             start -= 1
         kept = prices[start:]
-        return MarketPrice(statistics.median(kept), len(kept), len(prices) - len(kept), True)
+        return MarketPrice(statistics.median(kept), len(kept), len(prices) - len(kept), True, min(kept))
     kept = [p for p, side in zip(prices, sides) if side == 0]
-    return MarketPrice(statistics.fmean(kept), len(kept), len(prices) - len(kept), False)
+    return MarketPrice(statistics.fmean(kept), len(kept), len(prices) - len(kept), False, min(kept))
 
 
 def _number(value) -> float | None:

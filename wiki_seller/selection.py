@@ -119,12 +119,16 @@ class SaleItem:
     copy_ids: tuple[str, ...] = ()  # exemplaires possédés (secours si le site attend leur id)
     exact: bool = False  # prix demandé (/sell) : ni ratio, ni ajustement au marché
     duration: str = ""  # durée demandée (/sell … 12h) ; vide = durée habituelle
+    last_resort: bool = False  # mise de côté (trop peu de ventes) : vendue faute d'autre carte
 
 
 @dataclass
 class SalePlan:
     items: list[SaleItem]
     skipped: list[tuple[str, str]]  # (titre, raison)
+    # Cartes mises de côté (trop peu de ventes), au prix de leur vente la plus basse connue :
+    # vendues en dernier recours, quand il ne reste rien d'autre.
+    set_aside: list[SaleItem] = field(default_factory=list)
 
 
 def copies_available(group: CardGroup, safe_names: set[str], selling: list[dict]) -> int:
@@ -141,11 +145,13 @@ def build_sale_plan(
     unknown_prices: set[str] = frozenset(),
     sales_counts: dict[str, int | None] | None = None,
     min_sales: int = 1,
+    lows: dict[str, float | None] | None = None,
 ) -> SalePlan:
     """Liste des cartes à vendre, de la plus chère à la moins chère. Prix par carte et
     rareté (CardGroup.key) ; les cartes dont le prix n'a pas pu être lu (`unknown_prices`)
     sont laissées pour la passe suivante."""
     items: list[SaleItem] = []
+    set_aside: list[SaleItem] = []
     skipped: list[tuple[str, str]] = []
     for group in groups:
         copies = copies_available(group, safe_names, selling)
@@ -162,6 +168,10 @@ def build_sale_plan(
         if count is not None and count < min_sales:  # ventes isolées, peut-être des échanges d'argent
             sales = f"{count} vente{'s' if count > 1 else ''} connue{'s' if count > 1 else ''}"
             skipped.append((group.title, f"mise de côté : {sales}, prix {average:g} peu fiable"))
+            low = (lows or {}).get(group.key) or average
+            if sale_price(low, ratio) >= 1:
+                set_aside.append(SaleItem(group.card_id, group.title, group.rarity, low, sale_price(low, ratio),
+                                          copies, tuple(group.copy_ids), last_resort=True))
             continue
         price = sale_price(average, ratio)
         if price < 1:
@@ -170,7 +180,8 @@ def build_sale_plan(
         items.append(SaleItem(group.card_id, group.title, group.rarity, average, price, copies,
                               tuple(group.copy_ids)))
     items.sort(key=lambda i: (-i.average, normalize_name(i.title)))
-    return SalePlan(items=items, skipped=skipped)
+    set_aside.sort(key=lambda i: (-i.average, normalize_name(i.title)))
+    return SalePlan(items=items, skipped=skipped, set_aside=set_aside)
 
 
 @dataclass

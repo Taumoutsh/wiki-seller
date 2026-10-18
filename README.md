@@ -175,7 +175,12 @@ script :
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
    durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
    sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise
-   de côté** (`ventes_min`, 4 : réglage commun de l'administrateur), jusqu'à ce que d'autres ventes confirment son prix ; la passe ne lit aucun prix :
+   de côté** (`ventes_min`, 4 : réglage commun de l'administrateur), jusqu'à ce que
+   d'autres ventes confirment son prix. Quand il ne reste plus rien d'autre à vendre et
+   qu'il reste des places, ces cartes partent **en dernier recours**, calculées sur leur
+   **vente la plus basse connue** au lieu du prix moyen (Marché : la plus basse des
+   ventes retenues ; sinon la plus basse de la moyenne et de la dernière vente) ; la
+   passe ne lit aucun prix :
    ceux qui manquent au cache sont lus en arrière-plan (voir « Prix des cartes ») et la
    carte part à la passe suivante, anticipée dès qu'ils sont lus ;
 4. lance la défausse en arrière-plan (voir « Défausse ») ;

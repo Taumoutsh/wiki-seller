@@ -72,6 +72,7 @@ class FakeWikiMasters:
         # Marché : détail des ventes par carte (GET …/sales sans scope=summary), visible
         # seulement si le compte y a accès.
         self.sale_counts: dict[str, int] = {}  # ventes connues par carte (5 sinon)
+        self.latest: dict[str, int] = {}  # dernière vente par carte (absente sinon)
         self.has_market = True
         self.market_sales: dict[str, list[dict]] = {}
         self.bid_failures = 0
@@ -196,7 +197,9 @@ class FakeWikiMasters:
                     avg = site.averages.get(card_id)
                     cards = [c["card"] for c in site.collection] + [a["card"] for a in site.auctions.values()]
                     rarity = next((c.get("rarity", "R") for c in cards if c.get("id") == card_id), "R")
-                    summary = {rarity: {"average": avg, "count": site.sale_counts.get(card_id, 5)}} if avg else {}
+                    summary = {rarity: {"average": avg, "count": site.sale_counts.get(card_id, 5),
+                                        **({"latest": site.latest[card_id]} if card_id in site.latest else {})}} \
+                        if avg else {}
                     return self._send(200, {"summary": summary, "isPro": site.has_market})
                 return self._send(404, {})
 

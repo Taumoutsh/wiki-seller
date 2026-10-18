@@ -123,8 +123,9 @@ class _Listings:
             if item.exact:
                 log.info("%s : %s à %d (prix demandé).", result.status.value.capitalize(), item.title, result.price)
             else:
-                log.info("%s : %s à %d (prix moyen %g, %d%%).", result.status.value.capitalize(),
-                         item.title, result.price, result.average, round(self.config.price_ratio * 100))
+                log.info("%s : %s à %d (%s %g, %d%%).", result.status.value.capitalize(), item.title, result.price,
+                         "dernier recours, vente la plus basse connue" if item.last_resort else "prix moyen",
+                         result.average, round(self.config.price_ratio * 100))
             time.sleep(random.uniform(*LISTING_PAUSE))
             return True
         if result.status is ListingStatus.SLOTS_FULL:
@@ -350,9 +351,10 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     if unknown and price_worker.active():
         log.info("%d prix en cours de lecture en arrière-plan : ces cartes partiront à la passe suivante "
                  "(anticipée dès qu'ils sont lus).", len(unknown))
-    counts = {key: entry.get("count") for key, entry in load_price_cache(config).items()}
-    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown, counts,
-                           config.min_sales_to_sell)
+    cache = load_price_cache(config)
+    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown,
+                           {k: e.get("count") for k, e in cache.items()}, config.min_sales_to_sell,
+                           {k: e.get("low") for k, e in cache.items()})
     set_aside = [(t, r) for t, r in plan.skipped if r.startswith("mise de côté")]
     if set_aside:
         log.info("%d carte(s) mise(s) de côté, trop peu de ventes pour s'y fier : %s", len(set_aside),
@@ -360,10 +362,14 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     others = [(t, r) for t, r in plan.skipped if not r.startswith("mise de côté")]
     if others:
         log.info("%d carte(s) ignorée(s), ex. : %s", len(others), ", ".join(f"{t} ({r})" for t, r in others[:10]))
-    if not plan.items:
+    if plan.items:
+        free = listings.free - listings.listed
+        log.info("%d place(s) libre(s). Ordre de vente : %s", free,
+                 ", ".join(f"{i.title} (~{i.average:g})" for i in plan.items[:free + 5]))
+        _list_all(listings, plan.items)
+    if plan.set_aside and listings.room:  # plus rien d'autre à vendre : places libres quand même utilisées
+        log.info("Plus d'autre carte à vendre : %d carte(s) mise(s) de côté vendue(s) en dernier recours, au "
+                 "prix de leur vente la plus basse connue.", len(plan.set_aside))
+        _list_all(listings, plan.set_aside)
+    elif not plan.items:
         log.info("Aucune carte à mettre en vente.")
-        return
-    free = listings.free - listings.listed
-    log.info("%d place(s) libre(s). Ordre de vente : %s", free,
-             ", ".join(f"{i.title} (~{i.average:g})" for i in plan.items[:free + 5]))
-    _list_all(listings, plan.items)

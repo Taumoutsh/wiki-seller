@@ -911,3 +911,17 @@ def test_expensive_card_with_a_single_sale_is_set_aside(tmp_path, caplog):
     cache = json.loads((config.shared_state_dir / "price_cache.json").read_text())
     assert "Tour Eiffel (3 ventes connues" in caplog.text
     assert cache["B:R"]["count"] == 1 and cache["D:R"]["count"] == 4
+
+
+def test_set_aside_cards_are_sold_last_at_their_lowest_known_price(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=8) as site:
+        site.sale_counts = {"B": 1, "C": 3}
+        site.latest = {"B": 600}  # Château de Versailles : moyenne 800, dernière vente 600
+        config = make_config(tmp_path, site.url, [])
+        with caplog.at_level("INFO"):
+            run_once(config)
+    # D'abord toutes les autres cartes, puis les mises de côté, sur leur vente la plus basse connue (× 70 %).
+    assert [(l["title"], l["price"]) for l in site.listings] == [
+        ("Victor Hugo", "210"), ("Victor Hugo", "210"), ("Loire", "105"), ("Rhône", "70"), ("Pomme", "14"),
+        ("Tour Eiffel", "3500"), ("Château de Versailles", "420"), ("Château de Versailles", "420")]
+    assert "vendue(s) en dernier recours" in caplog.text

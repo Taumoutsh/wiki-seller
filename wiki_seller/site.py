@@ -406,8 +406,9 @@ class WikiMasters:
         history = [a for a in data.get("history") or [] if isinstance(a, dict)]
         return MarketState(selling=selling, max_auctions=max_auctions, history=history, mine=data)
 
-    def fetch_average(self, card_id: str, rarity: str | None) -> tuple[float | None, int | None]:
-        """(prix moyen de la carte, nombre de ventes) ; prix None si aucune vente connue."""
+    def fetch_average(self, card_id: str, rarity: str | None) -> tuple[float | None, int | None, float | None]:
+        """(prix moyen de la carte, nombre de ventes, plus bas des prix connus : moyenne ou
+        dernière vente) ; prix None si aucune vente connue."""
         try:
             data = self.api_get_ok(f"/api/marketplace/cards/{card_id}/sales?scope=summary")
         except SessionExpired as exc:
@@ -422,22 +423,27 @@ class WikiMasters:
         return self.api_get_ok(MARKET_SALES_PATH.format(card_id=card_id))
 
     @staticmethod
-    def _average_from(data: object, rarity: str | None) -> tuple[float | None, int | None]:
+    def _average_from(data: object, rarity: str | None) -> tuple[float | None, int | None, float | None]:
         summary = data.get("summary") if isinstance(data, dict) else None
         if not isinstance(summary, dict) or not summary:
-            return None, 0
+            return None, 0, None
         entry = summary.get(rarity) if rarity else None
         if entry is None and len(summary) == 1:
             entry = next(iter(summary.values()))
         if not isinstance(entry, dict):
-            return None, 0
-        try:
-            average = float(entry.get("average"))
-        except (TypeError, ValueError):
-            average = None
+            return None, 0, None
+
+        def number(value) -> float | None:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0 else None
+
+        average, latest = number(entry.get("average")), number(entry.get("latest"))
         count = entry.get("count")
         count = count if isinstance(count, int) and not isinstance(count, bool) else None
-        return (average if average and average > 0 else None), count
+        return average, count, (min(average, latest) if average and latest else average)
 
     def refresh_market(self) -> None:
         """Recharge le Marché : après la fin d'une enchère, le site ne la compte pas
