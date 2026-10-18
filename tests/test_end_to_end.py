@@ -750,7 +750,7 @@ def test_watched_auction_result_is_announced_right_away(tmp_path):
 
         threading.Thread(target=close_auction, daemon=True).start()
         run_snipe(config)
-    assert "🛒 Obtenue : Victor Hugo pour 50" in tg.sent
+    assert "🛒 Obtenue : Victor Hugo pour 50 (1/1)" in tg.sent
     assert any("achat terminé" in t for t in tg.sent) and buy_cards(config) == []
 
 
@@ -771,10 +771,13 @@ def test_lost_auctions_are_announced(tmp_path):
         # Dépassé au-delà du max : abandon annoncé.
         site.outbid("s2", 150)
         run_once(config)
-    lost = [t for t in tg.sent if t.startswith("❌ Perdue")]
-    assert lost == ["❌ Perdue : Victor Hugo, remportée à 120 par un autre (max 100) ; recherche d'une autre enchère.",
-                    "❌ Perdue : Victor Hugo, montée à 150, au-dessus de votre max (max 100) ; "
-                    "recherche d'une autre enchère."]
+    assert not [t for t in tg.sent if "Perdue" in t]  # pas de message : seulement au bilan
+    losses = json.loads((config.state_dir / "report.json").read_text())["lost"]
+    assert [(l["card"], l["why"], l["max"]) for l in losses] == [
+        ("Victor Hugo", "remportée à 120 par un autre", 100),
+        ("Victor Hugo", "montée à 150, au-dessus de votre max", 100)]
+    from wiki_seller.report import loss_lines
+    assert loss_lines(losses)[0] == "• Victor Hugo · remportée à 120 par un autre (max 100)"
 
 
 def test_lost_auction_still_listed_by_the_site_is_announced_once(tmp_path):
@@ -805,8 +808,8 @@ def test_lost_auction_still_listed_by_the_site_is_announced_once(tmp_path):
             mine = wm.fetch_mine()
         assert [(a["id"], a["status"]) for a in mine["bidding"]] == [("s1", "active")]
         lines = bid_lines(config, mine, ME)
-    assert [t for t in tg.sent if t.startswith("❌ Perdue")] == [
-        "❌ Perdue : Victor Hugo, remportée à 120 par un autre (max 100) ; recherche d'une autre enchère."]
+    losses = json.loads((config.state_dir / "report.json").read_text())["lost"]
+    assert [(l["card"], l["why"]) for l in losses] == [("Victor Hugo", "remportée à 120 par un autre")]
     assert lines == []  # l'enchère finie n'est plus « en cours »
 
 

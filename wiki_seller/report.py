@@ -35,6 +35,7 @@ LATE_SALES = timedelta(hours=6)
 COUNTED_LIMIT = 500
 MAX_SALES_LISTED = 30  # ventes détaillées dans un bilan (Telegram limite la taille des messages)
 MAX_HISTORY_LISTED = 40  # enchères détaillées par /ventes
+LOSSES_KEPT = 50  # enchères perdues gardées entre deux bilans
 _LOCK = threading.Lock()  # la défausse (thread) et les passes écrivent le même fichier
 
 
@@ -49,6 +50,21 @@ def record_discard(config) -> None:
         data["discarded"] = data.get("discarded", 0) + 1
         data.setdefault("since", now_utc().isoformat())
         write_json(_file(config), data)
+
+
+def record_loss(config, card: str, why: str, max_price) -> None:
+    """Une enchère perdue depuis le dernier bilan (montrée au bilan, sans message à part)."""
+    with _LOCK:
+        data = read_json(_file(config), {})
+        data["lost"] = [*data.get("lost", []), {"card": card, "why": why, "max": max_price,
+                                                "at": now_utc().isoformat()}][-LOSSES_KEPT:]
+        data.setdefault("since", now_utc().isoformat())
+        write_json(_file(config), data)
+
+
+def loss_lines(losses: list[dict]) -> list[str]:
+    return [f"• {escape(str(l.get('card')))} · {escape(str(l.get('why')))} (max {money(l.get('max'))})"
+            for l in losses if isinstance(l, dict)]
 
 
 def _sales(history: list, my_id: str | None, start: datetime, end: datetime,
@@ -132,7 +148,7 @@ def plural(n: int, word: str) -> str:
 
 
 def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], discarded: int,
-                balance: int | None, bids: list[str] = ()) -> str:
+                balance: int | None, bids: list[str] = (), lost: list[str] = ()) -> str:
     """Bilan au format HTML de Telegram : l'essentiel en haut, une section par sujet,
     les sections vides omises."""
     earned = sum(price for _, price in sales)
@@ -141,7 +157,7 @@ def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], di
     if earned + gained:
         head += f"  (+{money(earned + gained)} depuis le dernier bilan)"
     sections = [f"<b>📊 Bilan · {start.astimezone():%H:%M} → {end.astimezone():%H:%M}</b>\n{head}"
-                + ("" if sales or discarded or bids else "\nRien de neuf")]
+                + ("" if sales or discarded or bids or lost else "\nRien de neuf")]
     if sales:
         rows = [f"• {escape(title)} · {money(price)}" for title, price in sales[:MAX_SALES_LISTED]]
         if len(sales) > MAX_SALES_LISTED:
@@ -151,6 +167,8 @@ def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], di
         sections.append(f"<b>🗑️ Défausses · {plural(discarded, 'exemplaire')} · +{money(gained)}</b>")
     if bids:
         sections.append("<b>🛒 Achats en cours</b>\n" + "\n".join(bids))
+    if lost:
+        sections.append(f"<b>❌ Enchères perdues · {len(lost)}</b>\n" + "\n".join(lost))
     return "\n\n".join(sections)
 
 
@@ -253,10 +271,12 @@ def send_report(site, config, bot, history: list, my_id: str | None, on_demand: 
         log.info("Bilan : l'historique du site contient %d enchère(s) terminée(s), %d vente(s) à compter.",
                  len(history or []), len(sold))
         sales = [(auction_title(a) or "carte inconnue", int(a["final_price"])) for a in sold]
-        text = report_text(since, now, sales, discarded, site.fetch_balance(), bid_lines(config, mine or {}, my_id))
+        text = report_text(since, now, sales, discarded, site.fetch_balance(), bid_lines(config, mine or {}, my_id),
+                           loss_lines(data.get("lost", [])))
         if not on_demand:
             counted = [*counted, *(a.get("id") for a in sold if a.get("id"))][-COUNTED_LIMIT:]
-            write_json(_file(config), {**data, "since": now.isoformat(), "discarded": 0, "counted": counted})
+            write_json(_file(config), {**data, "since": now.isoformat(), "discarded": 0, "counted": counted,
+                                       "lost": []})
     bot.send(text, html=True)
     log.info("Bilan %s sur Telegram.", "demandé envoyé" if on_demand else "envoyé")
     return True

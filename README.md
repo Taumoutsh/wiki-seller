@@ -207,9 +207,10 @@ erreur du site) est vérifiée sur l'enchère ; passée malgré tout, elle n'est
 sinon elle repart chaque seconde jusqu'à la fin de l'enchère (2 min au plus pendant une
 passe). Une lecture sans réponse est refaite la seconde suivante.
 
-Le bot annonce chaque résultat dès que le site désigne le gagnant : « 🛒 Obtenue : Tour
-Eiffel pour 480 » ou « ❌ Perdue : Tour Eiffel, remportée à 520 par un autre (max 500) »
-(aussi quand l'enchère où vous aviez misé dépasse votre maximum). Une fois tous les
+Le bot annonce chaque enchère gagnée dès que le site désigne le gagnant, avec le compte
+d'exemplaires : « 🛒 Obtenue : Tour Eiffel pour 480 (1/2) », suivi de « · revente à 800 »
+pour `/buyandsell`. Les enchères perdues (remportées par un autre, ou montées au-dessus
+de votre max) ne font pas de message : elles sont listées au bilan suivant. Une fois tous les
 exemplaires obtenus, la carte **quitte la liste d'achat et devient protégée** ; avec
 `/buyandsell`, elle part dans les ventes au prix (et pour la durée) demandés.
 
@@ -315,6 +316,9 @@ Toutes les `bilan` heures (2), ou à la demande avec `/update` :
 ❌ Loire
    dépassé : 90 → 100 · max 100
    ↳ abandonnée (au-dessus du max)
+
+❌ Enchères perdues · 1
+• Emmanuel Macron · remportée à 3 191 par un autre (max 2 700)
 ```
 
 - **En haut :** le solde et le gain depuis le dernier bilan automatique (« Rien de neuf »
@@ -325,6 +329,8 @@ Toutes les `bilan` heures (2), ou à la demande avec `/update` :
 - **Défausses :** 1 wikibidou par exemplaire.
 - **Achats en cours :** ✅ en tête ; ⚠️ dépassé (votre mise → prix actuel), surenchère
   prévue ; ❌ abandonnée, au-dessus du max. Fin : l'heure seule si c'est aujourd'hui.
+- **Enchères perdues :** celles où vous aviez misé, terminées au profit d'un autre ou
+  montées au-dessus de votre max depuis le dernier bilan automatique, une fois chacune.
 
 Le bilan automatique part en fin de passe, une fois les enchères placées, quand aucune
 de vos ventes ne se termine dans les 5 minutes ni n'est en cours de règlement (sinon le

@@ -217,3 +217,20 @@ def test_automatic_report_waits_until_no_sale_is_ending_or_settling(tmp_path, mo
     stub.selling = [{"id": "s2", "end_at": (now + timedelta(minutes=2)).isoformat()}]
     scheduler._report(stub, config, dry_run=False)
     assert len(stub.sent) == 2
+
+
+def test_lost_auctions_are_listed_in_the_report_then_reset(tmp_path):
+    from wiki_seller.report import record_loss
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", [], report_every=timedelta(hours=2))
+    record_loss(config, "Emmanuel Macron", "remportée à 3191 par un autre", 2700)
+    data = json.loads((config.state_dir / "report.json").read_text())
+    data["since"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    (config.state_dir / "report.json").write_text(json.dumps(data))
+    stub = Stub()
+    send_report(stub, config, stub, [], "me", on_demand=True)
+    assert "<b>❌ Enchères perdues · 1</b>\n• Emmanuel Macron · remportée à 3191 par un autre (max 2 700)" in stub.sent[0]
+    assert send_report(stub, config, stub, [], "me")  # bilan automatique : remis à zéro
+    assert "Enchères perdues · 1" in stub.sent[1]
+    send_report(stub, config, stub, [], "me", on_demand=True)
+    assert "perdues" not in stub.sent[-1]

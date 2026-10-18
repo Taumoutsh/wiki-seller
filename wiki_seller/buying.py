@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .config import Config
-from .lists import AUTO, AUTO_BUY_RATIO, BuyCard, buy_cards, complete_purchase
+from .lists import AUTO, AUTO_BUY_RATIO, AUTO_SELL_RATIO, BuyCard, buy_cards, complete_purchase, price_text
 from .pricing import PriceReader
 from .selection import normalize_name
 from .site import SiteError, entry_rarity, min_bid
@@ -375,8 +375,8 @@ class _Buyer:
                 won[auction["id"]] = price
                 log.info("Achat : « %s » obtenue pour %s (%d/%d).", card.name, price, len(won), card.copies)
                 if not self.dry_run:
-                    notify(self.config, f"🛒 Obtenue : {card.name} pour {price}"
-                                        + (f" ({len(won)}/{card.copies})" if card.copies > 1 else ""))
+                    resale = f" · revente à {price_text(card.sell_price, AUTO_SELL_RATIO)}" if card.sell_price else ""
+                    notify(self.config, f"🛒 Obtenue : {card.name} pour {price} ({len(won)}/{card.copies}){resale}")
         entry["won"] = won
         if len(won) >= card.copies:
             if entry.get("status") != "won":
@@ -454,8 +454,8 @@ class _Buyer:
         entry["blocked_notified"] = True
 
     def lost(self, card: BuyCard, entry: dict, auction: dict, force: bool = False) -> None:
-        """Enchère perdue (remportée par un autre, ou montée au-dessus de votre max) :
-        annoncée une fois, si vous y aviez misé (force : enchère suivie terminée)."""
+        """Enchère perdue (remportée par un autre, ou montée au-dessus de votre max) : notée
+        une fois pour le bilan, si vous y aviez misé (force : enchère suivie terminée)."""
         if not force and entry.get("placed") != auction.get("id"):
             return
         entry.pop("placed", None)
@@ -468,9 +468,11 @@ class _Buyer:
             why = f"remportée à {price} par un autre"
         else:
             why = f"montée à {auction.get('current_bid') or min_next_bid(auction)}, au-dessus de votre max"
+        log.info("Achat : « %s » perdue, %s (max %s) ; recherche d'une autre enchère.", card.name, why, card.max_price)
         if not self.dry_run:
-            notify(self.config, f"❌ Perdue : {card.name}, {why} (max {card.max_price}) ; "
-                                "recherche d'une autre enchère.")
+            from .report import record_loss  # report lit aussi les achats
+
+            record_loss(self.config, card.name, why, card.max_price)
 
     def settle(self, card: BuyCard, entry: dict, auction: dict) -> None:
         """Fin de l'enchère surveillée : gagnée ou perdue, annoncée tout de suite. Si le
