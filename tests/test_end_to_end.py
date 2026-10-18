@@ -406,10 +406,10 @@ def test_discard_runs_in_background_above_trigger(tmp_path):
         DISCARDER.join(120)
     assert not DISCARDER.running()
     # Les plus communes d'abord (C, PC, puis R), chacune dès son prix lu ; ni la carte
-    # protégée, ni la carte voulue, ni « Pile quinze » (15), ni la rare sans prix.
-    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Presque"]
+    # protégée, ni la carte voulue, ni la rare sans prix ; « Pile quinze » (15) : seuil compris.
+    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Pile quinze", "Presque"]
     assert sorted(c["card"]["wikipedia_title"] for c in site.collection) == [
-        "Pile quinze", "Rare sans prix", "Tour Eiffel", "Victor Hugo"]
+        "Rare sans prix", "Tour Eiffel", "Victor Hugo"]
 
 
 def test_no_discard_at_or_below_trigger(tmp_path):
@@ -604,7 +604,8 @@ def test_progress_without_copy_ids_is_discarded_and_the_collection_reread(tmp_pa
         run_once(config)
         DISCARDER.join(120)
     assert pages_read(site, 1) == 1  # collection relue
-    assert site.discarded == ["Caillou", "Caillou", "Tour Eiffel", "Victor Hugo", "Feuille", "Presque"]
+    assert site.discarded == ["Caillou", "Caillou", "Tour Eiffel", "Victor Hugo", "Feuille", "Pile quinze",
+                              "Presque"]
 
 
 def test_card_protected_during_the_discard_is_kept(tmp_path):
@@ -925,3 +926,22 @@ def test_set_aside_cards_are_sold_last_at_their_lowest_known_price(tmp_path, cap
         ("Victor Hugo", "210"), ("Victor Hugo", "210"), ("Loire", "105"), ("Rhône", "70"), ("Pomme", "14"),
         ("Tour Eiffel", "3500"), ("Château de Versailles", "420"), ("Château de Versailles", "420")]
     assert "vendue(s) en dernier recours" in caplog.text
+
+
+def test_a_recent_collection_read_is_reused_by_the_next_pass(tmp_path, caplog):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0) as site:
+        config = make_config(tmp_path, site.url, [])
+        run_once(config)
+        reads = len(site.collection_requests)
+        with caplog.at_level("INFO"):
+            run_once(config)  # moins d'une heure après : pas de nouvelle lecture
+    assert reads and len(site.collection_requests) == reads
+    assert "Collection reprise de la lecture d'il y a 0 min" in caplog.text
+
+
+def test_cards_worth_the_discard_threshold_or_less_are_not_sold(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=8) as site:
+        config = make_config(tmp_path, site.url, [], discard_below=100)  # Rhône (100), Pomme (20) : défausse
+        run_once(config)
+    assert "Rhône" not in [l["title"] for l in site.listings] and "Pomme" not in [l["title"] for l in site.listings]
+    assert "Loire" in [l["title"] for l in site.listings]  # 150

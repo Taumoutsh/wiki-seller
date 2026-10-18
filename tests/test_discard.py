@@ -41,7 +41,7 @@ def test_candidates_are_examined_commons_first():
 
 def test_discard_decision():
     assert should_discard("C", 5, 15) and should_discard("R", 14, 15)
-    assert not should_discard("R", 15, 15)                        # strictement moins de 15
+    assert should_discard("R", 15, 15) and not should_discard("R", 15.5, 15)  # 15 ou moins
     assert should_discard("C", None, 15) and should_discard("PC", None, 15)  # aucune vente connue
     assert not should_discard("R", None, 15) and not should_discard("L", None, 15)
 

@@ -3,8 +3,9 @@ communs, state/price_cache.json). Les passes ne lisent plus aucun prix : elles p
 ceux du cache et déposent les manquants dans une file commune ; une carte demandée par
 plusieurs comptes n'est lue qu'une fois.
 
-- Priorités : d'abord les prix utiles aux ventes et aux prix auto (SALES), ensuite ceux
-  de la défausse (DISCARD), dans l'ordre des demandes.
+- Ordre : les prix utiles aux ventes et aux prix auto (SALES) et ceux de la défausse
+  (DISCARD) à tour de rôle, chacun dans l'ordre des demandes : la défausse avance même
+  quand les ventes réclament des milliers de prix.
 - Session : celle du Marché s'il y en a une, sinon celle d'un compte qui a demandé la
   carte (le prix moyen ne se lit qu'avec la session d'un compte qui la possède), jamais
   pendant une passe de ce compte.
@@ -67,6 +68,7 @@ class PriceWorker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.manual = False  # tests : la file est servie par step(), sans fil
+        self._turn = SALES  # ventes et défausse servies à tour de rôle
 
     # ─────────────────────────── Demandes (fils des comptes) ───────────────────────────
 
@@ -158,9 +160,10 @@ class PriceWorker:
         from .session import gate
 
         now = time.monotonic()
-        with self._cond:
+        with self._cond:  # à tour de rôle : la classe dont c'est le tour d'abord, chacune dans l'ordre des demandes
+            turn, self._turn = self._turn, DISCARD if self._turn == SALES else SALES
             items = sorted((i for i in self._items.values() if i.not_before <= now),
-                           key=lambda i: (i.priority, i.order))
+                           key=lambda i: (i.priority != turn, i.order))
         for item in items:
             requesters = list(item.requesters.values())
             if not requesters:

@@ -131,7 +131,7 @@ SETTINGS = (
             lambda t: {"unsold_max_tries": _integer(1)(t)}, lambda c: str(c.unsold_max_tries)),
     Setting("pause_invendues", "jours de mise de côté d'une carte invendue",
             lambda t: {"unsold_cooldown": timedelta(days=_integer(1)(t))}, lambda c: str(c.unsold_cooldown.days)),
-    Setting("defausse", "défausse des cartes valant moins que ce prix (0 = coupée)",
+    Setting("defausse", "défausse des cartes valant ce prix ou moins (0 = coupée)",
             lambda t: {"discard_below": _integer(0)(t)}, lambda c: str(c.discard_below) if c.discard_below else "0 (coupée)"),
     Setting("seuil_defausse", "exemplaires au-delà desquels la défausse démarre",
             lambda t: {"discard_trigger": _integer(0)(t)}, lambda c: str(c.discard_trigger)),

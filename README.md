@@ -155,7 +155,7 @@ suivante. Un réglage jamais modifié prend la valeur du `.env` (voir « Réglag
 | `nuit` | `1-3=12h;3-6=6h`, `aucune` | Durées de nuit, heures de Paris |
 | `intervalle` | `1h`, `auto` | Délai entre deux passes (`auto` : durée des ventes) |
 | `invendues` · `pause_invendues` | `3` · `5` | Ventes ratées avant de mettre une carte de côté, et jours de mise de côté |
-| `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant moins que ce prix (`0` = coupée), au-delà de ce nombre d'exemplaires |
+| `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant ce prix ou moins (`0` = coupée), au-delà de ce nombre d'exemplaires ; ces cartes ne sont jamais mises en vente automatiquement |
 | `budget` | `2000`, `aucun` | Somme maximale des mises en cours |
 | `surenchere` | `30` | Secondes avant la fin d'une enchère pour surenchérir (2 à 300) |
 | `bilan` | `2` | Bilan automatique toutes les N heures (`0` = jamais) |
@@ -168,7 +168,9 @@ script :
 
 1. vérifie la session (voir « Session du site ») ;
 2. mise sur les cartes à acheter (voir « Achats ») ;
-3. met en vente, s'il reste de la place (5 enchères à la fois sur le site), **d'abord
+3. met en vente (collection reprise de la dernière lecture de moins d'une heure, par une
+   passe ou par la défausse : relire des milliers de cartes prend plusieurs minutes),
+   s'il reste de la place (5 enchères à la fois sur le site), **d'abord
    les ventes demandées** (`/sell`), puis les cartes des raretés `raretes`, **de la plus
    chère à la moins chère**, sauf les cartes protégées (un exemplaire gardé, les doublons
    vendus) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
@@ -254,10 +256,10 @@ fini il y a moins d'une heure (15 min si des prix n'avaient pas pu être lus). A
 `seuil_defausse` exemplaires (150), il examine les cartes **des plus communes aux plus
 rares** (`C`, `PC`, `R`, `SR`, `UR`, `L`), prend le prix de chacune (cache, sinon le fil
 des prix, après les prix utiles aux ventes)
-et la **défausse aussitôt** si elle vaut moins de `defausse` (1 wikibidou par
+et la **défausse aussitôt** si elle vaut `defausse` ou moins (1 wikibidou par
 exemplaire).
 
-- **Défaussées :** prix moyen inférieur au seuil, ou aucune vente connue pour une
+- **Défaussées :** prix moyen égal ou inférieur au seuil, ou aucune vente connue pour une
   commune (`C`) ou peu commune (`PC`). Tous les exemplaires, y compris le dernier.
 - **Jamais défaussées :** les cartes protégées, à acheter et à vendre, les exemplaires en
   vente ou en échange, les cartes rares sans vente connue, et celles dont le prix n'a pas
@@ -305,9 +307,9 @@ pris à la place sont relus au bout d'une heure plutôt que de `cache_prix`.
 les prix qui manquent au cache, une requête par carte (environ 5 s). Les passes n'en
 lisent aucun : elles prennent le cache et lui demandent les autres.
 
-- **Ordre :** d'abord les prix utiles aux ventes et aux prix `auto` de tous les comptes,
-  ensuite ceux de la défausse. Une carte demandée par plusieurs comptes n'est lue qu'une
-  fois.
+- **Ordre :** les prix utiles aux ventes et aux prix `auto` de tous les comptes, et ceux
+  de la défausse, **à tour de rôle** : la défausse avance même quand les ventes réclament
+  des milliers de prix. Une carte demandée par plusieurs comptes n'est lue qu'une fois.
 - **Session :** celle du Marché s'il y en a une ; sinon celle d'un compte qui a demandé
   la carte (le prix moyen d'une carte se lit avec la session d'un compte qui la possède),
   jamais pendant une passe de ce compte.

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 
 from .config import Config
 from .lists import protected_names
+from . import collection
 from .price_worker import DISCARD
 from .pricing import PriceReader
 from .report import record_discard
@@ -73,9 +74,9 @@ def discard_candidates(groups: list[CardGroup], protected_names: set[str], selli
 
 
 def should_discard(rarity: str | None, average: float | None, below: int) -> bool:
-    """Prix moyen connu inférieur à `below`, ou aucune vente connue pour une C/PC."""
+    """Prix moyen connu de `below` ou moins, ou aucune vente connue pour une C/PC."""
     if average:
-        return average < below
+        return average <= below
     return (rarity or "") in DISCARD_WITHOUT_PRICE
 
 
@@ -206,7 +207,7 @@ def check_discard(config: Config, dry_run: bool, debug: bool) -> None:
     if restart:
         log.info("Défausse terminée récemment : prochaine au plus tôt à %s.", restart.astimezone().strftime("%H:%M"))
         return
-    log.info("Défausse lancée en arrière-plan (cartes à moins de %d au-delà de %d exemplaires).",
+    log.info("Défausse lancée en arrière-plan (cartes à %d ou moins au-delà de %d exemplaires).",
              config.discard_below, config.discard_trigger)
     DISCARDER.start(config, dry_run, debug)
 
@@ -326,6 +327,7 @@ def _list_cards(site: WikiMasters, config: Config, progress: DiscardProgress) ->
         log.info("Défausse : %d entrée(s) de la collection lues avant la pause.", len(progress.scan.entries))
         return False
     log.info("Collection chargée : %d entrée(s).", len(progress.scan.entries))
+    collection.remember(config, progress.scan.entries, progress.scan.in_trade)  # reprise par les passes
     count = total_copies(parse_collection(progress.scan.entries))
     if count <= config.discard_trigger:
         log.info("Collection : %d exemplaire(s), seuil de défausse %d non dépassé.", count, config.discard_trigger)
@@ -334,6 +336,6 @@ def _list_cards(site: WikiMasters, config: Config, progress: DiscardProgress) ->
     progress.cards = discard_candidates(groups, protected_names(config), site.fetch_market_state().selling)
     progress.save(config)
     log.info("Collection : %d exemplaire(s) > %d. Défausse au fil de l'eau de %d carte(s), les plus "
-             "communes d'abord, à moins de %d.", count, config.discard_trigger, len(progress.cards),
+             "communes d'abord, à %d ou moins.", count, config.discard_trigger, len(progress.cards),
              config.discard_below)
     return True

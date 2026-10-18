@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from . import collection
 from .config import Config
 from .lists import AUTO, AUTO_BUY_RATIO, AUTO_SELL_RATIO, BuyCard, buy_cards, complete_purchase, price_text
 from .pricing import PriceReader
@@ -434,6 +435,7 @@ class _Buyer:
                      f"dans les ventes à {card.sell_price}" if card.sell_price else "dans les cartes protégées")
             return
         message = complete_purchase(self.config, card, bought)
+        collection.forget(self.config)  # carte obtenue : collection relue à la passe suivante
         del self.state.data["cards"][card.key]  # redemandée plus tard, elle repartira de zéro
         log.info("Achat : %s", message)
         notify(self.config, message)

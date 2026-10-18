@@ -14,7 +14,7 @@ from datetime import datetime
 from .buying import WantedState, auction_title, my_user_id
 from .config import Config
 from .lists import AUTO, AUTO_SELL_RATIO, ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
-from . import price_worker
+from . import collection, price_worker
 from .pricing import PriceReader, fetch_averages, load_price_cache
 from .settings import RARITIES
 from .selection import (
@@ -278,7 +278,7 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
         return RunResult(0, None, False, market.earliest_end())
 
     # Les cartes à vendre (/sell) sont de toutes raretés : la collection est alors lue en entier.
-    entries, in_trade = site.fetch_collection(() if priority else config.sell_rarities)
+    entries, in_trade = collection.fetch(site, config, () if priority else config.sell_rarities)
     my_ids = {a.get("id") for a in market.selling if isinstance(a, dict)}
     listings = _Listings(site, config, dry_run, market.free_slots, my_ids)
     if priority:
@@ -354,7 +354,7 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     cache = load_price_cache(config)
     plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown,
                            {k: e.get("count") for k, e in cache.items()}, config.min_sales_to_sell,
-                           {k: e.get("low") for k, e in cache.items()})
+                           {k: e.get("low") for k, e in cache.items()}, config.discard_below)
     set_aside = [(t, r) for t, r in plan.skipped if r.startswith("mise de côté")]
     if set_aside:
         log.info("%d carte(s) mise(s) de côté, trop peu de ventes pour s'y fier : %s", len(set_aside),

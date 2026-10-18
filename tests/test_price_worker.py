@@ -119,3 +119,17 @@ def test_discard_reader_waits_for_the_worker(tmp_path, monkeypatch):
                 assert reader.read(card("F", "Loire")) == ("ok", 150)
             finally:
                 prices.stop()
+
+
+def test_sales_and_discard_prices_are_read_in_turn(tmp_path, worker):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [])
+        with open_site(config):
+            pass
+        prices = worker([config])
+        for card_id in ("A", "B", "C"):
+            prices.request(card(card_id), config, SALES)
+        for card_id in ("F", "G"):
+            prices.request(card(card_id), config, DISCARD)
+        drain(prices)
+    assert [c for kind, c in site.events if kind == "prix"] == ["A", "F", "B", "G", "C"]
