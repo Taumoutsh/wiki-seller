@@ -29,6 +29,7 @@ class SessionGate:
         self._busy = False
         self._priority_waiting = 0
         self._in_pass = False  # la session est tenue par une passe (pas par la défausse)
+        self._watching = 0  # fins d'enchère surveillées à part (watcher.py), sans tenir la session
 
     @contextmanager
     def priority(self):
@@ -48,7 +49,7 @@ class SessionGate:
     @contextmanager
     def background(self):
         with self._cond:
-            while self._busy or self._priority_waiting:
+            while self._busy or self._priority_waiting or self._watching:
                 self._cond.wait()
             self._busy = True
         try:
@@ -56,13 +57,28 @@ class SessionGate:
         finally:
             self._release()
 
+    @contextmanager
+    def watching(self):
+        """Une fin d'enchère est surveillée : la défausse s'interrompt et le fil des prix
+        laisse cette session, pour que rien ne gêne la mise de dernière seconde."""
+        with self._cond:
+            self._watching += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._watching -= 1
+                self._cond.notify_all()
+
     def in_pass(self) -> bool:
-        """Une passe utilise la session, ou l'attend : le fil des prix ne s'en sert pas."""
-        return self._in_pass or self._priority_waiting > 0
+        """Une passe utilise la session, ou l'attend, ou une fin d'enchère est surveillée :
+        le fil des prix ne s'en sert pas."""
+        return self._in_pass or self._priority_waiting > 0 or self._watching > 0
 
     def should_yield(self) -> bool:
-        """Vrai si une passe attend la session : la tâche de fond doit s'interrompre."""
-        return self._priority_waiting > 0
+        """Vrai si une passe attend la session ou qu'une fin d'enchère est surveillée : la
+        tâche de fond doit s'interrompre."""
+        return self._priority_waiting > 0 or self._watching > 0
 
     def _release(self) -> None:
         with self._cond:

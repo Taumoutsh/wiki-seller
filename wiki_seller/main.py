@@ -7,7 +7,7 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 
-from . import accounts, price_worker
+from . import accounts, price_worker, watcher
 from .config import OBSOLETE_SETTINGS, Config, ConfigError, load_config, obsolete_settings
 from .discard import DISCARDER
 from .lists import ListError, buy_cards, legacy_files, safe_titles
@@ -29,7 +29,7 @@ def setup_logging(config: Config) -> None:
     root.setLevel(logging.INFO)
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(fmt)
-    file = RotatingFileHandler(config.state_dir / "seller.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    file = RotatingFileHandler(config.state_dir / "seller.log", maxBytes=5_000_000, backupCount=10, encoding="utf-8")
     file.setFormatter(fmt)
     root.handlers[:] = [console, file]
 
@@ -123,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             if bot is not None:  # une seule écoute pour toutes les conversations
                 CommandListener(bot, request, base).start()
             price_worker.start(lambda: _account_configs(base), lambda config: request(config.telegram_chat_id, "pass"))
+            watcher.start(lambda: _account_configs(base), args.dry_run)
             run_accounts(base, args.dry_run, args.debug)
         else:
             run_once(config, dry_run=args.dry_run or config.simulation, debug=args.debug)

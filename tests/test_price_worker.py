@@ -166,3 +166,13 @@ def test_card_asked_for_a_sale_keeps_its_place_in_the_queue(tmp_path, worker):
         prices.request(card("B"), config, SALES)  # déjà demandée par la défausse
         drain(prices)
     assert [c for kind, c in site.events if kind == "prix"] == ["B", "A", "C"]
+
+
+def test_discard_and_price_worker_give_way_during_an_auction_end(tmp_path):
+    from wiki_seller.session import SessionGate
+
+    lock = SessionGate()
+    assert not lock.should_yield() and not lock.in_pass()
+    with lock.watching():
+        assert lock.should_yield() and lock.in_pass()  # défausse interrompue, session laissée par le fil des prix
+    assert not lock.should_yield() and not lock.in_pass()

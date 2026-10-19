@@ -191,8 +191,12 @@ script :
 
 La passe suivante démarre `intervalle` après la dernière mise en vente (par défaut la
 durée des ventes). Si toutes les places étaient prises, elle démarre dès la fin de la
-première enchère en cours. La boucle se réveille aussi juste avant la fin des enchères
-suivies, pour surenchérir.
+première enchère en cours. Les **fins d'enchère** ne dépendent pas de la boucle : un fil
+« veilleur » regarde les enchères suivies de tous les comptes et lance, à l'heure, la
+surveillance de chacune dans son propre fil (`[fin-<compte>]` dans le journal). Une passe
+longue, une demande de cookies ou une autre fin d'enchère ne peuvent plus en faire manquer
+une. Il utilise la session du compte, la même que les passes (un seul renouvellement à la
+fois) ; pendant une fin d'enchère, la défausse et le fil des prix laissent cette session.
 
 ### Achats
 
@@ -210,8 +214,9 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
   mise de départ, puis 10 % de plus que la mise en cours, au moins +1), puis surenchérit
   **à chaque fois qu'il est dépassé**, dans la limite ; une mise des 10 dernières
   secondes prolonge l'enchère de 60 s, la surveillance continue jusqu'à la vraie fin ;
-  une enchère qui finit dans les 3 minutes est surveillée tout de suite, pendant la passe ;
-  plusieurs fins d'enchère proches sont surveillées **en même temps** (une par carte) ;
+  plusieurs fins d'enchère proches sont surveillées **en même temps** (une par carte), par
+  le veilleur, à part des passes (une passe laisse tranquille une carte dont la fin
+  approche) ;
 - au-dessus de votre maximum, il abandonne cette enchère et en cherche une autre ;
 - **une seule enchère à la fois par carte** ; `budget` limite la somme des mises en
   cours, vérifiée au moment de miser.
@@ -434,7 +439,7 @@ n'ont plus d'effet ; le journal le signale au démarrage.
 | `state/market/` | Session Marché (`/market`) et compte qui l'a fournie |
 | `state/global_settings.json` | Réglages communs (`cache_prix`, `ventes_min`) |
 | `state/telegram.json` · `state/site.json` | État du bot ; clé publique du site |
-| `state/seller.log` | Journal, avec le compte entre crochets sur chaque ligne (`[Paul]`, `[défausse-Paul]`) |
+| `state/seller.log` | Journal (50 Mo au plus, en 10 fichiers), avec le fil entre crochets sur chaque ligne (`[Paul]`, `[défausse-Paul]`, `[fin-Paul]`, `[prix]`) |
 
 Au premier démarrage d'une version multi-comptes, les fichiers de l'ancienne version
 (dans `state/`, et les anciens `safed_cards.json` / `wanted_cards.json`) passent dans le

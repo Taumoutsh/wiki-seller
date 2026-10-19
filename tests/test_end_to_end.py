@@ -1012,3 +1012,29 @@ def test_legendary_cards_are_never_discarded_by_default(tmp_path):
         run_once(config)
         DISCARDER.join(120)
     assert site.discarded == ["Commune"]
+
+
+def test_auction_end_is_watched_apart_from_the_pass(tmp_path):
+    import time
+    from datetime import timedelta
+
+    from wiki_seller.watcher import EndWatcher
+
+    auction, end = ending_auction(seconds=12)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=8))
+        watcher = EndWatcher(lambda: [config]).start()
+        try:
+            started = time.monotonic()
+            run_once(config)  # la passe garde l'enchère et rend la main sans la surveiller
+            assert time.monotonic() - started < 8 and site.bids == []
+            assert tracked(config, "victor hugo")["auction_id"] == "s1"
+            close_after(site, end)
+            deadline = time.monotonic() + 30
+            while buy_cards(config) and time.monotonic() < deadline:
+                time.sleep(0.5)
+        finally:
+            watcher.stop()
+    assert site.bids == [("s1", 50)] and buy_cards(config) == []  # mise à 8 s de la fin, gagnée
+    assert "victor hugo" in safe_names(config)

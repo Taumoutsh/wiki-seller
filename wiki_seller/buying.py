@@ -205,10 +205,36 @@ class WantedState:
         return max(min(ends) - watch_start(lead) - SNIPE_STARTUP, now)
 
 
+# Fins d'enchère surveillées à part (watcher.py, mode --loop) : les passes ne les
+# surveillent plus elles-mêmes et laissent tranquilles les cartes dont la fin approche.
+WATCH_APART = threading.Event()
+_WANTED_LOCKS: dict[str, threading.RLock] = {}
+_WANTED_LOCKS_GUARD = threading.Lock()
+
+
+def wanted_lock(config: Config) -> threading.RLock:
+    """Verrou du suivi des achats d'un compte (wanted_state.json) : la passe et les
+    surveillances de fin d'enchère ne s'écrasent pas l'une l'autre."""
+    with _WANTED_LOCKS_GUARD:
+        return _WANTED_LOCKS.setdefault(str(config.wanted_state_file), threading.RLock())
+
+
+def in_watch_window(entry: dict, lead: timedelta, now: datetime) -> bool:
+    """Fin d'enchère suivie assez proche pour être (ou bientôt être) surveillée à part."""
+    end = parse_time(entry.get("end_at"))
+    return (entry.get("status") == "bidding" and end is not None
+            and now - timedelta(minutes=3) < end <= now + watch_start(lead) + SNIPE_STARTUP + timedelta(minutes=2))
+
+
 def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> None:
     """Une passe d'achat. snipe_only : ne traiter que les enchères suivies qui se
     terminent bientôt : attendre SNIPE_LEAD avant la fin, puis surveiller l'enchère
     jusqu'à sa vraie fin (le site la prolonge de 60 s après une mise tardive)."""
+    with wanted_lock(config):
+        _run_bids(site, config, dry_run, snipe_only)
+
+
+def _run_bids(site, config: Config, dry_run: bool, snipe_only: bool) -> None:
     wanted = buy_cards(config)
     state = WantedState(config.wanted_state_file)
     dropped = set(state.data["cards"]) - {c.key for c in wanted}  # /unbuy : suivi oublié
@@ -236,6 +262,9 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
         for card in wanted:
             entry = state.card(card)
             entry.setdefault("since", buyer.now().isoformat())
+            if WATCH_APART.is_set() and not snipe_only and in_watch_window(entry, config.snipe_lead, buyer.now()):
+                log.info("Achat : « %s » — fin d'enchère proche, surveillée à part.", card.name)
+                continue
             if buyer.count_wins(card, entry, won_since(mine, card, parse_time(entry["since"]))):
                 buyer.complete(card)
                 continue
@@ -363,13 +392,28 @@ def _forget(entry: dict) -> None:
     entry["status"] = "searching"
 
 
+class Budget:
+    """Somme des mises en cours d'un compte (budget MAX_TOTAL_BIDS), réservée avant
+    chaque mise de fin d'enchère."""
+
+    def __init__(self, used: int = 0):
+        self.used, self.lock = used, threading.Lock()
+
+
 class _Buyer:
-    def __init__(self, site, config: Config, state: WantedState, dry_run: bool, now):
+    def __init__(self, site, config: Config, state: WantedState, dry_run: bool, now, budget=None):
         self.site, self.config, self.state, self.dry_run, self.now = site, config, state, dry_run, now
-        self.budget_used = 0
+        self.budget = budget or Budget()  # partagé par les fins d'enchère surveillées en même temps
         self.rivals: set[str] = set()  # identifiants des autres comptes du bot
         self.watches: list[tuple[BuyCard, dict, dict]] = []  # fins d'enchère à surveiller
-        self._budget_lock = threading.Lock()  # plusieurs fins d'enchère surveillées en même temps
+
+    @property
+    def budget_used(self) -> int:
+        return self.budget.used
+
+    @budget_used.setter
+    def budget_used(self, value: int) -> None:
+        self.budget.used = value
 
     def watch_later(self, card: BuyCard, entry: dict, auction: dict) -> None:
         self.watches.append((card, entry, auction))
@@ -556,6 +600,10 @@ class _Buyer:
         log.info("Achat : « %s » — %s, mise minimale %d (limite %d) ; mise à %d s de la fin (%s).", card.name,
                  f"dépassé ({auction.get('current_bid')})" if outbid else "enchère suivie sans miser", minimum,
                  card.max_price, self.config.snipe_lead.total_seconds(), auction.get("end_at"))
+        if WATCH_APART.is_set():  # surveillée à part : enregistrée tout de suite si la fin approche
+            if in_watch_window(entry, self.config.snipe_lead, self.now()):
+                self.state.save()
+            return
         self.watch_later(card, entry, auction)
 
     def bid_if_needed(self, card: BuyCard, entry: dict, auction: dict) -> None:
@@ -659,7 +707,7 @@ class _Buyer:
             self.lost(card, entry, auction)
             _forget(entry)
             return
-        with self._budget_lock:  # mise réservée avant l'envoi : deux fins simultanées ne dépassent pas le budget
+        with self.budget.lock:  # mise réservée avant l'envoi : deux fins simultanées ne dépassent pas le budget
             if self.config.max_total_bids and self.budget_used + amount > self.config.max_total_bids:
                 log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; pas de mise sur « %s ».",
                          self.budget_used, card.name)
@@ -676,7 +724,7 @@ class _Buyer:
             log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
                      (parse_time(auction.get("end_at")) - self.now()).total_seconds())
             return
-        with self._budget_lock:
+        with self.budget.lock:
             self.budget_used -= amount  # mise refusée : l'enchère est relue et la mise refaite
         self.bid_if_needed(card, entry, auction)
 
