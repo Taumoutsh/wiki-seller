@@ -263,9 +263,11 @@ exemplaire).
   commune (`PC`), aussi aucune vente connue ou un prix qui n'a pas pu être lu. Tous les
   exemplaires, y compris le dernier.
 - **Jamais défaussées :** les cartes protégées, à acheter et à vendre, les exemplaires en
-  vente ou en échange, et les cartes `R` ou plus rares sans vente connue ou dont le prix
-  n'a pas pu être lu (redemandées la fois suivante : une panne du site ne doit pas coûter
-  une carte de valeur).
+  vente ou en échange, et les cartes `R` ou plus rares sans vente connue.
+- **Carte `R` ou plus rare au prix illisible :** gardée et redemandée la fois suivante ;
+  **défaussée au deuxième constat**, si le premier date d'au moins 6 h et si le site donne
+  bien les autres prix de la défausse (une panne générale ne coûte aucune carte de valeur).
+  Premiers constats gardés dans `state/users/<chat_id>/unpriced.json`.
 - La défausse laisse la place aux passes du compte, puis reprend où elle en était.
 
 ### Prix des cartes

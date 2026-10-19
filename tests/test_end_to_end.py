@@ -957,3 +957,45 @@ def test_commons_whose_price_cannot_be_read_are_discarded_but_not_rares(tmp_path
             DISCARDER.join(120)
     assert set(site.discarded) == {"Caillou", "Feuille", "Victor Hugo"}  # C et PC ; les R et la protégée gardées
     assert "(C, prix illisible) : défaussée" in caplog.text
+
+
+def test_rare_card_unreadable_twice_hours_apart_is_discarded(tmp_path, monkeypatch, caplog):
+    from datetime import datetime, timedelta, timezone
+
+    import wiki_seller.pricing as pricing
+    from wiki_seller.discard import DISCARDER
+
+    monkeypatch.setattr(pricing, "RETRY_PAUSE", 0)
+    monkeypatch.setattr("wiki_seller.site.time.sleep", lambda s: None)
+    monkeypatch.setattr("wiki_seller.discard.HEALTHY_MIN_READS", 3)  # petite collection de test
+    with discard_site() as site:
+        site.price_failures = {"D"}  # Presque (R) : prix illisible, les autres se lisent
+        config = make_config(tmp_path, site.url, [], discard_below=1, discard_trigger=1)
+        run_once(config)
+        DISCARDER.join(120)
+        assert "Presque" not in site.discarded  # premier constat : gardée
+        unpriced = json.loads((config.state_dir / "unpriced.json").read_text())
+        assert list(unpriced) == ["D:R"]
+        old = (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat()
+        (config.state_dir / "unpriced.json").write_text(json.dumps({"D:R": old}))
+        (config.state_dir / "discard_progress.json").unlink()
+        with caplog.at_level("INFO"):
+            run_once(config)
+            DISCARDER.join(120)
+    assert "Presque" in site.discarded
+    assert "Presque (R, prix illisible, déjà constaté) : défaussée" in caplog.text
+
+
+def test_unreadable_rares_are_kept_when_the_site_gives_no_price_at_all(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller.discard import DISCARDER
+
+    with discard_site(sales_forbidden=True) as site:  # panne : aucun prix
+        config = make_config(tmp_path, site.url, [], discard_below=1, discard_trigger=1)
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        (config.state_dir / "unpriced.json").write_text(json.dumps({"C:R": old, "D:R": old, "E:R": old}))
+        run_once(config)
+        DISCARDER.join(120)
+    assert not {"Presque", "Pile quinze", "Rare sans prix"} & set(site.discarded)

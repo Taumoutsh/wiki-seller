@@ -37,6 +37,13 @@ RARITY_ORDER = ("C", "PC", "R", "SR", "UR", "L")
 PAUSE = (1.0, 3.0)  # s entre deux défausses, pour garder un rythme humain
 RECHECK = timedelta(hours=1)  # délai avant de relancer une défausse terminée
 RECHECK_UNPRICED = timedelta(minutes=15)  # idem s'il restait des prix à lire
+# Carte R ou plus rare au prix illisible : défaussée au deuxième constat, si le premier date
+# d'au moins UNPRICED_GRACE (une panne courte ne compte pas deux fois) et si le site donne
+# bien les autres prix de la défausse (HEALTHY_MIN_READS lus, au plus HEALTHY_MAX_FAILURES
+# d'échecs) : une panne générale ne doit coûter aucune carte de valeur.
+UNPRICED_GRACE = timedelta(hours=6)
+HEALTHY_MIN_READS = 5
+HEALTHY_MAX_FAILURES = 0.2
 PROGRESS_MAX_AGE = timedelta(hours=24)  # au-delà, la collection lue est trop ancienne
 SAVE_EVERY_PAGES = 20  # pages de collection lues entre deux sauvegardes
 SAVE_EVERY_CARDS = 20  # cartes examinées entre deux sauvegardes
@@ -249,6 +256,7 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
             for item in progress.cards[progress.position:]:
                 if f"{item.card_id}:{item.rarity}" not in reader.cache:
                     reader.worker.request(item, config, DISCARD)
+        unreadable = Unreadable(config)
         try:
             while progress.position < len(progress.cards):
                 item = progress.cards[progress.position]
@@ -258,7 +266,9 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
                     status, average = reader.read(item, gate(config).should_yield)
                     if status == reader.STOPPED:
                         return False
-                    if status == reader.UNKNOWN and (item.rarity or "") not in DISCARD_WITHOUT_PRICE:
+                    unreadable.saw(item, status == reader.UNKNOWN)
+                    if (status == reader.UNKNOWN and (item.rarity or "") not in DISCARD_WITHOUT_PRICE
+                            and not unreadable.second_time(item)):
                         progress.unpriced += 1  # rare au prix illisible : gardée, redemandée plus tard
                         _next_card(config, progress, reader)
                         continue
@@ -271,6 +281,7 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
                 _next_card(config, progress, reader)
         finally:
             reader.save()
+            unreadable.save()
         log.info("Défausse terminée : %d exemplaire(s) %s, %d carte(s) examinée(s)%s ; %s.", progress.done,
                  "simulé(s)" if dry_run else "défaussé(s)", len(progress.cards),
                  f", {progress.unpriced} sans prix lu (redemandées dans {RECHECK_UNPRICED.seconds // 60} min)"
@@ -278,11 +289,46 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
         return True
 
 
+class Unreadable:
+    """Cartes dont le prix n'a pas pu être lu, avec la date du premier constat
+    (state/users/<chat_id>/unpriced.json), et état du site pendant cette défausse."""
+
+    def __init__(self, config: Config):
+        self.path = config.state_dir / "unpriced.json"
+        self.first_seen: dict[str, str] = read_json(self.path, {})
+        self.read, self.failed = 0, 0  # prix lus et ratés pendant cette défausse
+
+    @staticmethod
+    def _key(item) -> str:
+        return f"{item.card_id}:{item.rarity}"
+
+    def saw(self, item, failed: bool) -> None:
+        if failed:
+            self.failed += 1
+            self.first_seen.setdefault(self._key(item), now_utc().isoformat())
+        else:
+            self.read += 1
+            self.first_seen.pop(self._key(item), None)
+
+    def healthy(self) -> bool:
+        total = self.read + self.failed
+        return self.read >= HEALTHY_MIN_READS and self.failed <= HEALTHY_MAX_FAILURES * total
+
+    def second_time(self, item) -> bool:
+        """Prix déjà illisible il y a au moins UNPRICED_GRACE, site en bon état : à défausser."""
+        first = parse_time(self.first_seen.get(self._key(item)))
+        return bool(first and now_utc() - first >= UNPRICED_GRACE and self.healthy())
+
+    def save(self) -> None:
+        write_json(self.path, self.first_seen)
+
+
 def _discard_copies(site: WikiMasters, config: Config, item: DiscardItem, progress: DiscardProgress,
                     dry_run: bool) -> bool:
     """Défausse les exemplaires de la carte. False si une passe attend la session."""
     price = (f"prix moyen {item.average:g}" if item.average else
-             "prix illisible" if item.unreadable else "aucune vente connue")
+             "prix illisible, déjà constaté" if item.unreadable and (item.rarity or "") not in DISCARD_WITHOUT_PRICE
+             else "prix illisible" if item.unreadable else "aucune vente connue")
     if normalize_name(item.title) in protected_names(config):  # protégée entre-temps (/safe, /buy, /sell)
         log.info("Défausse : %s est protégée ; carte suivante.", item.title)
         return True

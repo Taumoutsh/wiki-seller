@@ -72,6 +72,7 @@ class FakeWikiMasters:
         # Marché : détail des ventes par carte (GET …/sales sans scope=summary), visible
         # seulement si le compte y a accès.
         self.sale_counts: dict[str, int] = {}  # ventes connues par carte (5 sinon)
+        self.price_failures: set[str] = set()  # cartes dont le prix ne se lit pas
         self.latest: dict[str, int] = {}  # dernière vente par carte (absente sinon)
         self.has_market = True
         self.market_sales: dict[str, list[dict]] = {}
@@ -188,6 +189,8 @@ class FakeWikiMasters:
                     if site.sales_forbidden:
                         return self._send(403, {"error": "forbidden"})
                     card_id = url.path.split("/")[4]
+                    if card_id in site.price_failures:  # prix de cette carte illisible (panne passagère)
+                        return self._send(503, {"error": "Service Unavailable"})
                     if qs.get("scope") != ["summary"]:
                         site.events.append(("marché", card_id))
                         if not site.has_market:
