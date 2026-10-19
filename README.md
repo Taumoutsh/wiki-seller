@@ -259,11 +259,13 @@ des prix, après les prix utiles aux ventes)
 et la **défausse aussitôt** si elle vaut `defausse` ou moins (1 wikibidou par
 exemplaire).
 
-- **Défaussées :** prix moyen égal ou inférieur au seuil, ou aucune vente connue pour une
-  commune (`C`) ou peu commune (`PC`). Tous les exemplaires, y compris le dernier.
+- **Défaussées :** prix moyen égal ou inférieur au seuil ; pour une commune (`C`) ou peu
+  commune (`PC`), aussi aucune vente connue ou un prix qui n'a pas pu être lu. Tous les
+  exemplaires, y compris le dernier.
 - **Jamais défaussées :** les cartes protégées, à acheter et à vendre, les exemplaires en
-  vente ou en échange, les cartes rares sans vente connue, et celles dont le prix n'a pas
-  pu être lu (redemandées la fois suivante).
+  vente ou en échange, et les cartes `R` ou plus rares sans vente connue ou dont le prix
+  n'a pas pu être lu (redemandées la fois suivante : une panne du site ne doit pas coûter
+  une carte de valeur).
 - La défausse laisse la place aux passes du compte, puis reprend où elle en était.
 
 ### Prix des cartes

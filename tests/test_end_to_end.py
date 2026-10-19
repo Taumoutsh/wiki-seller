@@ -945,3 +945,15 @@ def test_cards_worth_the_discard_threshold_or_less_are_not_sold(tmp_path):
         run_once(config)
     assert "Rhône" not in [l["title"] for l in site.listings] and "Pomme" not in [l["title"] for l in site.listings]
     assert "Loire" in [l["title"] for l in site.listings]  # 150
+
+
+def test_commons_whose_price_cannot_be_read_are_discarded_but_not_rares(tmp_path, caplog):
+    from wiki_seller.discard import DISCARDER
+
+    with discard_site(sales_forbidden=True) as site:  # prix illisibles pour toutes les cartes
+        config = make_config(tmp_path, site.url, ["tour eiffel"], discard_below=15, discard_trigger=7)
+        with caplog.at_level("INFO"):
+            run_once(config)
+            DISCARDER.join(120)
+    assert set(site.discarded) == {"Caillou", "Feuille", "Victor Hugo"}  # C et PC ; les R et la protégée gardées
+    assert "(C, prix illisible) : défaussée" in caplog.text

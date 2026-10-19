@@ -51,6 +51,7 @@ class DiscardItem:
     average: float | None  # None : aucune vente connue (C/PC)
     copies: int
     copy_ids: list[str] = field(default_factory=list)
+    unreadable: bool = False  # prix illisible (site en panne…) : défaussée seulement si C/PC
 
 
 def total_copies(groups: list[CardGroup]) -> int:
@@ -257,12 +258,12 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
                     status, average = reader.read(item, gate(config).should_yield)
                     if status == reader.STOPPED:
                         return False
-                    if status == reader.UNKNOWN:
-                        progress.unpriced += 1
+                    if status == reader.UNKNOWN and (item.rarity or "") not in DISCARD_WITHOUT_PRICE:
+                        progress.unpriced += 1  # rare au prix illisible : gardée, redemandée plus tard
                         _next_card(config, progress, reader)
                         continue
-                    item.average = average
-                    if not should_discard(item.rarity, average, config.discard_below):
+                    item.average, item.unreadable = average, status == reader.UNKNOWN
+                    if not item.unreadable and not should_discard(item.rarity, average, config.discard_below):
                         _next_card(config, progress, reader)
                         continue
                 if not _discard_copies(site, config, item, progress, dry_run):
@@ -280,7 +281,8 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
 def _discard_copies(site: WikiMasters, config: Config, item: DiscardItem, progress: DiscardProgress,
                     dry_run: bool) -> bool:
     """Défausse les exemplaires de la carte. False si une passe attend la session."""
-    price = f"prix moyen {item.average:g}" if item.average else "aucune vente connue"
+    price = (f"prix moyen {item.average:g}" if item.average else
+             "prix illisible" if item.unreadable else "aucune vente connue")
     if normalize_name(item.title) in protected_names(config):  # protégée entre-temps (/safe, /buy, /sell)
         log.info("Défausse : %s est protégée ; carte suivante.", item.title)
         return True
