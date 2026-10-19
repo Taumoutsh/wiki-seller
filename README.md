@@ -156,6 +156,7 @@ suivante. Un réglage jamais modifié prend la valeur du `.env` (voir « Réglag
 | `intervalle` | `1h`, `auto` | Délai entre deux passes (`auto` : durée des ventes) |
 | `invendues` · `pause_invendues` | `3` · `5` | Ventes ratées avant de mettre une carte de côté, et jours de mise de côté |
 | `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant ce prix ou moins (`0` = coupée), au-delà de ce nombre d'exemplaires ; ces cartes ne sont jamais mises en vente automatiquement |
+| `raretes_defausse` | `UR,SR,R,PC,C`, `toutes`, `aucune` | Raretés que la défausse peut toucher (par défaut, jamais les légendaires) |
 | `budget` | `2000`, `aucun` | Somme maximale des mises en cours |
 | `surenchere` | `30` | Secondes avant la fin d'une enchère pour surenchérir (2 à 300) |
 | `bilan` | `2` | Bilan automatique toutes les N heures (`0` = jamais) |
@@ -254,7 +255,7 @@ demandée (`12h`…) ou à défaut la durée habituelle.
 À chaque réveil, un fil à part par compte lit la collection, sauf s'il tourne déjà ou a
 fini il y a moins d'une heure (15 min si des prix n'avaient pas pu être lus). Au-delà de
 `seuil_defausse` exemplaires (150), il examine les cartes **des plus communes aux plus
-rares** (`C`, `PC`, `R`, `SR`, `UR`, `L`), prend le prix de chacune (cache, sinon le fil
+rares** parmi `raretes_defausse` (par défaut `UR,SR,R,PC,C` : **jamais les légendaires**), prend le prix de chacune (cache, sinon le fil
 des prix, après les prix utiles aux ventes)
 et la **défausse aussitôt** si elle vaut `defausse` ou moins (1 wikibidou par
 exemplaire).
@@ -401,6 +402,7 @@ modifiables ensuite par `/set`.
 | `RUN_INTERVAL` | *(durée des ventes)* | Par compte (`intervalle`) ; 5 min minimum |
 | `UNSOLD_MAX_TRIES` / `UNSOLD_COOLDOWN_DAYS` | `3` / `5` | Par compte (`invendues`, `pause_invendues`) |
 | `DISCARD_BELOW` / `DISCARD_TRIGGER` | `15` / `150` | Par compte (`defausse`, `seuil_defausse`) |
+| `DISCARD_RARITIES` | `UR,SR,R,PC,C` | Par compte (`raretes_defausse`) |
 | `MAX_TOTAL_BIDS` | *(vide)* | Par compte (`budget`) |
 | `SNIPE_LEAD` | `30` | Par compte (`surenchere`) |
 | `REPORT_HOURS` | `2` | Par compte (`bilan`) |

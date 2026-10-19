@@ -182,6 +182,8 @@ class Config:
     # lancée quand la collection dépasse discard_trigger exemplaires.
     discard_below: int = 0
     discard_trigger: int = 150
+    # Raretés que la défausse peut toucher (les légendaires jamais, par défaut).
+    discard_rarities: tuple[str, ...] = ("UR", "SR", "R", "PC", "C")
 
     def duration_label_at(self, hour: int) -> str:
         """Libellé de durée des ventes à cette heure : plage de NIGHT_DURATIONS, sinon
@@ -278,4 +280,5 @@ def load_config() -> Config:
         price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),
         discard_below=_non_negative_int("DISCARD_BELOW", 15),
         discard_trigger=_non_negative_int("DISCARD_TRIGGER", 150),
+        discard_rarities=_rarities(os.getenv("DISCARD_RARITIES") or "UR,SR,R,PC,C"),
     )

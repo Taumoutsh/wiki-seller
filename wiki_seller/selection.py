@@ -147,6 +147,7 @@ def build_sale_plan(
     min_sales: int = 1,
     lows: dict[str, float | None] | None = None,
     discard_below: int = 0,
+    discard_rarities: tuple[str, ...] = (),
 ) -> SalePlan:
     """Liste des cartes à vendre, de la plus chère à la moins chère. Prix par carte et
     rareté (CardGroup.key) ; les cartes dont le prix n'a pas pu être lu (`unknown_prices`)
@@ -165,7 +166,7 @@ def build_sale_plan(
         if not average or average <= 0:
             skipped.append((group.title, "pas de prix moyen"))
             continue
-        if discard_below and average <= discard_below:  # destinée à la défausse
+        if discard_below and average <= discard_below and (group.rarity or "") in discard_rarities:  # à défausser
             skipped.append((group.title, f"{average:g}, pas plus que le seuil de défausse {discard_below}"))
             continue
         count = (sales_counts or {}).get(group.key)

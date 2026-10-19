@@ -125,3 +125,13 @@ def test_minimum_sales_to_sell_is_shared_and_admin_only(base):
         assert accounts.account_config(base, chat).min_sales_to_sell == 3
     assert run_settings_command(base, CHAT_ID, "/set", "ventes_min 0").startswith("❌")
     assert "<b>ventes_min</b> : 3" in run_settings_command(base, CHAT_ID, "/settings", "")
+
+
+def test_discard_rarities_setting(base):
+    config = accounts.account_config(base, CHAT_ID)
+    assert config.discard_rarities == ("UR", "SR", "R", "PC", "C")  # jamais les légendaires
+    assert run_settings_command(base, CHAT_ID, "/set", "raretes_defausses c,pc").startswith(
+        "✅ raretes_defausse : C,PC")
+    assert accounts.account_config(base, CHAT_ID).discard_rarities == ("C", "PC")
+    assert run_settings_command(base, CHAT_ID, "/set", "raretes_defausse XL").startswith("❌")
+    assert accounts.account_config(base, CHAT_ID).discard_rarities == ("C", "PC")

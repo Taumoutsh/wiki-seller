@@ -254,13 +254,16 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
         reader = PriceReader(site, config, priority=DISCARD, wait=True)
         if reader.worker is not None:  # prix lus par le fil commun : toute la suite est demandée d'avance
             for item in progress.cards[progress.position:]:
-                if f"{item.card_id}:{item.rarity}" not in reader.cache:
+                if (item.rarity or "") in config.discard_rarities and f"{item.card_id}:{item.rarity}" not in reader.cache:
                     reader.worker.request(item, config, DISCARD)
         unreadable = Unreadable(config)
         try:
             while progress.position < len(progress.cards):
                 item = progress.cards[progress.position]
                 if progress.copies_done == 0:  # sinon : prix déjà lu, défausse en cours
+                    if (item.rarity or "") not in config.discard_rarities:  # rareté exclue (réglage changé)
+                        _next_card(config, progress, reader)
+                        continue
                     if gate(config).should_yield():
                         return False
                     status, average = reader.read(item, gate(config).should_yield)
@@ -381,7 +384,8 @@ def _list_cards(site: WikiMasters, config: Config, progress: DiscardProgress) ->
         log.info("Collection : %d exemplaire(s), seuil de défausse %d non dépassé.", count, config.discard_trigger)
         return True
     groups = parse_collection(progress.scan.entries, excluded_copy_ids=progress.scan.in_trade)
-    progress.cards = discard_candidates(groups, protected_names(config), site.fetch_market_state().selling)
+    progress.cards = [i for i in discard_candidates(groups, protected_names(config), site.fetch_market_state().selling)
+                      if (i.rarity or "") in config.discard_rarities]
     progress.save(config)
     log.info("Collection : %d exemplaire(s) > %d. Défausse au fil de l'eau de %d carte(s), les plus "
              "communes d'abord, à %d ou moins.", count, config.discard_trigger, len(progress.cards),

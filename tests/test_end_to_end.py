@@ -999,3 +999,16 @@ def test_unreadable_rares_are_kept_when_the_site_gives_no_price_at_all(tmp_path)
         run_once(config)
         DISCARDER.join(120)
     assert not {"Presque", "Pile quinze", "Rare sans prix"} & set(site.discarded)
+
+
+def test_legendary_cards_are_never_discarded_by_default(tmp_path):
+    from wiki_seller.discard import DISCARDER
+
+    collection = [entry("l1", "LL", "Légendaire bradée", "L"), entry("c1", "CC", "Commune", "C")]
+    with FakeWikiMasters(collection, {"LL": 3, "CC": 3}, max_auctions=5) as site:
+        site.selling = list(FULL_SLOTS)
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        assert config.discard_rarities == ("UR", "SR", "R", "PC", "C")
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == ["Commune"]

@@ -66,6 +66,18 @@ def _rarities(text: str) -> dict:
     return {"selling": True, "sell_rarities": codes}
 
 
+def _discard_rarities(text: str) -> dict:
+    value = text.strip().lower()
+    if value in ("aucune", "non", "off", "0"):
+        return {"discard_rarities": ()}
+    if value in ("toutes", "tout", "all", "*"):
+        return {"discard_rarities": RARITIES}
+    codes = tuple(c.strip().upper() for c in text.replace(";", ",").replace(" ", ",").split(",") if c.strip())
+    if not codes or any(c not in RARITIES for c in codes):
+        raise SettingError(f"des raretés parmi {', '.join(RARITIES)} (ex. UR,SR,R,PC,C), « toutes » ou « aucune »")
+    return {"discard_rarities": codes}
+
+
 def _duration_label(text: str) -> str:
     duration = parse_duration(text)
     label = DURATIONS.get(int(duration.total_seconds() // 60)) if duration else None
@@ -133,6 +145,8 @@ SETTINGS = (
             lambda t: {"unsold_cooldown": timedelta(days=_integer(1)(t))}, lambda c: str(c.unsold_cooldown.days)),
     Setting("defausse", "défausse des cartes valant ce prix ou moins (0 = coupée)",
             lambda t: {"discard_below": _integer(0)(t)}, lambda c: str(c.discard_below) if c.discard_below else "0 (coupée)"),
+    Setting("raretes_defausse", "raretés que la défausse peut toucher (ex. UR,SR,R,PC,C), toutes ou aucune",
+            _discard_rarities, lambda c: ",".join(c.discard_rarities) or "aucune"),
     Setting("seuil_defausse", "exemplaires au-delà desquels la défausse démarre",
             lambda t: {"discard_trigger": _integer(0)(t)}, lambda c: str(c.discard_trigger)),
     Setting("budget", "somme maximale des mises en cours, ou aucun",
@@ -180,7 +194,8 @@ GLOBAL_SETTINGS = (
 )
 GLOBAL_KEYS = {s.key for s in GLOBAL_SETTINGS}
 BY_KEY = {s.key: s for s in (*SETTINGS, *GLOBAL_SETTINGS)}
-ALIASES = {"ventes": "ventes_min", "ventes_minimum": "ventes_min", "cache": "cache_prix", "cache_prix_heures": "cache_prix", "rarete": "raretes", "rarities": "raretes", "duree_nuit": "nuit", "défausse": "defausse",
+ALIASES = {"raretes_defausses": "raretes_defausse", "raretés_défausse": "raretes_defausse",
+           "ventes": "ventes_min", "ventes_minimum": "ventes_min", "cache": "cache_prix", "cache_prix_heures": "cache_prix", "rarete": "raretes", "rarities": "raretes", "duree_nuit": "nuit", "défausse": "defausse",
            "durée": "duree", "surenchère": "surenchere", "raretés": "raretes"}
 
 

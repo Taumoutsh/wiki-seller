@@ -354,7 +354,7 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     cache = load_price_cache(config)
     plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown,
                            {k: e.get("count") for k, e in cache.items()}, config.min_sales_to_sell,
-                           {k: e.get("low") for k, e in cache.items()}, config.discard_below)
+                           {k: e.get("low") for k, e in cache.items()}, config.discard_below, config.discard_rarities)
     set_aside = [(t, r) for t, r in plan.skipped if r.startswith("mise de côté")]
     if set_aside:
         log.info("%d carte(s) mise(s) de côté, trop peu de ventes pour s'y fier : %s", len(set_aside),
