@@ -195,3 +195,46 @@ def test_rarity_option_buys_and_sells_only_that_rarity(tmp_path):
     assert json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]["auction_id"] == "s1"  # pas C
     assert [(l["card_id"], l["price"]) for l in site.listings] == [("h1", "900")]  # l'exemplaire SR
     assert buy_cards(config)[0].rarity == "SR" and sell_cards(config)[0].rarity == "SR"
+
+
+def test_shiny_legendaries(tmp_path):
+    from wiki_seller.commands import run_list_command
+    from wiki_seller.lists import sell_cards
+
+    from .test_end_to_end import entry
+
+    collection = [entry("h1", "LL", "Victor Hugo", "L"), dict(entry("h2", "LL", "Victor Hugo", "L"), is_shiny=True),
+                  entry("r1", "RR", "Rhône", "L"), dict(entry("r2", "RR", "Rhône", "L"), is_shiny=True)]
+    auctions = [market_auction("n1", "Gustave Eiffel", 300), market_auction("s1", "Gustave Eiffel", 400),
+                market_auction("s2", "Loire", 10), market_auction("n2", "Loire", 50)]
+    for auction, shiny_auction in zip(auctions, (False, True, True, False)):
+        auction["card"].update(id=auction["id"], rarity="L", is_shiny=shiny_auction)
+        auction["is_shiny"] = shiny_auction
+    with FakeWikiMasters(collection, {"LL": 1000, "RR": 500}, max_auctions=5, auctions=auctions) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[], sell_rarities=("L",))
+        assert "(L+ shiny) ajoutée" in run_list_command(config, "/buy", "Gustave Eiffel 500 L+")
+        assert "(L) ajoutée" in run_list_command(config, "/buy", "Loire 100 L")
+        assert run_list_command(config, "/buy", "Rhône L+").startswith("❌ Prix obligatoire")  # pas d'auto
+        assert run_list_command(config, "/sell", "Victor Hugo auto L+").startswith("❌ Prix obligatoire")
+        assert "(L+ shiny) ajoutée" in run_list_command(config, "/sell", "Victor Hugo 5000 L+")
+        run_once(config)
+    state = json.loads(config.wanted_state_file.read_text())["cards"]
+    assert state["gustave eiffel"]["auction_id"] == "s1"  # la shiny, pas la normale moins chère
+    assert state["loire"]["auction_id"] == "n2"  # L sans « + » : pas la shiny, pourtant moins chère
+    # /sell … L+ vend l'exemplaire shiny ; la vente automatique (raretés L) ne vend que le Rhône normal.
+    assert sorted((l["card_id"], l["price"]) for l in site.listings) == [("h2", "5000"), ("r1", "350")]
+    assert sell_cards(config)[0].rarity == "L+"
+
+
+def test_shiny_copies_are_never_discarded(tmp_path):
+    from wiki_seller.discard import DISCARDER
+
+    from .test_end_to_end import FULL_SLOTS, entry
+
+    collection = [entry("c1", "CC", "Commune", "C"), dict(entry("c2", "CC", "Commune", "C"), is_shiny=True)]
+    with FakeWikiMasters(collection, {"CC": 2}, max_auctions=5) as site:
+        site.selling = list(FULL_SLOTS)
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == ["Commune"] and [c["id"] for c in site.collection] == ["c2"]  # la shiny reste

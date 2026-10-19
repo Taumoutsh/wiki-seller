@@ -9,6 +9,7 @@ from .lists import (
     AUTO,
     AUTO_BUY_RATIO,
     AUTO_SELL_RATIO,
+    SHINY,
     ListError,
     add_safe,
     buy_cards,
@@ -53,7 +54,8 @@ HELP_TEXT = ("📖 Commandes\n"
              "x2 — nombre d'exemplaires\n"
              "12h — durée de vente : 10m, 30m, 1h, 3h, 6h, 12h\n"
              "@Pseudo — n'acheter qu'à ce vendeur\n"
-             "SR — seulement cette rareté : L, UR, SR, R, PC, C\n"
+             "SR — seulement cette rareté : L, UR, SR, R, PC, C (sans les shiny) ; L+ = légendaire shiny, "
+             "prix obligatoire\n"
              "auto — prix du marché : achat jusqu'à 90 %, vente à 110 % "
              "(prix omis pour une nouvelle carte = auto)\n"
              "; — termine le nom : /buy Apollo 11; 500\n"
@@ -281,7 +283,7 @@ def _sell(price) -> str:
 
 
 def _rarity(card) -> str:
-    return f" ({card.rarity})" if card.rarity else ""
+    return f" ({card.rarity}{' shiny' if card.rarity == SHINY else ''})" if card.rarity else ""
 
 
 def _for(duration: str) -> str:

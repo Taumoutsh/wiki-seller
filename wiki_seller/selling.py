@@ -13,7 +13,8 @@ from datetime import datetime
 
 from .buying import WantedState, auction_title, my_user_id
 from .config import Config
-from .lists import AUTO, AUTO_SELL_RATIO, ListError, SellCard, record_sale, remove_safe, sell_cards, update_sell
+from .lists import (AUTO, AUTO_SELL_RATIO, ListError, SellCard, group_matches, record_sale, remove_safe, sell_cards,
+                    update_sell)
 from . import collection, price_worker
 from .pricing import PriceReader, fetch_averages, load_price_cache
 from .settings import RARITIES
@@ -189,8 +190,7 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
     for card in cards:
         if card.remaining <= 0:
             continue
-        matching = [g for g in groups if normalize_name(g.title) == card.key
-                    and (not card.rarity or g.rarity == card.rarity)]
+        matching = [g for g in groups if normalize_name(g.title) == card.key and group_matches(g, card.rarity)]
         matching.sort(key=lambda g: RARITIES.index(g.rarity) if g.rarity in RARITIES else len(RARITIES))
         if card.price == AUTO and matching:  # prix d'une rareté : la plus rare possédée d'abord
             matching = [g for g in matching if g.rarity == matching[0].rarity]
@@ -332,7 +332,7 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
                safe_names: set[str], market, my_id: str | None) -> None:
     """Ventes habituelles (SELL_RARITIES) : PRICE_RATIO du prix moyen, des plus chères
     aux moins chères, dans les places restantes."""
-    sellable = [g for g in groups if copies_available(g, safe_names, market.selling) > 0]
+    sellable = [g for g in groups if not g.shiny and copies_available(g, safe_names, market.selling) > 0]
 
     # Cartes qui ne se vendent pas : mises de côté quelques jours (state/unsold.json).
     unsold = UnsoldTracker(config.unsold_file, config.unsold_max_tries, config.unsold_cooldown)

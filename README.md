@@ -109,6 +109,12 @@ quel ordre : `x2` (2 exemplaires), `12h` (durée de vente : `10m`, `30m`, `1h`, 
 `/buyandsell`), `L`, `UR`, `SR`, `R`, `PC` ou `C` (seulement cette rareté : une même carte
 existe parfois en plusieurs raretés). Exemple : `/buyandsell Tour Eiffel 500 800 x2 12h @Paul SR`.
 
+**Shiny :** `L+` désigne les légendaires **shiny** (`/buy Tour Eiffel 5000 L+`,
+`/sell Tour Eiffel 9000 L+`) ; une rareté sans `+` exclut toujours les shiny. Le prix est
+alors **obligatoire** : le prix du marché ne distingue pas les shiny des autres. Un
+exemplaire shiny n'est **jamais vendu automatiquement ni défaussé** : seul un `/sell … L+`
+le vend.
+
 Avec une rareté, l'achat ne vise que les enchères de cette rareté, et la vente (ou la
 revente de `/buyandsell`) que vos exemplaires de cette rareté. Une carte n'a qu'une ligne
 par liste : renvoyer `/buy Tour Eiffel L` change la rareté voulue. Pour un nom qui finit

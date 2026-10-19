@@ -231,3 +231,16 @@ def test_rarity_option():
     assert parse_card_command("Vitamine C;", 1, "usage", options, optional_prices=True).name == "Vitamine C"
     with pytest.raises(ListError, match="usage"):  # une seule rareté
         parse_card_command("Tour Eiffel; SR L", 1, "usage", options, optional_prices=True)
+
+
+def test_shiny_legendary_option(config):
+    from wiki_seller.lists import AUTO, SHINY, parse_card_command
+
+    parsed = parse_card_command("Tour Eiffel 5000 l+", 1, "usage", ("rarete",), optional_prices=True)
+    assert (parsed.name, parsed.prices, parsed.rarity) == ("Tour Eiffel", [5000], SHINY)
+    with pytest.raises(ListError, match="Prix obligatoire"):
+        set_buy(config, "Tour Eiffel", AUTO, rarity=SHINY)
+    with pytest.raises(ListError, match="Prix obligatoire"):
+        set_buy(config, "Tour Eiffel", 5000, sell_price=AUTO, rarity=SHINY)
+    assert buy_cards(config) == []  # rien d'enregistré
+    assert set_buy(config, "Tour Eiffel", 5000, rarity=SHINY)[1].rarity == SHINY

@@ -67,10 +67,10 @@ def total_copies(groups: list[CardGroup]) -> int:
 
 def discard_candidates(groups: list[CardGroup], protected_names: set[str], selling: list[dict]) -> list[DiscardItem]:
     """Cartes à examiner, les plus communes d'abord. Jamais les cartes protégées
-    (cartes à garder et cartes voulues), ni les exemplaires en vente."""
+    (cartes à garder et cartes voulues), ni les exemplaires en vente, ni les shiny."""
     items = []
     for group in groups:
-        if normalize_name(group.title) in protected_names:
+        if normalize_name(group.title) in protected_names or group.shiny:  # shiny : jamais défaussé
             continue
         copies = group.count - count_listed(group, selling)
         if copies > 0:

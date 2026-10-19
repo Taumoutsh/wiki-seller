@@ -17,7 +17,8 @@ from types import SimpleNamespace
 
 from . import collection
 from .config import Config
-from .lists import AUTO, AUTO_BUY_RATIO, AUTO_SELL_RATIO, BuyCard, buy_cards, complete_purchase, price_text
+from .lists import AUTO, AUTO_BUY_RATIO, AUTO_SELL_RATIO, SHINY, BuyCard, buy_cards, complete_purchase, price_text
+from .selection import is_shiny
 from .pricing import PriceReader
 from .selection import normalize_name
 from .site import SiteError, entry_rarity, min_bid
@@ -99,9 +100,17 @@ def seller_matches(auction: dict, seller: str) -> bool:
 
 
 def rarity_matches(auction: dict, card: BuyCard, unknown_ok: bool = False) -> bool:
-    """Enchère de la rareté voulue (toujours vrai sans rareté demandée)."""
+    """Enchère de la rareté voulue (toujours vrai sans rareté demandée) : L+ = légendaire
+    shiny ; une autre rareté exclut les shiny."""
+    if not card.rarity:
+        return True
     rarity = entry_rarity(auction)
-    return not card.rarity or rarity == card.rarity or (unknown_ok and not rarity)
+    wanted = "L" if card.rarity == SHINY else card.rarity
+    if card.rarity == SHINY and not is_shiny(auction):
+        return False
+    if card.rarity != SHINY and is_shiny(auction):
+        return False
+    return rarity == wanted or (unknown_ok and not rarity)
 
 
 def won_since(mine: dict, card: BuyCard, since: datetime | None) -> list[dict]:

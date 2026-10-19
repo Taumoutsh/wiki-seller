@@ -31,6 +31,7 @@ class CardGroup:
     rarity: str | None
     copy_ids: list[str] = field(default_factory=list)
     count: int = 0
+    shiny: bool = False  # exemplaires shiny : jamais vendus automatiquement ni défaussés
 
     @property
     def key(self) -> str:
@@ -42,12 +43,18 @@ def _str(value) -> str:
     return value if isinstance(value, str) else ""
 
 
+def is_shiny(entry: dict) -> bool:
+    """Exemplaire (ou enchère) shiny, d'après « is_shiny » de l'entrée ou de sa carte."""
+    card = entry.get("card") if isinstance(entry.get("card"), dict) else {}
+    return entry.get("is_shiny") is True or card.get("is_shiny") is True
+
+
 def parse_collection(entries: list[dict], excluded_copy_ids: set[str] = frozenset()) -> list[CardGroup]:
     """Regroupe les entrées de /api/my-collection par carte.
 
     Selon les versions du site, une entrée représente soit un exemplaire, soit une
     carte avec un champ `count` : on gère les deux."""
-    groups: dict[tuple[str, str | None], CardGroup] = {}
+    groups: dict[tuple[str, str | None, bool], CardGroup] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -61,9 +68,11 @@ def parse_collection(entries: list[dict], excluded_copy_ids: set[str] = frozense
             continue
         rarity = _str(card.get("rarity")).upper() or _str(entry.get("rarity")).upper() or None
 
-        group = groups.get((card_id, rarity))
+        shiny = is_shiny(entry)
+        group = groups.get((card_id, rarity, shiny))
         if group is None:
-            group = groups[(card_id, rarity)] = CardGroup(card_id=card_id, title=title, rarity=rarity)
+            group = groups[(card_id, rarity, shiny)] = CardGroup(card_id=card_id, title=title, rarity=rarity,
+                                                                 shiny=shiny)
         try:
             declared = int(entry.get("count") or 0)
         except (TypeError, ValueError):
@@ -94,7 +103,8 @@ def count_listed(group: CardGroup, selling: list[dict]) -> int:
     rareté, quand l'enchère la donne)."""
     ids = {group.card_id, *group.copy_ids}
     return sum(1 for a in selling if isinstance(a, dict) and auction_refs(a) & ids
-               and (not group.rarity or _rarity(a) in ("", group.rarity)))
+               and (not group.rarity or _rarity(a) in ("", group.rarity))
+               and ("is_shiny" not in a or is_shiny(a) == group.shiny))
 
 
 def copies_not_on_sale(group: CardGroup, selling: list[dict]) -> list[str]:
@@ -156,6 +166,8 @@ def build_sale_plan(
     set_aside: list[SaleItem] = []
     skipped: list[tuple[str, str]] = []
     for group in groups:
+        if group.shiny:  # jamais vendue automatiquement (seulement par /sell … L+)
+            continue
         copies = copies_available(group, safe_names, selling)
         if copies <= 0:
             continue

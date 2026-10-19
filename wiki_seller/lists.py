@@ -31,6 +31,17 @@ AUTO = "auto"
 AUTO_BUY_RATIO = 0.9
 AUTO_SELL_RATIO = 1.1
 SEPARATOR = ";"  # termine le nom d'une carte
+SHINY = "L+"  # rareté demandée : légendaire shiny (sans « + », les shiny sont exclus)
+SHINY_NO_AUTO = ("Prix obligatoire pour une carte shiny (L+) : le prix du marché ne distingue pas les "
+                 "shiny des autres.")
+
+
+def group_matches(group, rarity: str) -> bool:
+    """Exemplaires de la collection visés par une rareté demandée : L+ = légendaires
+    shiny ; une autre rareté, ou aucune, ne prend jamais d'exemplaire shiny."""
+    if rarity == SHINY:
+        return group.rarity == "L" and group.shiny
+    return not group.shiny and (not rarity or group.rarity == rarity)
 
 
 class ListError(Exception):
@@ -187,7 +198,7 @@ def _buy_raw(config) -> list[dict]:
                 or not _price(item.get("max_price")) or not _positive(item.get("copies", 1))
                 or (item.get("sell_price") is not None and not _price(item["sell_price"]))
                 or not isinstance(item.get("seller", ""), str) or not isinstance(item.get("sell_duration", ""), str)
-                or item.get("rarity", "") not in ("", *RARITIES)):
+                or item.get("rarity", "") not in ("", *RARITIES, SHINY)):
             raise ListError(f"{buy_file(config)} : entrée invalide {item!r}.")
     return data
 
@@ -228,6 +239,8 @@ def set_buy(config, name: str, max_price: int | str | None, copies: int | None =
             entry["sell_duration"] = sell_duration
         if rarity:
             entry["rarity"] = rarity
+        if entry.get("rarity") == SHINY and AUTO in (entry.get("max_price"), entry.get("sell_price")):
+            raise ListError(SHINY_NO_AUTO)
         status = "ajoutée" if before is None else "inchangée" if entry == before else "mise à jour"
         if status != "inchangée":
             write_json(buy_file(config), data)
@@ -275,7 +288,7 @@ def _sell_raw(config) -> list[dict]:
     data = _load(sell_file(config)) or []
     if not isinstance(data, list) or not all(
             isinstance(i, dict) and isinstance(i.get("name"), str) and _price(i.get("price"))
-            and _positive(i.get("copies", 1)) and i.get("rarity", "") in ("", *RARITIES) for i in data):
+            and _positive(i.get("copies", 1)) and i.get("rarity", "") in ("", *RARITIES, SHINY) for i in data):
         raise ListError(f"{sell_file(config)} : contenu invalide.")
     return data
 
@@ -315,6 +328,8 @@ def set_sell(config, name: str, price: int | str | None, copies: int | None = No
             entry["duration"] = duration
         if rarity:
             entry["rarity"] = rarity
+        if entry.get("rarity") == SHINY and entry.get("price") == AUTO:
+            raise ListError(SHINY_NO_AUTO)
         write_json(sell_file(config), data)
         return status, _sell_card(entry)
 
@@ -388,7 +403,7 @@ def _option(word: str, allowed: tuple[str, ...]) -> tuple[str, object] | None:
         return "vendeur", match.group(1)
     if "duree" in allowed and not word.isdigit() and (duration := parse_duration(word)) is not None:
         return "duree", duration
-    if "rarete" in allowed and word.upper() in RARITIES:
+    if "rarete" in allowed and (word.upper() in RARITIES or word.upper() == SHINY):
         return "rarete", word.upper()
     return None
 
