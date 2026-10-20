@@ -356,7 +356,7 @@ Sans la boucle (passe unique), les prix sont lus pendant la passe, comme avant.
 ### Fiche d'une carte
 
 `/details Tour Eiffel` (ou `/fiche`) renvoie, en pièce jointe, une page HTML qui s'ouvre
-sur téléphone comme sur ordinateur (sans connexion, sans script) :
+sur téléphone comme sur ordinateur (sans connexion) :
 
 - **la carte** telle que la décrit la base du site : rareté, ATK, DEF, vues,
   Q-score, catégorie et description ;
@@ -364,6 +364,12 @@ sur téléphone comme sur ordinateur (sans connexion, sans script) :
   trait épais (prix médian des 15 ventes autour de chacune), la moitié centrale des ventes
   en zone claire, chaque vente en petit point, celles que le bot écarte (aberrantes, ou
   d'avant un changement de valeur) en cercles, et le prix retenu par le bot en pointillé ;
+  **toucher le graphique** (ou le survoler) montre la vente la plus proche : date, prix et
+  tendance à ce moment ;
+- **l'évolution du prix**, mesurée sur la tendance (une vente isolée ne la fausse pas) :
+  depuis la première vente connue, puis sur 30 j, 15 j, 7 j et 24 h (une période n'est
+  donnée que s'il y a des ventes avant son début et au moins 3 depuis) ; elle figure
+  aussi dans le message Telegram ;
 - **par rareté :** nombre de ventes, prix retenu par le bot, moyenne, médiane, plus bas,
   plus haut, dernière vente, moyenne affichée par le site, et prix `auto` qu'en tirerait
   le bot (achat 90 %, vente 110 %) ;

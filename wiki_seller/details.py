@@ -2,8 +2,9 @@
 prix (moyen, médian, plus bas, plus haut, prix retenu par le bot), par rareté, avec les
 enchères en cours de la carte.
 
-La fiche est une page HTML autonome (graphique en SVG, sans script ni ressource externe)
-envoyée en document Telegram : elle s'ouvre sur téléphone comme sur ordinateur. Elle est
+La fiche est une page HTML autonome (graphique en SVG, sans ressource externe ; un petit
+script facultatif montre la vente la plus proche là où l'on touche le graphique) envoyée
+en document Telegram : elle s'ouvre sur téléphone comme sur ordinateur. Elle est
 préparée en mémoire et n'est jamais écrite sur le serveur.
 
 La carte se donne par son nom (titre exact, sans tenir compte des majuscules ni des
@@ -51,6 +52,11 @@ PAD_R, PAD_T, PAD_B = 12, 14, 30
 TREND_WINDOW = 15  # ventes autour de chacune pour la tendance (médiane glissante)
 TREND_MIN = 4  # ventes retenues d'une rareté à partir desquelles la tendance est tracée
 DENSE_SALES = 60  # au-delà, les ventes sont de petits points discrets
+# Évolution du prix (sur la tendance) : depuis la première vente connue, puis sur ces périodes.
+GROWTH_PERIODS = ((timedelta(days=30), "sur 30 j"), (timedelta(days=15), "sur 15 j"), (timedelta(days=7), "sur 7 j"),
+                  (timedelta(days=1), "sur 24 h"))
+GROWTH_MIN_SALES = 3  # ventes retenues dans la période, au moins, pour en donner l'évolution
+TIP_H, TIP_CHAR = 36, 6.3  # bulle d'une vente : hauteur, largeur par caractère (police de 11 px)
 COLORS = {"L": "#d49a00", SHINY: "#d0258f", "UR": "#dc2626", "SR": "#7c3aed", "R": "#2563eb", "PC": "#0d9488",
           "C": "#6b7280", "": "#475569"}
 ORDER = ("L", SHINY, "UR", "SR", "R", "PC", "C", "")
@@ -339,6 +345,35 @@ def _trend(sales: list[Sale]) -> list[tuple[Sale, float, float, float]]:
     return points
 
 
+def growth(group: Group, now: datetime) -> list[tuple[str, float]]:
+    """Évolution du prix en % sur la tendance (médiane glissante, que les ventes isolées
+    ne faussent pas) : depuis la première vente connue, puis sur 30 j, 15 j, 7 j et 24 h
+    quand il y a des ventes avant le début de la période et assez de ventes depuis."""
+    kept = [s for i, s in enumerate(group.sales) if i not in group.outliers]
+    if len(kept) < TREND_MIN:
+        return []
+    trend = _trend(kept)
+    current = trend[-1][1]
+    first = kept[0].at.astimezone(_tz()).strftime("%d/%m")
+    found = [(f"depuis le {first}", (current / trend[0][1] - 1) * 100)]
+    for period, label in GROWTH_PERIODS:
+        since = now - period
+        before = [i for i, s in enumerate(kept) if s.at <= since]
+        if not before or len(kept) - 1 - before[-1] < GROWTH_MIN_SALES:
+            continue  # aucune vente avant la période (déjà « depuis le … »), ou trop peu depuis
+        found.append((label, (current / trend[before[-1]][1] - 1) * 100))
+    return found
+
+
+def _growth_chips(group: Group, now: datetime) -> str:
+    chips = []
+    for label, pct in growth(group, now):
+        kind = "up" if pct >= 0.5 else "down" if pct <= -0.5 else "flat"
+        arrow = {"up": "▲", "down": "▼", "flat": "▶"}[kind]
+        chips.append(f'<span class="{kind}">{arrow} {pct:+.0f} %<small> {html.escape(label)}</small></span>')
+    return f'<div class="growth">{"".join(chips)}</div>' if chips else ""
+
+
 def _chart(groups: list[Group], now: datetime, size: str) -> str:
     """Tendance (médiane glissante, trait épais) sur la bande des ventes courantes, chaque
     vente en petit point ; ventes écartées par le bot en cercles ; prix retenu en pointillé."""
@@ -388,24 +423,42 @@ def _chart(groups: list[Group], now: datetime, size: str) -> str:
             band += [f"{x(s.at):.1f},{y(q1):.1f}" for s, _, q1, _ in reversed(trend)]
             out.append(f'<polygon points="{" ".join(band)}" fill="{color}" class="band"/>')
         for i, sale in enumerate(group.sales):
-            when = sale.at.astimezone(tz).strftime("%d/%m %H:%M")
-            tip = html.escape(f"{group.rarity or '?'} · {_money(sale.price)} · {when}"
-                              + (" · écartée par le bot" if i in group.outliers else ""))
             cx, cy = x(sale.at), y(sale.price)
             if i in group.outliers:
-                out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="none" stroke="{color}" '
-                           f'class="out"><title>{tip}</title></circle>')
+                out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="none" stroke="{color}" class="out"/>')
             else:
                 out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{2.4 if dense else 3.5}" fill="{color}" '
-                           f'class="{"dot" if dense else "dot big"}"><title>{tip}</title></circle>')
+                           f'class="{"dot" if dense else "dot big"}"/>')
         if trend:
             points = " ".join(f"{x(s.at):.1f},{y(median):.1f}" for s, median, _, _ in trend)
             out.append(f'<polyline points="{points}" stroke="{color}" class="trend"/>')
         if group.clean:
             out.append(f'<line x1="{pad_l}" x2="{chart_w - PAD_R}" y1="{y(group.clean.price):.1f}" '
                        f'y2="{y(group.clean.price):.1f}" stroke="{color}" class="clean"/>')
+        # Par-dessus tout : chaque vente touchée (ou survolée) affiche sa bulle.
+        medians = {id(s): median for s, median, _, _ in trend}
+        for i, sale in enumerate(group.sales):
+            line1 = f"{sale.at.astimezone(tz).strftime('%d/%m %H:%M')} · {_money(sale.price)}"
+            line2 = ("écartée par le bot" if i in group.outliers
+                     else f"tendance {_money(medians[id(sale)])}" if id(sale) in medians else group.rarity or "")
+            out.append(_point(x(sale.at), y(sale.price), color, line1, line2, (pad_l, chart_w - PAD_R, PAD_T)))
     out.append("</svg>")
     return "".join(out)
+
+
+def _point(cx: float, cy: float, color: str, line1: str, line2: str, bounds: tuple[float, float, float]) -> str:
+    """Zone touchable d'une vente, avec sa bulle (montrée au toucher, au survol ou au
+    clavier ; sans script, :focus suffit)."""
+    left, right, top = bounds
+    width = max(len(line1), len(line2)) * TIP_CHAR + 14
+    bx = min(max(cx - width / 2, left), right - width)
+    by = cy - TIP_H - 10 if cy - TIP_H - 10 >= top else cy + 10
+    return (f'<g class="pt" tabindex="0" data-x="{cx:.1f}" data-y="{cy:.1f}">'
+            f'<circle class="hit" cx="{cx:.1f}" cy="{cy:.1f}" r="10"/>'
+            f'<circle class="ring" cx="{cx:.1f}" cy="{cy:.1f}" r="5.5" stroke="{color}"/>'
+            f'<g class="tip"><rect x="{bx:.1f}" y="{by:.1f}" width="{width:.1f}" height="{TIP_H}" rx="6" '
+            f'stroke="{color}"/><text x="{bx + 7:.1f}" y="{by + 15:.1f}" class="t1">{html.escape(line1)}</text>'
+            f'<text x="{bx + 7:.1f}" y="{by + 29:.1f}" class="t2">{html.escape(line2)}</text></g></g>')
 
 
 def _badge(rarity: str) -> str:
@@ -500,6 +553,16 @@ a{color:#2563eb}.muted{color:var(--muted);font-size:.85em}
 .chart .dot{opacity:.38}.chart .dot.big{opacity:.75}.chart .out{stroke-width:1.5;opacity:.75}
 .chart .trend{fill:none;stroke-width:3;stroke-linejoin:round;stroke-linecap:round}
 .chart .clean{stroke-width:1.5;stroke-dasharray:6 4;opacity:.9}
+.pt{outline:none;cursor:pointer}.pt .hit{fill:transparent}.pt .ring{fill:none;stroke-width:2.5}
+.pt .ring,.pt .tip{visibility:hidden}.pt .tip rect{fill:var(--card);stroke-width:1.5}
+.pt .t1{fill:var(--fg);font-size:11px;font-weight:600}.pt .t2{fill:var(--muted);font-size:11px}
+.pt:focus .ring,.pt:focus .tip,.pt.on .ring,.pt.on .tip{visibility:visible}
+@media (hover:hover){.pt:hover .ring,.pt:hover .tip{visibility:visible}}
+.growth{display:flex;flex-wrap:wrap;gap:6px;margin:.2em 0 .5em}.growth span{padding:2px 8px;border-radius:999px;
+font-size:.85em;font-weight:600;font-variant-numeric:tabular-nums}.growth small{font-weight:400;opacity:.8}
+.growth .up{background:#16a34a22;color:#15803d}.growth .down{background:#dc262622;color:#b91c1c}
+.growth .flat{background:#6b728022;color:var(--muted)}
+@media (prefers-color-scheme:dark){.growth .up{color:#4ade80}.growth .down{color:#f87171}}
 h3{font-size:.95em;margin:.8em 0 .2em;display:flex;gap:.5em;align-items:center}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:.85em;color:var(--muted)}
 table{width:100%;border-collapse:collapse}th,td{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left}
@@ -547,8 +610,20 @@ def _charts(groups: list[Group], now: datetime) -> str:
     parts = []
     for group in shown:
         title = f'<h3>{_badge(group.rarity)} {len(group.sales)} vente(s)</h3>' if len(shown) > 1 else ""
-        parts.append(f"{title}{_chart([group], now, 'wide')}{_chart([group], now, 'narrow')}")
+        parts.append(f"{title}{_growth_chips(group, now)}{_chart([group], now, 'wide')}"
+                     f"{_chart([group], now, 'narrow')}")
     return "".join(parts)
+
+
+# Toucher le graphique n'importe où : la vente la plus proche (dans le temps d'abord) montre
+# sa bulle. Sans script (aperçu qui les bloque), toucher un point la montre aussi (:focus).
+SCRIPT = """document.querySelectorAll("svg.chart").forEach(function(svg){svg.addEventListener("click",function(e){
+var m=svg.getScreenCTM();if(!m)return;var p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;
+p=p.matrixTransform(m.inverse());var best=null,dist=1e18;svg.querySelectorAll(".pt").forEach(function(g){
+var dx=g.dataset.x-p.x,dy=(g.dataset.y-p.y)*0.35,d=dx*dx+dy*dy;if(d<dist){dist=d;best=g}});
+document.querySelectorAll(".pt.on").forEach(function(g){g.classList.remove("on")});
+var f=document.activeElement;if(f&&f!==best&&f.blur)f.blur();
+if(best){best.classList.add("on");best.parentNode.appendChild(best)}})});"""
 
 
 def render(details: Details, base_url: str) -> str:
@@ -561,7 +636,8 @@ def render(details: Details, base_url: str) -> str:
         legend = f"<span>{_badge(shown[0].rarity)} {len(shown[0].sales)} vente(s)</span>"
     if shown:
         legend += ("<span>━ tendance (prix médian des 15 ventes autour) · zone claire : moitié centrale des "
-                   "ventes · ● vente · ○ écartée par le bot · ┄ prix retenu par le bot</span>")
+                   "ventes · ● vente · ○ écartée par le bot · ┄ prix retenu par le bot · touchez le graphique "
+                   "pour voir une vente · évolution calculée sur la tendance</span>")
     wiki = details.card.get("wikipedia_url") or \
         f"https://fr.wikipedia.org/wiki/{urllib.parse.quote(details.title.replace(' ', '_'))}"
     return (
@@ -578,7 +654,7 @@ def render(details: Details, base_url: str) -> str:
         f"{_auctions(details, base_url)}{_last_sales(groups)}"
         '<p class="muted">Prix retenu par le bot : ventes des 30 derniers jours (50 au plus), sans les ventes '
         "aberrantes ; si les dernières ventes changent nettement de niveau, c'est leur médiane.</p>"
-        "</main></body></html>")
+        f"</main><script>{SCRIPT}</script></body></html>")
 
 
 def caption(details: Details) -> str:
@@ -590,6 +666,10 @@ def caption(details: Details) -> str:
         clean = f", retenu {_money(group.clean.price)}" if group.clean else ""
         parts.append(f"{group.rarity or '?'} : {len(prices)} vente(s), moyenne {_money(statistics.fmean(prices))}, "
                      f"de {_money(min(prices))} à {_money(max(prices))}{clean}")
+        evolution = growth(group, details.at)
+        if evolution:
+            parts.append("   " + " · ".join(f"{'📈' if pct >= 0 else '📉'} {pct:+.0f} % {label}"
+                                            for label, pct in evolution))
     return f"📊 {details.title}\n" + ("\n".join(parts) or "Aucune vente détaillée.")
 
 

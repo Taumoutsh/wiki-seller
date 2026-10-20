@@ -39,12 +39,24 @@ def test_page_shows_chart_stats_and_last_sales():
     found = details.Details("D", "Victor Hugo", details.build_groups(sales, None, None, NOW),
                             [market_auction("a1", "Victor Hugo", 80)], "session Marché", NOW)
     page = details.render(found, "https://wikimasters.fr")
-    assert page.startswith("<!doctype html>") and "<svg" in page and "<script" not in page
+    assert page.startswith("<!doctype html>") and "<svg" in page and "src=" not in page  # rien d'externe
+    assert page.count('class="pt"') == 2 * 7 and "11/10 14:00 · 100" in page  # bulle (heure de Paris) de chaque vente (2 tailles)
     assert "<h1>Victor Hugo</h1>" in page and "Prix retenu par le bot" in page
     assert "https://wikimasters.fr/marketplace/a1" in page  # enchère en cours
     assert page.count("<tr class='out'>") == 1  # la vente à 5000, écartée
     assert "R : 5 vente(s), moyenne 1 082, de 95 à 5 000, retenu 102" in details.caption(found)
     assert details.filename(found) == "fiche-victor-hugo.html"
+
+
+def test_growth_is_measured_on_the_trend():
+    # Prix montant de 100 à 200 en 40 jours, une vente par jour, et une vente isolée à 1000 hier.
+    sales = [details.Sale(NOW - timedelta(days=40 - d), 100 + 2.5 * d, "R") for d in range(41)]
+    sales.insert(-1, details.Sale(NOW - timedelta(days=1, hours=1), 1000, "R"))
+    group = details.build_groups(sales, None, None, NOW)[0]
+    found = dict(details.growth(group, NOW))
+    assert list(found) == ["depuis le 10/09", "sur 30 j", "sur 15 j", "sur 7 j"]  # 24 h : trop peu de ventes
+    assert found["depuis le 10/09"] == pytest.approx(80, abs=8)  # ~110 → ~190, la vente isolée n'y change rien
+    assert 0 < found["sur 7 j"] < found["sur 15 j"] < found["sur 30 j"] < found["depuis le 10/09"]
 
 
 def test_command_arguments():
