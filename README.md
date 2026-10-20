@@ -213,12 +213,14 @@ fois) ; pendant une fin d'enchère, la défausse et le fil des prix laissent cet
 ### Achats
 
 `/buy Tour Eiffel 500` achète la carte à 500 au plus (sans prix : 90 % du prix du
-marché, recalculé à chaque passe) ; `x2` pour 2 exemplaires, l'un
-après l'autre ; `@Pseudo` pour n'acheter qu'aux enchères de ce vendeur (si rien ne
+marché, recalculé à chaque passe) ; `x2` pour 2 exemplaires, suivis **sur autant
+d'enchères à la fois** qu'il en reste à obtenir ; `@Pseudo` pour n'acheter qu'aux enchères de ce vendeur (si rien ne
 correspond, le journal liste les vendeurs vus). Pour chaque carte :
 
-- une enchère que vous menez déjà sur cette carte (« Mes enchères ») est reprise ;
-- sinon, le script choisit dans le Marché l'enchère la moins chère dont la mise minimale
+- vos enchères en cours sur cette carte (« Mes enchères ») sont reprises, celles que vous
+  menez d'abord ;
+- pour les exemplaires qui restent, le script choisit dans le Marché les enchères les
+  moins chères dont la mise minimale
   ne dépasse pas votre maximum, et **la garde sans miser** : à chaque passe, il vérifie
   qu'elle reste dans la limite (sinon il en cherche une autre) ;
 - il revient pour la dernière minute, relit l'enchère **chaque seconde** (mise actuelle,
@@ -232,13 +234,15 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
   nouvelle fin ; une mise refusée parce que l'enchère a monté entre-temps est refaite
   aussitôt au minimum indiqué par le site, tant qu'il reste dans la limite (solde
   insuffisant ou vérification demandée par le site : prévenu une fois) ;
-- plusieurs fins d'enchère proches sont surveillées **en même temps** (une par carte), par
+- plusieurs fins d'enchère proches sont surveillées **en même temps** (une par enchère), par
   le veilleur, à part des passes ; la surveillance **passe avant tout le reste** : pendant
   ce temps, les requêtes des passes et de la défausse du compte attendent, et le fil des
   prix s'arrête (une passe laisse aussi tranquille une carte dont la fin approche) ;
 - au-dessus de votre maximum, il abandonne cette enchère et en cherche une autre ;
-- **une seule enchère à la fois par carte** ; `budget` limite la somme des mises en
-  cours, vérifiée au moment de miser.
+- **une enchère par exemplaire restant** (`x3`, un déjà obtenu : deux enchères suivies),
+  jamais plus : même en gagnant tout, vous n'obtenez pas plus que demandé ; deux fins
+  simultanées de la même carte sont comptées l'une après l'autre (1/3, 2/3…) ; `budget`
+  limite la somme des mises en cours, vérifiée au moment de miser.
 
 Le site ne répond pas toujours pendant les enchères : une mise sans réponse (8 s, ou
 erreur du site) est vérifiée sur l'enchère ; passée malgré tout, elle n'est pas renvoyée,

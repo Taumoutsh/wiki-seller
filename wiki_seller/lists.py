@@ -301,16 +301,20 @@ def _forget_purchase(config, card_id: str) -> None:
     """Oublie le suivi d'achat d'une ligne (state/wanted_state.json) : sans cela, une
     carte déjà obtenue et redemandée serait considérée comme déjà achetée."""
     state = read_json(config.wanted_state_file, {})
-    if card_id in state.get("cards", {}):
-        del state["cards"][card_id]
+    keys = [k for k in state.get("cards", {}) if k.split("#", 1)[0] == card_id]  # la ligne et ses enchères
+    if keys:
+        for key in keys:
+            del state["cards"][key]
         write_json(config.wanted_state_file, state)
 
 
-def complete_purchase(config, card: BuyCard, bought: int) -> str:
+def complete_purchase(config, card: BuyCard, bought: int) -> str | None:
     """Achat terminé : la carte quitte les achats et devient protégée, ou part dans les
-    ventes (/buyandsell). Renvoie le message à envoyer."""
+    ventes (/buyandsell). Renvoie le message à envoyer ; None si la ligne n'était plus
+    dans les achats (achat déjà terminé par une autre fin d'enchère)."""
     with LISTS_LOCK:
-        remove_buy(config, card.name, card.rarity)
+        if not remove_buy(config, card.name, card.rarity):
+            return None
         if card.sell_price:
             set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None, card.rarity)
             duration = f" pour {card.sell_duration}" if card.sell_duration else ""

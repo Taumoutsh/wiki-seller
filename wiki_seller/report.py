@@ -11,7 +11,7 @@ import threading
 from datetime import datetime, timedelta
 from html import escape
 
-from .buying import auction_title, ended, rarity_matches
+from .buying import auction_title, ended, line_of, rarity_matches
 from .lists import AUTO, ListError, buy_cards
 from .selection import normalize_name
 from .site import min_bid
@@ -110,9 +110,11 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
                      and rarity_matches(auction, c, unknown_ok=True)), None)
         if card is None or ended(auction, now):
             continue
-        entry = tracked.get(card.id) or {}
+        line = tracked.get(card.id) or {}
+        entry = next((e for k, e in tracked.items() if line_of(k) == card.id and isinstance(e, dict)
+                      and e.get("auction_id") == auction.get("id")), line)  # l'enchère suivie, parmi celles de la ligne
         current, end = auction.get("current_bid"), parse_time(auction.get("end_at"))
-        max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
+        max_price = line.get("auto_max") if card.max_price == AUTO else card.max_price
         if my_id and auction.get("current_bidder_id") == my_id:
             icon, state = "✅", f"en tête à {money(current)}"
         elif not isinstance(current, int):
@@ -129,11 +131,11 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
         rows.append((end, _bid_row(icon, card, state, max_price, end, now)))
     mine_ids = {a.get("id") for a in mine.get("bidding") or [] if isinstance(a, dict)}
     for key, entry in tracked.items():  # gardées sans mise : la mise part juste avant la fin
-        card, end = cards.get(key), parse_time(entry.get("end_at"))
+        card, end = cards.get(line_of(key)), parse_time(entry.get("end_at"))
         if (card is None or entry.get("status") != "bidding" or not entry.get("auction_id")
                 or entry["auction_id"] in mine_ids or not end or end < now):
             continue
-        max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
+        max_price = (tracked.get(card.id) or {}).get("auto_max") if card.max_price == AUTO else card.max_price
         state = f"mise à {money(entry['watch_price'])}" if entry.get("watch_price") else "suivie"
         rows.append((end, _bid_row("👀", card, state, max_price, end, now)))
     rows.sort(key=lambda r: (r[0] is None, r[0] or now))

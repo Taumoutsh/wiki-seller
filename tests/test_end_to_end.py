@@ -1,6 +1,7 @@
 """Parcours complet contre le faux site local (tests/fake_site.py)."""
 
 import json
+import time
 
 import pytest
 
@@ -177,19 +178,53 @@ def test_watches_without_bidding_then_bids_at_the_end_or_moves_on(tmp_path):
     assert "gustave eiffel" not in json.loads(config.wanted_state_file.read_text())["cards"]
 
 
-def test_copies_buys_several_one_after_the_other(tmp_path):
+def test_copies_are_watched_on_several_auctions_at_once(tmp_path):
     wanted = [{"name": "Gustave Eiffel", "max_price": 300, "copies": 2}]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted)
-        run_once(config)
+        run_once(config)  # deux exemplaires voulus : les deux enchères les moins chères suivies à la fois
         assert tracked(config, "gustave eiffel")["auction_id"] == "e2"
+        assert tracked(config, "gustave eiffel#2")["auction_id"] == "e1"
         site.we_win("e2", 150)
-        run_once(config)  # 1/2 : on passe à une autre enchère
+        run_once(config)  # 1/2 : la deuxième enchère reste suivie, aucune autre n'est prise
         state = tracked(config, "gustave eiffel")
-        assert state["status"] == "bidding" and state["auction_id"] == "e1" and list(state["won"]) == ["e2"]
+        assert state["status"] == "searching" and list(state["won"]) == ["e2"]
+        assert tracked(config, "gustave eiffel#2")["auction_id"] == "e1"
         site.we_win("e1", 200)
         run_once(config)
     assert len(site.bids) == 2 and buy_cards(config) == [] and "gustave eiffel" in safe_names(config)
+    assert json.loads(config.wanted_state_file.read_text())["cards"] == {}  # la ligne et ses enchères oubliées
+
+
+def test_two_watched_ends_of_the_same_card_are_both_counted(tmp_path):
+    from datetime import timedelta
+
+    from wiki_seller.watcher import EndWatcher
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    (first, end), (second, _) = ending_auction(seconds=12), ending_auction(seconds=12)
+    second["id"] = "s2"
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[first, second]) as site, \
+            FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100, "copies": 2}],
+                             snipe_lead=timedelta(seconds=8), telegram_token=TOKEN, telegram_chat_id=CHAT_ID,
+                             telegram_api_url=tg.url)
+        watcher = EndWatcher(lambda: [config]).start()
+        try:
+            close_after(site, end)
+            close_after(site, end, "s2")
+            run_once(config)  # les deux fins surveillées à part, chacune dans son fil
+            deadline = time.monotonic() + 30
+            while buy_cards(config) and time.monotonic() < deadline:
+                time.sleep(0.5)
+        finally:
+            watcher.stop()
+    assert sorted(site.bids) == [("s1", 50), ("s2", 50)]
+    assert buy_cards(config) == [] and "victor hugo" in safe_names(config)
+    won = sorted(t for t in tg.sent if t.startswith("🛒 Obtenue"))
+    assert won == ["🛒 Obtenue : Victor Hugo pour 50 (1/2)", "🛒 Obtenue : Victor Hugo pour 50 (2/2)"]
+    assert sum("achat terminé" in t for t in tg.sent) == 1  # terminé une seule fois
 
 
 def test_old_won_state_is_kept(tmp_path):

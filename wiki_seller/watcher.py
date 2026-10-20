@@ -30,6 +30,9 @@ class EndWatcher:
         self.accounts, self.dry_run = accounts, dry_run
         self._active: dict[tuple[str, str], threading.Thread] = {}  # (compte, carte) → surveillance
         self._budgets: dict[str, object] = {}  # compte → budget partagé par ses surveillances
+        # (compte, ligne) → gains et verrou partagés par les fins d'enchère d'une même ligne
+        # (x2 : deux fins simultanées comptées l'une après l'autre, l'achat terminé une fois).
+        self._lines: dict[tuple[str, str], tuple[dict, threading.RLock]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -95,20 +98,21 @@ class EndWatcher:
             self._merge(config, key, state)
 
     def _watch_end(self, config: Config, key: str):
-        from .buying import AUTO, Budget, WantedState, _Buyer, buy_cards, fellow_accounts, my_user_id
+        from .buying import AUTO, Budget, WantedState, _Buyer, buy_cards, fellow_accounts, line_of, my_user_id
         from .session import session_store
         from .site import SessionExpired, SiteClient, SiteError, WikiMasters
 
         account = str(config.session_file)
         state = WantedState(config.wanted_state_file)  # écriture atomique : relu sans verrou
         entry = state.data["cards"].get(key)
-        card = next((c for c in buy_cards(config) if c.id == key), None)
+        card = next((c for c in buy_cards(config) if c.id == line_of(key)), None)
         if entry is None or card is None or entry.get("status") != "bidding":
             return None
-        if card.max_price == AUTO:
-            if not entry.get("auto_max"):
+        if card.max_price == AUTO:  # prix max auto : noté sur la ligne
+            auto_max = (state.data["cards"].get(card.id) or {}).get("auto_max")
+            if not auto_max:
                 return None
-            card = dataclasses.replace(card, max_price=entry["auto_max"])
+            card = dataclasses.replace(card, max_price=auto_max)
         dry_run = self.dry_run or config.simulation
         site = WikiMasters(SiteClient(config.base_url, session_store(config)), config)
         try:
@@ -124,6 +128,17 @@ class EndWatcher:
                 budget = self._budgets.setdefault(account, Budget())
             buyer = _Buyer(site, config, state, dry_run, lambda: datetime.now(timezone.utc) + offset, budget)
             _, buyer.rivals = fellow_accounts(config)
+            # Une autre fin d'enchère de la même ligne a pu être gagnée entre-temps : gains du
+            # fichier (relu sans verrou : écriture atomique) et des autres surveillances.
+            with self._lock:
+                shared, buyer.lock = self._lines.setdefault((account, card.id), ({}, threading.RLock()))
+
+            def reload_line(c) -> dict:
+                saved = WantedState(config.wanted_state_file).data["cards"].get(c.id) or {}
+                return {"won": {**(saved.get("won") or {}), **shared}}
+
+            buyer.reload_line = reload_line
+            buyer.publish_won = lambda c, won: shared.update(won)
             auction = site.read_auction(entry["auction_id"]) or {
                 "id": entry["auction_id"], "end_at": entry.get("end_at"), "status": "active"}
             buyer.watch_until_end(card, entry, auction)
@@ -136,16 +151,32 @@ class EndWatcher:
 
     @staticmethod
     def _merge(config: Config, key: str, state) -> None:
-        """Résultat de la surveillance reporté dans le suivi (relu : une passe a pu
-        l'enregistrer entre-temps), sans toucher aux autres cartes."""
-        from .buying import WantedState, wanted_lock
+        """Résultat de la surveillance reporté dans le suivi (relu : une passe, ou une autre
+        fin d'enchère de la même ligne, a pu l'enregistrer entre-temps), sans toucher aux
+        autres enchères. Gains et pertes de la ligne s'additionnent."""
+        from .buying import LOST_KEPT, WantedState, buy_cards, line_of, wanted_lock
 
+        line_key = line_of(key)
         with wanted_lock(config):
             fresh = WantedState(config.wanted_state_file)
-            if key in state.data["cards"]:
-                fresh.data["cards"][key] = state.data["cards"][key]
-            else:  # achat terminé : la carte a quitté les achats
-                fresh.data["cards"].pop(key, None)
+            cards, mine = fresh.data["cards"], state.data["cards"]
+            if line_key not in mine or line_key not in {c.id for c in buy_cards(config)}:
+                # achat terminé (par cette fin d'enchère ou une autre) : la ligne et ses enchères quittent le suivi
+                fresh.forget_line(line_key)
+            else:
+                before = cards.get(line_key) or {}
+                if key in mine:
+                    cards[key] = mine[key]
+                else:
+                    cards.pop(key, None)
+                line = cards.get(line_key)
+                if line is not None:  # gains et pertes : ceux déjà enregistrés et ceux de cette surveillance
+                    won = {**(before.get("won") or {}), **(mine[line_key].get("won") or {})}
+                    lost = list(dict.fromkeys([*(before.get("lost") or []), *(mine[line_key].get("lost") or [])]))
+                    if won:
+                        line["won"] = won
+                    if lost:
+                        line["lost"] = lost[-LOST_KEPT:]
             fresh.my_id = fresh.my_id or state.my_id
             fresh.save()
 

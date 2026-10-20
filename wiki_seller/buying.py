@@ -1,7 +1,12 @@
 """Achat des cartes de state/buy_cards.json (/buy, /buyandsell) : on mise sur une
 enchère dans la limite de prix, on surenchérit si quelqu'un passe devant, et on revient
-SNIPE_LEAD avant la fin. Le suivi (enchère choisie, heure de fin, exemplaires obtenus)
+SNIPE_LEAD avant la fin. Le suivi (enchères choisies, heure de fin, exemplaires obtenus)
 est enregistré dans state/wanted_state.json.
+
+Une carte voulue en plusieurs exemplaires (x3) est suivie sur autant d'enchères à la fois
+qu'il reste d'exemplaires à obtenir : la ligne (clé card.id) porte les exemplaires
+obtenus, les enchères perdues et sa première enchère ; les autres ont leur propre entrée
+(« card.id#2 », « card.id#3 »…).
 
 Une fois tous les exemplaires obtenus, la carte quitte la liste d'achat et devient
 protégée, ou part dans les ventes au prix demandé (/buyandsell)."""
@@ -184,6 +189,20 @@ def release_claims(config: Config) -> None:
             del _CLAIMS[auction_id]
 
 
+SLOT = "#"  # « tour eiffel|L#2 » : deuxième enchère suivie de la ligne « tour eiffel|L »
+SLOT_FIELDS = ("auction_id", "end_at", "status", "my_bid", "placed", "watch_price")
+
+
+def line_of(key: str) -> str:
+    """Ligne d'achat (card.id) d'une entrée du suivi."""
+    return key.split(SLOT, 1)[0]
+
+
+def _slot_number(key: str) -> int:
+    _, sep, number = key.partition(SLOT)
+    return int(number) if sep and number.isdigit() else 1
+
+
 class WantedState:
     def __init__(self, path: Path):
         self.path = path
@@ -201,6 +220,32 @@ class WantedState:
 
     def card(self, card: BuyCard) -> dict:
         return self.data["cards"].setdefault(card.id, {"name": card.name})
+
+    def slots(self, card: BuyCard) -> list[tuple[str, dict]]:
+        """Enchères suivies de la ligne : (clé, entrée), la ligne elle-même d'abord."""
+        found = [(k, e) for k, e in self.data["cards"].items() if line_of(k) == card.id and isinstance(e, dict)]
+        return sorted(found, key=lambda item: _slot_number(item[0]))
+
+    def free_slot(self, card: BuyCard, busy: set[str] = frozenset()) -> tuple[str, dict]:
+        """Une entrée sans enchère de la ligne (hors `busy`), créée s'il le faut."""
+        for key, entry in self.slots(card):
+            if key not in busy and not entry.get("auction_id"):
+                return key, entry
+        number = 2
+        while f"{card.id}{SLOT}{number}" in self.data["cards"]:
+            number += 1
+        key = f"{card.id}{SLOT}{number}"
+        self.data["cards"][key] = {"name": card.name, "status": "searching"}
+        return key, self.data["cards"][key]
+
+    def drop_empty_slots(self, card: BuyCard) -> None:
+        for key, entry in self.slots(card):
+            if key != card.id and not entry.get("auction_id"):
+                del self.data["cards"][key]
+
+    def forget_line(self, card_id: str) -> None:
+        for key in [k for k in self.data["cards"] if line_of(k) == card_id]:
+            del self.data["cards"][key]
 
     def save(self) -> None:
         write_json(self.path, self.data)
@@ -255,7 +300,8 @@ def _run_bids(site, config: Config, dry_run: bool, snipe_only: bool) -> None:
         if card.id != card.key and card.id not in state.data["cards"] and card.key in state.data["cards"] \
                 and not any(c.id == card.key for c in wanted):
             state.data["cards"][card.id] = state.data["cards"].pop(card.key)
-    dropped = set(state.data["cards"]) - {c.id for c in wanted}  # /unbuy : suivi oublié
+    ids = {c.id for c in wanted}
+    dropped = [k for k in state.data["cards"] if line_of(k) not in ids]  # /unbuy : suivi oublié
     if dropped and not dry_run:
         for key in dropped:
             del state.data["cards"][key]
@@ -271,123 +317,99 @@ def _run_bids(site, config: Config, dry_run: bool, snipe_only: bool) -> None:
     buyer.budget_used = sum(int(a.get("current_bid") or 0) for a in bidding
                             if state.my_id and a.get("current_bidder_id") == state.my_id
                             and a.get("status") == "active")
-    my_sales = {a.get("id") for a in mine.get("selling") or [] if isinstance(a, dict)}
-    taken, rivals = fellow_accounts(config)
-    buyer.rivals = rivals
-
-    bidding_ids = {a.get("id") for a in bidding}
+    pass_info = SimpleNamespace(mine=mine, bidding=bidding, bidding_ids={a.get("id") for a in bidding},
+                                my_sales={a.get("id") for a in mine.get("selling") or [] if isinstance(a, dict)})
+    pass_info.taken, buyer.rivals = fellow_accounts(config)
     try:
         for card in wanted:
-            entry = state.card(card)
-            entry.setdefault("since", buyer.now().isoformat())
-            if WATCH_APART.is_set() and not snipe_only and in_watch_window(entry, config.snipe_lead, buyer.now()):
-                log.info("Achat : « %s » — fin d'enchère proche, surveillée à part.", card.name)
-                continue
-            if buyer.count_wins(card, entry, won_since(mine, card, parse_time(entry["since"]))):
-                buyer.complete(card)
-                continue
-            card = buyer.resolve_max(card, entry, snipe_only)  # prix max « auto »
-            if card is None:
-                continue
-            # Une seule enchère à la fois : si vous menez déjà une enchère de cette carte
-            # dans « Mes enchères », c'est elle qu'on suit, et on ne mise nulle part ailleurs.
-            # Le site laisse un moment les enchères finies dans « Mes enchères » : celles déjà
-            # gagnées, perdues ou terminées ne sont pas reprises.
-            done = set(entry.get("won") or {}) | set(entry.get("lost") or [])
-            mine_for_card = [a for a in bidding if normalize_name(auction_title(a)) == card.key
-                             and a.get("status", "active") == "active" and a.get("id") not in done
-                             and rarity_matches(a, card, unknown_ok=True) and not ended(a, buyer.now())]
-            leading_here = [a for a in mine_for_card if buyer.leading(a)]
-            auction_id = entry.get("auction_id")
-            if leading_here and auction_id not in {a["id"] for a in leading_here}:
-                if auction_id:
-                    log.info("Achat : « %s » — vous menez déjà une autre enchère de cette carte ; "
-                             "elle seule est suivie.", card.name)
-                auction_id = leading_here[0]["id"]
-            elif not auction_id and mine_for_card:  # enchère misée à la main ?
-                auction_id = mine_for_card[0]["id"]
-            try:
-                auction = site.fetch_auction(auction_id) if auction_id else None
-            except SiteError as exc:  # le site ne répond pas pour cette enchère
-                if not snipe_only:
-                    log.warning("Achat : « %s » — enchère illisible (%s) ; nouvel essai plus tard.", card.name, exc)
-                    continue
-                # Fin d'enchère : on la surveille quand même, elle sera relue chaque seconde.
-                auction = {"id": auction_id, "end_at": entry.get("end_at"), "status": "active"}
-
-            if auction and auction.get("status") != "active":
-                if state.my_id and auction.get("winner_id") == state.my_id:
-                    if buyer.count_wins(card, entry, [auction]):
-                        buyer.complete(card)
-                        continue
-                else:
-                    log.info("Achat : enchère perdue pour « %s » ; recherche d'une autre.", card.name)
-                    if state.my_id and auction.get("winner_id"):
-                        buyer.lost(card, entry, auction, force=True)
-                auction = None
-            abandoned: set[str] = set()
-            if auction is not None and not buyer.leading(auction) and (
-                    auction["id"] in taken or auction.get("current_bidder_id") in rivals):
-                log.info("Achat : « %s » — enchère suivie ou menée par un autre compte du bot ; elle lui est "
-                         "laissée.", card.name)
-                abandoned.add(auction["id"])
-                auction = None
-            if auction is None:
-                _forget(entry)
-            elif not snipe_only:
-                claim(config, auction["id"])
-
-            if snipe_only:
-                if auction is not None:
-                    buyer.watch_later(card, entry, auction)
-                continue
-
-            outbid = auction is not None and (auction["id"] in bidding_ids or entry.get("placed") == auction["id"])
-            if auction is not None and not buyer.leading(auction) \
-                    and (outbid or entry.get("auction_id") == auction["id"]):
-                # Enchère déjà suivie (dépassé, ou pas encore misé) : pas de mise maintenant,
-                # seulement à la fin (réveil SNIPE_LEAD avant), tant que la limite le permet.
-                minimum = min_next_bid(auction)
-                if minimum <= card.max_price:
-                    buyer.track(card, entry, auction, outbid)
-                    continue
-                log.info("Achat : « %s » dépasse la limite (%d > %d) ; abandon de cette enchère.",
-                         card.name, minimum, card.max_price)
-                buyer.lost(card, entry, auction, force=outbid)  # perdue seulement si vous y aviez misé
-                abandoned.add(auction["id"])
-                _forget(entry)
-                auction = None
-
-            if auction is None:
-                found = site.search_auctions(card.name)
-                own = {e.get("auction_id") for k, e in state.data["cards"].items() if k != card.id}  # autres lignes
-                auction = choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned | taken | own, rivals)
-                if auction is not None and not claim(config, auction["id"]):
-                    auction = None  # choisie au même instant par un autre compte
-                if auction is None:
-                    log.info("Achat : aucune enchère de « %s »%s à %d ou moins%s.", card.name,
-                             f" {card.rarity}" if card.rarity else "", card.max_price,
-                             f" chez @{card.seller}" if card.seller else "")
-                    same_card = [a for a in found if normalize_name(auction_title(a)) == card.key]
-                    if card.seller and same_card:  # pour vérifier comment le site nomme les vendeurs
-                        log.info("Achat : « %s » — vendeurs des enchères en cours : %s", card.name,
-                                 ", ".join(sorted(set().union(*(seller_names(a) for a in same_card))))[:300])
-                    if card.rarity and same_card:
-                        log.info("Achat : « %s » — raretés des enchères en cours : %s", card.name,
-                                 ", ".join(sorted({entry_rarity(a) or "inconnue" for a in same_card})))
-                    if choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned) is not None:
-                        buyer.blocked_by_fellow(card, entry)
-                    continue
-            entry.pop("blocked_notified", None)
-            if buyer.leading(auction):  # misée à la main, ou déjà menée
-                entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
-                buyer.bid_if_needed(card, entry, auction)
-            else:  # gardée et surveillée : la mise part juste avant la fin
-                buyer.track(card, entry, auction, outbid=False)
+            _buy_line(buyer, card, pass_info, snipe_only)
         buyer.run_watches()  # fins d'enchère proches, toutes en même temps
     finally:
         state.save()
         release_claims(config)
+
+
+def _buy_line(buyer: "_Buyer", card: BuyCard, info: SimpleNamespace, snipe_only: bool) -> None:
+    """Une ligne d'achat : autant d'enchères suivies à la fois qu'il reste d'exemplaires à
+    obtenir. Vos propres enchères sur la carte (misées à la main) sont reprises d'abord,
+    celles que vous menez en priorité ; puis les moins chères du Marché dans la limite."""
+    state, site, config = buyer.state, buyer.site, buyer.config
+    line = state.card(card)
+    line.setdefault("since", buyer.now().isoformat())
+    now = buyer.now()
+    near = {k for k, e in state.slots(card)
+            if WATCH_APART.is_set() and not snipe_only and in_watch_window(e, config.snipe_lead, now)}
+    if near:  # ces fins d'enchère comptent elles-mêmes leurs gains (veilleur)
+        log.info("Achat : « %s » — %d fin(s) d'enchère proche(s), surveillée(s) à part.", card.name, len(near))
+    elif buyer.count_wins(card, line, won_since(info.mine, card, parse_time(line["since"]))):
+        buyer.complete(card)
+        return
+    card = buyer.resolve_max(card, line, snipe_only)  # prix max « auto »
+    if card is None:
+        return
+    remaining = card.copies - len(line.get("won") or {})
+
+    def active() -> list[tuple[str, dict]]:
+        return [(k, e) for k, e in state.slots(card) if e.get("status") == "bidding" and e.get("auction_id")]
+
+    # Le site laisse un moment les enchères finies dans « Mes enchères » : celles déjà
+    # gagnées, perdues ou terminées ne sont pas reprises.
+    done = set(line.get("won") or {}) | set(line.get("lost") or [])
+    mine_for_card = [a for a in info.bidding if normalize_name(auction_title(a)) == card.key
+                     and a.get("status", "active") == "active" and a.get("id") not in done
+                     and rarity_matches(a, card, unknown_ok=True) and not ended(a, now)]
+    leading_ids = {a["id"] for a in mine_for_card if buyer.leading(a)}
+    tracked = {e.get("auction_id") for _, e in state.slots(card)}
+    for auction in sorted((a for a in mine_for_card if a["id"] not in tracked), key=lambda a: a["id"] not in leading_ids):
+        target = None
+        if len(active()) < remaining:
+            target = state.free_slot(card, near)
+        elif auction["id"] in leading_ids:  # à la place d'une enchère suivie que vous ne menez pas
+            target = next(((k, e) for k, e in reversed(active())
+                           if k not in near and e["auction_id"] not in leading_ids), None)
+            if target is not None:
+                log.info("Achat : « %s » — vous menez déjà une autre enchère de cette carte ; elle est suivie "
+                         "à la place.", card.name)
+        if target is not None:
+            target[1].update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
+
+    abandoned: set[str] = set()
+    for key, slot in state.slots(card):
+        if key in near or not slot.get("auction_id"):
+            continue
+        if buyer.follow(card, line, slot, info, abandoned, snipe_only) == "complete":
+            return
+
+    extra = len(active()) - remaining  # exemplaires voulus réduits depuis : enchères en trop laissées
+    for key, slot in reversed(active()):
+        if extra <= 0:
+            break
+        if key not in near and slot["auction_id"] not in leading_ids:
+            log.info("Achat : « %s » — enchère en trop pour les exemplaires voulus ; elle est laissée.", card.name)
+            _forget(slot)
+            extra -= 1
+
+    if not snipe_only and len(active()) < remaining:
+        found = site.search_auctions(card.name)
+        picked: set[str] = set()
+        while len(active()) < remaining:
+            own = {e.get("auction_id") for e in state.data["cards"].values() if e.get("auction_id")}
+            auction = choose_auction(found, card, state.my_id, now, info.my_sales,
+                                     abandoned | info.taken | own | picked, buyer.rivals)
+            if auction is None:
+                buyer.none_found(card, line, found, abandoned, len(active()), remaining, info.my_sales)
+                break
+            picked.add(auction["id"])
+            if not claim(config, auction["id"]):
+                continue  # choisie au même instant par un autre compte
+            line.pop("blocked_notified", None)
+            _, slot = state.free_slot(card, near)
+            if buyer.leading(auction):  # misée à la main, ou déjà menée
+                slot.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
+                buyer.bid_if_needed(card, slot, auction)
+            else:  # gardée et surveillée : la mise part juste avant la fin
+                buyer.track(card, slot, auction, outbid=False)
+    state.drop_empty_slots(card)
 
 
 def card_ref(auction: dict) -> dict | None:
@@ -425,6 +447,9 @@ class _Buyer:
         self.budget = budget or Budget()  # partagé par les fins d'enchère surveillées en même temps
         self.rivals: set[str] = set()  # identifiants des autres comptes du bot
         self.watches: list[tuple[BuyCard, dict, dict]] = []  # fins d'enchère à surveiller
+        self.lock = threading.RLock()  # plusieurs fins d'enchère d'une même ligne : gains comptés un à un
+        self.reload_line = None  # veilleur : gains de la ligne vus par les autres fins d'enchère
+        self.publish_won = None  # veilleur : gains de la ligne partagés avec les autres fins d'enchère
 
     @property
     def budget_used(self) -> int:
@@ -463,11 +488,87 @@ class _Buyer:
         if errors:
             raise errors[0]
 
+    def follow(self, card: BuyCard, line: dict, slot: dict, info, abandoned: set[str], snipe_only: bool) -> str:
+        """Une enchère suivie de la ligne, relue : gagnée, perdue, laissée à un autre compte du
+        bot, dépassant la limite (abandonnée) ou gardée jusqu'à la fin. « complete » si
+        l'achat est terminé."""
+        auction_id = slot["auction_id"]
+        try:
+            auction = self.site.fetch_auction(auction_id)
+        except SiteError as exc:  # le site ne répond pas pour cette enchère
+            if not snipe_only:
+                log.warning("Achat : « %s » — enchère illisible (%s) ; nouvel essai plus tard.", card.name, exc)
+                return ""
+            # Fin d'enchère : on la surveille quand même, elle sera relue chaque seconde.
+            auction = {"id": auction_id, "end_at": slot.get("end_at"), "status": "active"}
+        if auction and auction.get("status") != "active":
+            if self.state.my_id and auction.get("winner_id") == self.state.my_id:
+                if self.count_wins(card, line, [auction]):
+                    self.complete(card)
+                    return "complete"
+                return ""
+            log.info("Achat : enchère perdue pour « %s » ; recherche d'une autre.", card.name)
+            if self.state.my_id and auction.get("winner_id"):
+                self.lost(card, slot, auction, force=True)
+            auction = None
+        if auction is not None and not self.leading(auction) and (
+                auction["id"] in info.taken or auction.get("current_bidder_id") in self.rivals):
+            log.info("Achat : « %s » — enchère suivie ou menée par un autre compte du bot ; elle lui est "
+                     "laissée.", card.name)
+            abandoned.add(auction["id"])
+            auction = None
+        if auction is None:
+            _forget(slot)
+            return ""
+        if snipe_only:
+            self.watch_later(card, slot, auction)
+            return ""
+        claim(self.config, auction["id"])
+        if self.leading(auction):  # misée à la main, ou déjà menée
+            slot.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
+            self.bid_if_needed(card, slot, auction)
+            return ""
+        # Enchère déjà suivie (dépassé, ou pas encore misé) : pas de mise maintenant,
+        # seulement à la fin (réveil SNIPE_LEAD avant), tant que la limite le permet.
+        outbid = auction["id"] in info.bidding_ids or slot.get("placed") == auction["id"]
+        minimum = min_next_bid(auction)
+        if minimum <= card.max_price:
+            self.track(card, slot, auction, outbid)
+            return ""
+        log.info("Achat : « %s » dépasse la limite (%d > %d) ; abandon de cette enchère.",
+                 card.name, minimum, card.max_price)
+        self.lost(card, slot, auction, force=outbid)  # perdue seulement si vous y aviez misé
+        abandoned.add(auction["id"])
+        _forget(slot)
+        return ""
+
+    def none_found(self, card: BuyCard, line: dict, found: list[dict], abandoned: set[str], active: int,
+                   remaining: int, my_sales: set[str]) -> None:
+        """Pas (ou plus) d'enchère à prendre pour cette ligne : journal, et autre compte du
+        bot prévenu s'il tient les seules possibles."""
+        more = f" ({active} suivie(s) sur {remaining} voulue(s))" if remaining > 1 else ""
+        log.info("Achat : aucune %senchère de « %s »%s à %d ou moins%s%s.", "autre " if active else "", card.name,
+                 f" {card.rarity}" if card.rarity else "", card.max_price,
+                 f" chez @{card.seller}" if card.seller else "", more)
+        if active:
+            return
+        same_card = [a for a in found if normalize_name(auction_title(a)) == card.key]
+        if card.seller and same_card:  # pour vérifier comment le site nomme les vendeurs
+            log.info("Achat : « %s » — vendeurs des enchères en cours : %s", card.name,
+                     ", ".join(sorted(set().union(*(seller_names(a) for a in same_card))))[:300])
+        if card.rarity and same_card:
+            log.info("Achat : « %s » — raretés des enchères en cours : %s", card.name,
+                     ", ".join(sorted({entry_rarity(a) or "inconnue" for a in same_card})))
+        if choose_auction(found, card, self.state.my_id, self.now(), my_sales, abandoned) is not None:
+            self.blocked_by_fellow(card, line)
+
     def count_wins(self, card: BuyCard, entry: dict, wins: list[dict]) -> bool:
-        """Note les enchères gagnées ; True si le nombre d'exemplaires voulu est atteint."""
+        """Note les enchères gagnées (entry : la ligne) ; True si le nombre d'exemplaires
+        voulu est atteint."""
         if entry.get("status") == "won" and "won" not in entry:  # ancien format : déjà obtenue
             entry["won"] = {entry.get("auction_id") or "avant": entry.get("price")}
-        won = dict(entry.get("won") or {})
+        saved = self.reload_line(card) if self.reload_line else None  # gains d'une autre fin d'enchère
+        won = {**((saved or {}).get("won") or {}), **(entry.get("won") or {})}
         for auction in wins:
             if auction.get("id") and auction["id"] not in won:
                 price = auction.get("final_price") or auction.get("current_bid")
@@ -477,6 +578,8 @@ class _Buyer:
                     resale = f" · revente à {price_text(card.sell_price, AUTO_SELL_RATIO)}" if card.sell_price else ""
                     notify(self.config, f"🛒 Obtenue : {card.name} pour {price} ({len(won)}/{card.copies}){resale}")
         entry["won"] = won
+        if self.publish_won:
+            self.publish_won(card, won)
         if len(won) >= card.copies:
             if entry.get("status") != "won":
                 entry.update(status="won")
@@ -485,8 +588,9 @@ class _Buyer:
             return True
         if entry.get("status") == "won":  # « copies » augmenté depuis
             _forget(entry)
-        if entry.get("auction_id") in won:
-            _forget(entry)
+        for _, slot in self.state.slots(card):  # enchères gagnées : plus à suivre
+            if slot.get("auction_id") in won:
+                _forget(slot)
         return False
 
     def complete(self, card: BuyCard) -> None:
@@ -499,7 +603,9 @@ class _Buyer:
             return
         message = complete_purchase(self.config, card, bought)
         collection.forget(self.config)  # carte obtenue : collection relue à la passe suivante
-        del self.state.data["cards"][card.id]  # redemandée plus tard, elle repartira de zéro
+        self.state.forget_line(card.id)  # redemandée plus tard, elle repartira de zéro
+        if message is None:  # déjà terminé par une autre fin d'enchère de la ligne
+            return
         log.info("Achat : %s", message)
         notify(self.config, message)
 
@@ -559,10 +665,11 @@ class _Buyer:
         if not force and entry.get("placed") != auction.get("id"):
             return
         entry.pop("placed", None)
-        lost = list(entry.get("lost") or [])
+        line = self.state.data["cards"].get(card.id, entry)  # pertes notées sur la ligne
+        lost = list(line.get("lost") or [])
         if auction.get("id") in lost:  # déjà annoncée
             return
-        entry["lost"] = [*lost, auction.get("id")][-LOST_KEPT:]
+        line["lost"] = [*lost, auction.get("id")][-LOST_KEPT:]
         if auction.get("winner_id"):
             price = auction.get("final_price") or auction.get("current_bid")
             why = f"remportée à {price} par un autre"
@@ -587,8 +694,10 @@ class _Buyer:
                 return
             if status != "active" and winner and self.state.my_id:
                 if winner == self.state.my_id:
-                    if self.count_wins(card, entry, [auction]):
-                        self.complete(card)
+                    with self.lock:  # deux fins d'enchère de la ligne en même temps : comptées l'une après l'autre
+                        line = self.state.data["cards"].get(card.id)
+                        if line is not None and self.count_wins(card, line, [auction]):
+                            self.complete(card)
                 else:
                     log.info("Achat : enchère perdue pour « %s » ; recherche d'une autre.", card.name)
                     self.lost(card, entry, auction, force=True)
@@ -754,7 +863,7 @@ class _Buyer:
             if self.site.post_bid(auction["id"], amount, self.deadline(auction), self.state.my_id, refusal):
                 entry["placed"] = auction["id"]
                 entry["my_bid"] = {"auction": auction["id"], "amount": amount}
-                entry.pop("bid_blocked_notified", None)
+                self.state.data["cards"].get(card.id, entry).pop("bid_blocked_notified", None)
                 log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
                          (parse_time(auction.get("end_at")) - self.now()).total_seconds())
                 return True
@@ -769,8 +878,9 @@ class _Buyer:
                 why = ("solde insuffisant" if code == "insufficient_balance"
                        else "le site demande une vérification (captcha) à faire sur le site")
                 log.warning("Achat : mise de %d sur « %s » impossible : %s.", amount, card.name, why)
-                if not entry.get("bid_blocked_notified"):
-                    entry["bid_blocked_notified"] = True
+                line = self.state.data["cards"].get(card.id, entry)  # prévenu une fois pour la ligne
+                if not line.get("bid_blocked_notified"):
+                    line["bid_blocked_notified"] = True
                     notify(self.config, f"⚠️ Mise de {amount} sur « {card.name} » impossible : {why}.")
                 _forget(entry)
                 return False
