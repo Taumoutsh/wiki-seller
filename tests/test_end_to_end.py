@@ -842,6 +842,34 @@ def test_extended_auction_is_bid_on_again_until_the_real_end(tmp_path):
     assert buy_cards(config) == []
 
 
+def test_silent_site_after_the_end_is_not_read_again_and_again(tmp_path, monkeypatch, caplog):
+    import threading
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller import buying
+
+    monkeypatch.setattr(buying, "SILENT_WAIT", timedelta(seconds=4))
+    monkeypatch.setattr(buying, "SILENT_POLL", 2)
+    auction, end = ending_auction()
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+
+        def go_silent():  # le site ne répond plus juste après la mise
+            while not site.bids:
+                time.sleep(0.05)
+            site.auction_read_failures = 1000
+
+        threading.Thread(target=go_silent, daemon=True).start()
+        with caplog.at_level("INFO"):
+            run_once(config)
+        reads_after_end = 1000 - site.auction_read_failures
+    assert site.bids == [("s1", 50)]
+    assert datetime.now(timezone.utc) - end < timedelta(seconds=12)  # laissée à la passe suivante
+    assert reads_after_end <= 10  # chaque seconde avant la fin, puis toutes les 2 s (SILENT_POLL) après
+    assert caplog.text.count("pas de réponse du site") <= 1  # au plus une ligne, puis un résumé
+    assert "le site ne répond plus depuis la fin de l'enchère" in caplog.text
+
+
 def test_watched_auction_result_is_announced_right_away(tmp_path):
     import threading
     import time

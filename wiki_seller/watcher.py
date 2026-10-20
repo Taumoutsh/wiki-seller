@@ -33,6 +33,9 @@ class EndWatcher:
         # (compte, ligne) → gains et verrou partagés par les fins d'enchère d'une même ligne
         # (x2 : deux fins simultanées comptées l'une après l'autre, l'achat terminé une fois).
         self._lines: dict[tuple[str, str], tuple[dict, threading.RLock]] = {}
+        # (compte, enchère suivie) → heure de fin déjà surveillée jusqu'au bout : pas relancée
+        # (site muet après la fin : la passe suivante lira le résultat), sauf fin repoussée.
+        self._finished: dict[tuple[str, str], tuple[str | None, str | None]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -84,16 +87,29 @@ class EndWatcher:
                     running = self._active.get((str(config.session_file), key))
                     if running is not None and running.is_alive():
                         continue
+                    if self._finished.get((str(config.session_file), key)) == (entry.get("auction_id"),
+                                                                                entry.get("end_at")):
+                        continue
                     thread = threading.Thread(target=self._watch, args=(config, key), daemon=True,
                                               name=f"fin-{config.account_name or 'compte'}")
                     self._active[(str(config.session_file), key)] = thread
                 thread.start()
 
     def _watch(self, config: Config, key: str) -> None:
+        from .buying import WantedState
         from .session import gate
+        from .state import now_utc, parse_time
 
+        start = WantedState(config.wanted_state_file).data["cards"].get(key) or {}
+        auction_id, end_at = start.get("auction_id"), start.get("end_at")
         with gate(config).watching():  # les passes et la défausse du compte attendent
             state = self._watch_end(config, key)
+        if state is not None:  # fin repoussée pendant la surveillance : c'est la dernière vue qui compte
+            end_at = (state.data["cards"].get(key) or {}).get("end_at") or end_at
+        end = parse_time(end_at)
+        if end is not None and now_utc() >= end:
+            with self._lock:
+                self._finished[(str(config.session_file), key)] = (auction_id, end_at)
         if state is not None:  # verrou du suivi pris hors surveillance : une passe qui le tient attend celle-ci
             self._merge(config, key, state)
 

@@ -247,7 +247,10 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
 Le site ne répond pas toujours pendant les enchères : une mise sans réponse (8 s, ou
 erreur du site) est vérifiée sur l'enchère ; passée malgré tout, elle n'est pas renvoyée,
 sinon elle repart chaque seconde jusqu'à la fin de l'enchère (2 min au plus pendant une
-passe). Une lecture sans réponse est refaite la seconde suivante.
+passe). Une lecture sans réponse est refaite la seconde suivante jusqu'à la fin ; après la
+fin, la mise est jouée : l'enchère n'est plus relue que toutes les 15 s, pendant une
+minute au plus, puis la passe suivante lit le résultat (le journal résume les lectures
+sans réponse au lieu d'une ligne chacune).
 
 Le bot annonce chaque enchère gagnée dès que le site désigne le gagnant, avec le compte
 d'exemplaires : « 🛒 Obtenue : Tour Eiffel pour 480 (1/2) », suivi de « · revente à 800 »

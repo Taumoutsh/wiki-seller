@@ -541,13 +541,15 @@ class WikiMasters:
         auction = data.get("auction") if isinstance(data, dict) else None
         return auction if isinstance(auction, dict) else None
 
-    def read_auction(self, auction_id: str) -> dict | None:
+    def read_auction(self, auction_id: str, quiet: bool = False) -> dict | None:
         """Lecture rapide d'une enchère, en un seul essai (surveillance de fin d'enchère) :
-        None si le site ne répond pas à temps ou se trompe."""
+        None si le site ne répond pas à temps ou se trompe. quiet : sans ligne au journal
+        (l'appelant résume les lectures sans réponse)."""
         try:
             status, data = self.api_get(f"/api/marketplace/{auction_id}", timeout=QUICK_TIMEOUT)
         except Exception as exc:
-            log.info("Enchère %s : pas de réponse du site (%s).", auction_id, str(exc).splitlines()[0][:100])
+            (log.debug if quiet else log.info)("Enchère %s : pas de réponse du site (%s).", auction_id,
+                                               str(exc).splitlines()[0][:100])
             return None
         if status in (401, 403):
             raise SessionExpired(f"/api/marketplace/{auction_id} → HTTP {status}")

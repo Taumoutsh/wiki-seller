@@ -49,6 +49,11 @@ BID_RETRY_LIMIT = timedelta(minutes=2)
 # l'enchère est relue toutes les OUTCOME_POLL s, au plus OUTCOME_WAIT.
 OUTCOME_WAIT = timedelta(minutes=3)
 OUTCOME_POLL = 3
+# Après la fin, la mise est jouée : si le site ne répond plus, l'enchère n'est relue que
+# toutes les SILENT_POLL s, au plus SILENT_WAIT après la fin ; la passe suivante lira le
+# résultat (plus de requêtes ne ferait qu'encombrer un site déjà en peine).
+SILENT_POLL = 15
+SILENT_WAIT = timedelta(minutes=1)
 # Une mise des 10 dernières secondes prolonge l'enchère de 60 s : tant que le site la dit
 # active, elle reste surveillée, même après l'heure de fin (prolongation vue en retard).
 BID_GRACE = timedelta(seconds=3)  # mise encore tentée jusqu'à ce délai après la fin lue
@@ -685,6 +690,7 @@ class _Buyer:
         """Fin de l'enchère surveillée : gagnée ou perdue, annoncée tout de suite. Si le
         gagnant n'est pas encore connu au bout d'OUTCOME_WAIT, la passe suivante s'en charge."""
         deadline = time.monotonic() + OUTCOME_WAIT.total_seconds()
+        silent_since = 0.0  # le site ne répond plus depuis (time.monotonic())
         while True:
             status = str(auction.get("status") or "active").lower()
             winner = auction.get("winner_id")
@@ -703,11 +709,16 @@ class _Buyer:
                     self.lost(card, entry, auction, force=True)
                     _forget(entry)
                 return
-            if time.monotonic() + OUTCOME_POLL > deadline:
+            if time.monotonic() + OUTCOME_POLL > deadline or (silent_since and time.monotonic() - silent_since
+                                                              > SILENT_WAIT.total_seconds()):
                 log.info("Achat : résultat de « %s » pas encore connu ; vu à la prochaine passe.", card.name)
                 return
-            time.sleep(OUTCOME_POLL)
-            auction = self.site.read_auction(auction["id"]) or auction
+            time.sleep(SILENT_POLL if silent_since else OUTCOME_POLL)
+            fresh = self.site.read_auction(auction["id"], quiet=True)
+            if fresh is None:  # le site ne répond pas : relue plus rarement, puis laissée à la passe suivante
+                silent_since = silent_since or time.monotonic()
+                continue
+            auction, silent_since = fresh, 0.0
 
     def deadline(self, auction: dict) -> float:
         """Jusqu'à quand renvoyer une mise sans réponse (time.monotonic()) : la fin de
@@ -788,7 +799,7 @@ class _Buyer:
         if not end or end - self.now() > start + SNIPE_STARTUP + timedelta(minutes=2):
             return  # pas encore l'heure : la boucle reviendra
         deadline = time.monotonic() + WATCH_GUARD.total_seconds()
-        announced = False
+        announced, silent = False, 0  # silent : lectures sans réponse d'affilée
         while time.monotonic() < deadline:
             wait = (end - start - self.now()).total_seconds()
             if wait > 0:
@@ -797,12 +808,19 @@ class _Buyer:
                 log.info("Achat : surveillance de « %s » jusqu'à la fin (%s), surenchère à %d s de la fin.",
                          card.name, auction.get("end_at"), lead.total_seconds())
                 announced = True
-            fresh = self.site.read_auction(auction["id"])
-            if fresh is None:  # le site ne répond pas : on relit dans une seconde
-                if end - self.now() < -OUTCOME_WAIT:
-                    return  # la passe suivante verra si elle est gagnée
-                time.sleep(WATCH_POLL)
+            fresh = self.site.read_auction(auction["id"], quiet=silent > 0)
+            if fresh is None:  # le site ne répond pas : relue dans une seconde avant la fin, plus rarement après
+                silent += 1
+                after_end = self.now() - end
+                if after_end > SILENT_WAIT:
+                    log.info("Achat : « %s » — le site ne répond plus depuis la fin de l'enchère (%d lecture(s) "
+                             "sans réponse) ; résultat vu à la prochaine passe.", card.name, silent)
+                    return
+                time.sleep(WATCH_POLL if after_end < timedelta(0) else SILENT_POLL)
                 continue
+            if silent > 1:
+                log.info("Achat : « %s » — le site répond de nouveau (%d lecture(s) sans réponse).", card.name, silent)
+            silent = 0
             auction = fresh
             if str(auction.get("status") or "active").lower() != "active":
                 self.settle(card, entry, auction)
