@@ -13,6 +13,7 @@ import logging
 import re
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ from .state import read_json, write_json
 
 log = logging.getLogger("wiki_seller")
 
+DETAILS_COMMANDS = ("/details", "/fiche")
 POLL_SECONDS = 50  # attente maximale d'une requête getUpdates (long polling)
 LISTEN_SECONDS = 20  # idem pour l'écoute des commandes : laisse vite la place à une demande de session
 _POLL_LOCK = threading.Lock()  # un seul lecteur des messages à la fois
@@ -72,6 +74,26 @@ class TelegramBot:
         if not data.get("ok"):
             raise RuntimeError(data.get("description") or f"{method} refusé")
         return data.get("result")
+
+    def send_document(self, name: str, content: bytes, caption: str = "") -> bool:
+        """Fichier envoyé dans la conversation (fiche /details) ; False s'il n'est pas parti."""
+        boundary = uuid.uuid4().hex
+        parts = [("chat_id", None, self.chat_id.encode()), ("caption", None, caption[:1024].encode()),
+                 ("document", name, content)]
+        body = b""
+        for field_name, file_name, value in parts:
+            disposition = f'form-data; name="{field_name}"' + (f'; filename="{file_name}"' if file_name else "")
+            kind = "Content-Type: text/html; charset=utf-8\r\n" if file_name else ""
+            body += (f"--{boundary}\r\nContent-Disposition: {disposition}\r\n{kind}\r\n").encode() + value + b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
+        request = urllib.request.Request(f"{self.api_url}/bot{self.token}/sendDocument", data=body,
+                                         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return bool(json.loads(response.read() or b"{}").get("ok"))
+        except Exception as exc:
+            log.warning("Telegram : fichier non envoyé (%s).", exc)
+            return False
 
     def for_chat(self, chat_id: str) -> "TelegramBot":
         """Le même bot, pour écrire dans une autre conversation."""
@@ -303,6 +325,11 @@ class CommandListener:
         elif command in SETTINGS_COMMANDS and self.config is not None:
             reply.send(run_settings_command(self.config, chat, command, args),
                        html=command in ("/settings", "/reglages"))
+        elif command in DETAILS_COMMANDS and account is not None:
+            reply.send("⏳ Fiche en préparation…")
+            from .details import send_details
+
+            threading.Thread(target=send_details, args=(account, args, reply), name="fiche", daemon=True).start()
         elif command in LIST_COMMANDS and account is not None:
             reply.send(run_list_command(account, command, args))
         else:

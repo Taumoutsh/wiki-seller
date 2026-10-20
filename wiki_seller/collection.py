@@ -47,6 +47,13 @@ def forget(config: Config) -> None:
         _READS.pop(_key(config), None)
 
 
+def cached_entries() -> list[dict]:
+    """Entrées des collections lues récemment, tous comptes confondus (fiche /details)."""
+    with _LOCK:
+        reads = list(_READS.values())
+    return [e for read in reads if time.monotonic() - read.at < COLLECTION_TTL.total_seconds() for e in read.entries]
+
+
 def fetch(site, config: Config, rarities: tuple[str, ...] = ()) -> tuple[list[dict], set[str]]:
     """Entrées de la collection (raretés demandées) et exemplaires en échange : la dernière
     lecture de moins de COLLECTION_TTL qui les couvre, sinon une nouvelle lecture."""

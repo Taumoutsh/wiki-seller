@@ -98,6 +98,7 @@ s'ils ne fonctionnent pas.
 | `/buy <carte> [prix max]` · `/unbuy <carte>` | Achète la carte à ce prix au plus (voir « Achats ») ; protégée une fois obtenue |
 | `/sell <carte> [prix]` · `/unsell <carte>` | Vend la carte à ce prix exact, en priorité, jusqu'à la vente (voir « Ventes à prix fixé ») |
 | `/buyandsell <carte> [prix max] [prix de vente]` | Achète la carte, puis la revend à ce prix |
+| `/details <carte> [rareté]` | Fiche de la carte sur le Marché : graphique des ventes, dernières ventes, prix moyen, médian, min, max (voir « Fiche d'une carte ») |
 | `/market [cookies]` | État de la session Marché, ou nouvelle session Marché (voir « Prix des cartes ») |
 | `/settings` · `/set <réglage> <valeur>` | Réglages du compte (voir « Réglages par compte ») |
 | `/pause` · `/resume` | Arrête ou reprend ventes, achats et défausse (reprise dans la minute) |
@@ -352,6 +353,27 @@ lisent aucun : elles prennent le cache et lui demandent les autres.
 
 Sans la boucle (passe unique), les prix sont lus pendant la passe, comme avant.
 
+### Fiche d'une carte
+
+`/details Tour Eiffel` (ou `/fiche`) renvoie, en pièce jointe, une page HTML qui s'ouvre
+sur téléphone comme sur ordinateur (sans connexion, sans script) :
+
+- **graphique des ventes** dans le temps, une couleur par rareté, avec le prix retenu par
+  le bot en pointillé ; les ventes qu'il écarte (aberrantes, ou d'avant un changement de
+  valeur) sont des cercles vides, celles hors échelle des triangles en haut ;
+- **par rareté :** nombre de ventes, prix retenu par le bot, moyenne, médiane, plus bas,
+  plus haut, dernière vente, moyenne affichée par le site, et prix `auto` qu'en tirerait
+  le bot (achat 90 %, vente 110 %) ;
+- les **enchères en cours** de la carte (liens vers le site) et les **40 dernières
+  ventes**, avec leur écart au prix retenu.
+
+`/details Tour Eiffel L+` (ou `SR`…) se limite à une rareté ; `/details Apollo 11; SR`
+quand le nom finit par un nombre. La carte se trouve par son **titre exact** : dans les
+enchères en cours, dans les collections lues récemment, sinon dans la base du site ; à
+défaut, collez le lien d'une de ses enchères. Les ventes se lisent avec la session Marché,
+sinon avec celle du compte (qui doit alors avoir accès au Marché). Lecture seule : rien
+n'est envoyé au site.
+
 ### Bilan
 
 Toutes les `bilan` heures (2), ou à la demande avec `/update` :
@@ -490,7 +512,7 @@ processus à la fois peut être annulée.
 | `site.py` | Client HTTP de l'API du site |
 | `selling.py` / `buying.py` | Passe de vente ; achats et surenchères |
 | `discard.py` / `pricing.py` | Défausse en arrière-plan ; prix des cartes et leur cache |
-| `market.py` | Session Marché et prix nettoyé des ventes du Marché |
+| `market.py` / `details.py` | Session Marché et prix nettoyé des ventes du Marché ; fiche d'une carte (`/details`) |
 | `lists.py` / `commands.py` | Listes de cartes ; commandes du bot |
 | `selection.py` / `unsold.py` | Logique pure (collection, plan de vente, ajustement) ; invendues mises de côté |
 | `telegram.py` / `report.py` | Bot Telegram ; bilans et historique |

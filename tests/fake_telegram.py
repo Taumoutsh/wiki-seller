@@ -1,5 +1,8 @@
-"""Faux serveur de l'API Telegram (getUpdates, sendMessage, deleteMessage) pour les tests."""
+"""Faux serveur de l'API Telegram (getUpdates, sendMessage, sendDocument, deleteMessage)
+pour les tests."""
 
+import email.parser
+import email.policy
 import json
 import threading
 import time
@@ -17,6 +20,7 @@ class FakeTelegram:
         self.parse_modes = []  # mise en forme demandée pour chacun (None ou "HTML")
         self.reject_html = False  # refuser la mise en forme, comme une balise mal formée
         self.deleted = []  # identifiants des messages supprimés
+        self.documents = []  # fichiers envoyés : {"chat_id", "caption", "name", "content"}
         self._next_id = 1
 
     def say(self, text, chat_id=CHAT_ID):
@@ -35,8 +39,21 @@ class FakeTelegram:
                 pass
 
             def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 token, _, method = self.path.removeprefix("/bot").partition("/")
+                if method == "sendDocument":
+                    form = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+                        f"Content-Type: {self.headers['Content-Type']}\r\n\r\n".encode() + raw)
+                    document = {}
+                    for part in form.iter_parts():
+                        name = part.get_param("name", header="content-disposition")
+                        if part.get_filename():
+                            document.update(name=part.get_filename(), content=part.get_payload(decode=True))
+                        else:
+                            document[name] = part.get_payload(decode=True).decode()
+                    fake.documents.append(document)
+                    return self._send({"ok": True, "result": {"message_id": 0}})
+                body = json.loads(raw or b"{}")
                 if token != TOKEN:
                     return self._send({"ok": False, "description": "Unauthorized"}, 401)
                 if method == "getUpdates":
