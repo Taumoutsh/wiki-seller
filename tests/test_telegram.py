@@ -145,13 +145,13 @@ def test_list_commands_edit_the_lists(tmp_path):
             listener.stop()
     safe, want, buy_usage, sell, buy_and_sell, unsell, unsafe, buy_auto, sell_auto, buy_and_sell_auto, listing = fake.sent
     assert safe.startswith("🛡️ « Victor Hugo » protégée")
-    assert "Gustave Eiffel » ajoutée dans les achats (300 max, 2 exemplaire(s))" in want and "/want est l'ancien" in want
+    assert "Gustave Eiffel » ajoutée dans les achats (300 max, 2 exemplaire(s), protégée une fois obtenue)" in want and "/want est l'ancien" in want
     assert buy_usage.startswith("❌ Usage : /buy")
     assert "1 exemplaire(s) à 800" in sell and "Elle est protégée" in sell
     assert "Apollo 11 » ajoutée dans les achats (500 max, 1 exemplaire(s)), revendue à 900" in buy_and_sell
     assert unsell == "« Pomme » n'est pas dans les ventes."
     assert unsafe == "« Victor Hugo » n'est plus protégée."
-    assert "Pomme » ajoutée dans les achats (max auto (90 % du marché), 3 exemplaire(s))" in buy_auto
+    assert "Pomme » ajoutée dans les achats (max auto (90 % du marché), 3 exemplaire(s), protégée une fois obtenue)" in buy_auto
     assert "1 exemplaire(s) à auto (110 % du marché)" in sell_auto
     assert "Rhône » ajoutée dans les achats (40 max, 1 exemplaire(s)), revendue à auto (110 % du marché)" \
         in buy_and_sell_auto

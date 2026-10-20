@@ -244,11 +244,10 @@ def _run(config, command: str, args: str) -> str:
     if command in ("/buy", "/want"):
         parsed = parse_card_command(args, 1, BUY_USAGE, ("copies", "vendeur", "rarete"), optional_prices=True)
         status, card = set_buy(config, parsed.name, parsed.prices[0], parsed.copies, seller=parsed.seller,
-                               rarity=parsed.rarity or None)
-        resale = f", revendue à {_sell(card.sell_price)}{_for(card.sell_duration)} une fois obtenue" \
-            if card.sell_price else ""
+                               rarity=parsed.rarity or None, resale=False)
         return (f"🛒 « {card.name} »{_rarity(card)} {status} dans les achats ({_max(card.max_price)}, {card.copies} "
-                f"exemplaire(s){_from(card.seller)}{resale}) : prise en compte à la prochaine passe."
+                f"exemplaire(s){_from(card.seller)}, protégée une fois obtenue) : prise en compte à la prochaine "
+                "passe."
                 + (WANT_NOTICE if command == "/want" else ""))
     if command == "/buyandsell":
         parsed = parse_card_command(args, 2, BUY_AND_SELL_USAGE, ("copies", "duree", "vendeur", "rarete"),

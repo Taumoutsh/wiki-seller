@@ -248,11 +248,13 @@ def _buy_card(entry: dict) -> BuyCard:
 
 def set_buy(config, name: str, max_price: int | str | None, copies: int | None = None,
             sell_price: int | str | None = None, seller: str | None = None,
-            sell_duration: str | None = None, rarity: str | None = None) -> tuple[str, BuyCard]:
+            sell_duration: str | None = None, rarity: str | None = None,
+            resale: bool | None = None) -> tuple[str, BuyCard]:
     """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées) ; sans
     prix max, celui de la liste est gardé (AUTO pour une nouvelle carte). Une carte a une
     ligne par rareté : rarity choisit la ligne (None : la seule ligne de la carte).
-    Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
+    resale=False (/buy) : achetée pour être gardée, la revente d'un ancien /buyandsell est
+    retirée. Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
     with LISTS_LOCK:
         data = _buy_raw(config)
         entry = _find(data, name, rarity, "dans les achats")
@@ -265,6 +267,9 @@ def set_buy(config, name: str, max_price: int | str | None, copies: int | None =
             entry["max_price"] = AUTO if max_price is None else max_price
         if copies:
             entry["copies"] = copies
+        if resale is False:  # /buy : protégée une fois obtenue, jamais revendue
+            entry.pop("sell_price", None)
+            entry.pop("sell_duration", None)
         if sell_price:
             entry["sell_price"] = sell_price
         if seller:

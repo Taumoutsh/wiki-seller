@@ -672,6 +672,16 @@ def test_sell_list_goes_first_at_the_exact_price_until_sold(tmp_path):
     assert "💰 Vendue : Pomme à 999" in tg.sent
 
 
+def test_card_still_to_buy_is_never_sold_automatically(tmp_path):
+    # Victor Hugo : un exemplaire déjà obtenu sur deux voulus (ou gagné, achat pas encore
+    # enregistré) ; il reste dans les achats et ne part pas en vente.
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site:
+        config = make_config(tmp_path, site.url, ["tour eiffel", "CHATEAU DE VERSAILLES"],
+                             wanted=[{"name": "Victor Hugo", "max_price": 1, "copies": 3}])
+        run_once(config)
+    assert [l["title"] for l in site.listings] == ["Loire", "Rhône", "Pomme"]
+
+
 def test_buy_and_sell_lists_the_card_once_bought(tmp_path):
     from wiki_seller.lists import sell_cards, set_buy
 

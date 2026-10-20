@@ -185,7 +185,7 @@ script :
    s'il reste de la place (5 enchères à la fois sur le site), **d'abord
    les ventes demandées** (`/sell`), puis les cartes des raretés `raretes`, **de la plus
    chère à la moins chère**, sauf les cartes protégées (aucun exemplaire vendu, doublons
-   compris) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
+   compris) et les cartes à acheter (même déjà obtenues en partie) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
    durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
    sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise
@@ -249,7 +249,9 @@ d'exemplaires : « 🛒 Obtenue : Tour Eiffel pour 480 (1/2) », suivi de « · 
 pour `/buyandsell`. Les enchères perdues (remportées par un autre, ou montées au-dessus
 de votre max) ne font pas de message : elles sont listées au bilan suivant. Une fois tous les
 exemplaires obtenus, la carte **quitte la liste d'achat et devient protégée** ; avec
-`/buyandsell`, elle part dans les ventes au prix (et pour la durée) demandés.
+`/buyandsell`, elle part dans les ventes au prix (et pour la durée) demandés. Un `/buy`
+sur une carte déjà en `/buyandsell` retire la revente : elle sera protégée. Tant qu'elle
+est dans les achats, une carte n'est jamais mise en vente automatiquement.
 
 **Plusieurs comptes :** deux comptes du bot ne misent jamais l'un contre l'autre. Une
 enchère suivie ou menée par un compte est laissée aux autres ; si la seule enchère à

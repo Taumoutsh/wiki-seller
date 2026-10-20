@@ -13,7 +13,7 @@ from datetime import datetime
 
 from .buying import WantedState, auction_title, my_user_id, rarity_matches
 from .config import Config
-from .lists import (AUTO, AUTO_SELL_RATIO, ListError, SellCard, group_matches, record_sale, remove_safe, sell_cards,
+from .lists import (AUTO, AUTO_SELL_RATIO, ListError, SellCard, buy_cards, group_matches, record_sale, remove_safe, sell_cards,
                     update_sell)
 from . import collection, price_worker
 from .pricing import PriceReader, fetch_averages, load_price_cache
@@ -294,9 +294,13 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
         _list_all(listings, items)
         if config.sell_rarities:
             entries = [e for e in entries if entry_rarity(e) in config.sell_rarities]
-    # Exemplaires visés par une vente demandée : laissés à celle-ci (les autres raretés de la carte restent).
+    # Exemplaires visés par une vente demandée : laissés à celle-ci (les autres raretés de la
+    # carte restent). Carte à acheter : jamais vendue automatiquement, même déjà obtenue en
+    # partie ou gagnée sans que l'achat soit encore enregistré (protégée ensuite, ou revendue
+    # au prix de /buyandsell).
+    lines = [*priority, *buy_cards(config)]
     groups = [g for g in parse_collection(entries, excluded_copy_ids=in_trade)
-              if not any(normalize_name(g.title) == c.key and group_matches(g, c.rarity) for c in priority)]
+              if not any(normalize_name(g.title) == c.key and group_matches(g, c.rarity) for c in lines)]
     if not config.selling:
         log.info("Ventes automatiques coupées (réglage raretes : aucune).")
     elif listings.room:

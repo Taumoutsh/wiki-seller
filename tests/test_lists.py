@@ -96,6 +96,12 @@ def test_set_buy_adds_or_updates(config):
     assert remove_buy(config, "TOUR EIFFEL") and not remove_buy(config, "Tour Eiffel")
 
 
+def test_buy_on_a_buy_and_sell_line_keeps_the_card(config):
+    set_buy(config, "Tour Eiffel", 500, sell_price=800, sell_duration="12h")
+    assert set_buy(config, "Tour Eiffel", None, resale=False) == ("mise à jour", BuyCard("Tour Eiffel", 500))
+    assert "protégées" in complete_purchase(config, buy_cards(config)[0], 1)  # protégée, pas revendue
+
+
 def test_card_bought_again_starts_from_scratch(config):
     config.wanted_state_file.parent.mkdir()
     config.wanted_state_file.write_text('{"cards": {"pomme": {"status": "won", "won": {"a": 3}}, "x": {}}}')
