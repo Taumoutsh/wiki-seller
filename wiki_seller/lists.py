@@ -1,6 +1,7 @@
 """Listes de cartes, dans state/, modifiées par le bot Telegram :
 
-- safe_cards.json : cartes protégées (jamais défaussées, un exemplaire toujours gardé) ;
+- safe_cards.json : cartes protégées (jamais défaussées, aucun exemplaire vendu
+  automatiquement) ;
 - buy_cards.json : cartes à acheter, avec leur prix maximum (et un prix de revente pour
   /buyandsell) ; une fois obtenues, elles passent dans les cartes protégées (ou dans
   les ventes, pour /buyandsell) ;

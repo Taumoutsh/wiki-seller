@@ -94,7 +94,7 @@ s'ils ne fonctionnent pas.
 | `/update` (ou `/bilan`) | Bilan immédiat (voir « Bilan ») |
 | `/ventes` (ou `/historique`) | Vos enchères terminées telles que le site les renvoie (40 au plus) : ✅ vendue, ❌ invendue, période couverte |
 | `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
-| `/safe <carte>` · `/unsafe <carte>` | Protège une carte (jamais défaussée, un exemplaire toujours gardé), ou la retire des protégées |
+| `/safe <carte>` · `/unsafe <carte>` | Protège une carte (jamais défaussée ni vendue automatiquement, aucun exemplaire), ou la retire des protégées |
 | `/buy <carte> [prix max]` · `/unbuy <carte>` | Achète la carte à ce prix au plus (voir « Achats ») ; protégée une fois obtenue |
 | `/sell <carte> [prix]` · `/unsell <carte>` | Vend la carte à ce prix exact, en priorité, jusqu'à la vente (voir « Ventes à prix fixé ») |
 | `/buyandsell <carte> [prix max] [prix de vente]` | Achète la carte, puis la revend à ce prix |
@@ -184,8 +184,8 @@ script :
    passe ou par la défausse : relire des milliers de cartes prend plusieurs minutes),
    s'il reste de la place (5 enchères à la fois sur le site), **d'abord
    les ventes demandées** (`/sell`), puis les cartes des raretés `raretes`, **de la plus
-   chère à la moins chère**, sauf les cartes protégées (un exemplaire gardé, les doublons
-   vendus) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
+   chère à la moins chère**, sauf les cartes protégées (aucun exemplaire vendu, doublons
+   compris) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
    durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
    sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise

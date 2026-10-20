@@ -50,11 +50,11 @@ def test_full_run_lists_most_expensive_first(tmp_path):
 
     assert result.listed == 5 and result.last_listing_at is not None
     assert [(l["title"], l["price"], l["duration"]) for l in site.listings] == [
-        ("Château de Versailles", "560", "1 h"),  # 2 exemplaires, protégée => 1 vendu ; 800 * 0.7
-        ("Victor Hugo", "210", "1 h"),
+        ("Victor Hugo", "210", "1 h"),  # 300 * 0.7 ; Château de Versailles protégée : aucun exemplaire vendu
         ("Victor Hugo", "210", "1 h"),
         ("Loire", "105", "1 h"),
         ("Rhône", "70", "1 h"),
+        ("Pomme", "14", "1 h"),
     ]
     assert json.loads(config.session_file.read_text())["cookie"] == "sb-fakeproj-auth-token"
 

@@ -75,7 +75,7 @@ def test_bot_serves_each_conversation(tmp_path):
     assert {sent[2][0], sent[3][0]} == {"555", CHAT_ID}
     welcome = next(t for c, t in sent[2:4] if c == "555")
     assert welcome.startswith("✅ Bienvenue Paul") and "/buy" in welcome and "/adduser" not in welcome
-    assert sent[4] == ("555", "🛡️ « Pomme » protégée : jamais défaussée, et toujours un exemplaire gardé "
+    assert sent[4] == ("555", "🛡️ « Pomme » protégée : jamais défaussée ni vendue automatiquement "
                               "(1 carte(s) protégée(s)).")
     assert sent[5][0] == "555" and "pas encore actif" in sent[5][1] and requested == ["555"]
     assert sent[6][0] == CHAT_ID and "Paul · 555 · ⏸️ pause · pas de session · 1 protégée(s)" in sent[6][1]

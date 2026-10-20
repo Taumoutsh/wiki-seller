@@ -39,13 +39,12 @@ def test_pass_reads_no_price_and_sells_once_the_worker_read_them(tmp_path, worke
         prices = worker([config], ready.append)
         result = run_once(config)
         assert result.listed == 0 and not [e for e in site.events if e[0] == "prix"]  # la passe n'attend pas
-        assert prices.pending() == 6  # cartes vendables sans prix
+        assert prices.pending() == 5  # cartes vendables sans prix (les protégées n'en font pas partie)
         drain(prices)
         assert ready == [config]  # tous les prix de vente lus : passe anticipée demandée
         run_once(config)
     assert [(l["title"], l["price"]) for l in site.listings] == [
-        ("Château de Versailles", "560"), ("Victor Hugo", "210"), ("Victor Hugo", "210"), ("Loire", "105"),
-        ("Rhône", "70")]
+        ("Victor Hugo", "210"), ("Victor Hugo", "210"), ("Loire", "105"), ("Rhône", "70"), ("Pomme", "14")]
 
 
 def test_same_card_asked_by_two_accounts_is_read_once(tmp_path, worker):

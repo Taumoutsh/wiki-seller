@@ -40,7 +40,7 @@ HELP_TEXT = ("📖 Commandes\n"
              "/sell <carte> [prix] — vendre à ce prix, en priorité\n"
              "/unsell <carte> [rareté] — annuler une vente\n"
              "\n🛡️ Protéger\n"
-             "/safe <carte> — jamais défaussée, un exemplaire gardé\n"
+             "/safe <carte> — jamais défaussée ni vendue\n"
              "/unsafe <carte> — ne plus la protéger\n"
              "\n⚙️ Compte\n"
              "/settings — voir les réglages\n"
@@ -225,7 +225,7 @@ def _run(config, command: str, args: str) -> str:
         raise ListError(f"Usage : {command} <carte>, ex. {command} Tour Eiffel")
     if command == "/safe":
         added, total = add_safe(config, args)
-        return (f"🛡️ « {args} » protégée : jamais défaussée, et toujours un exemplaire gardé "
+        return (f"🛡️ « {args} » protégée : jamais défaussée ni vendue automatiquement "
                 f"({total} carte(s) protégée(s))." if added else f"« {args} » est déjà protégée.")
     if command == "/unsafe":
         return f"« {args} » n'est plus protégée." if remove_safe(config, args) else f"« {args} » n'était pas protégée."

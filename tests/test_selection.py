@@ -43,7 +43,7 @@ def test_parse_collection_excludes_copies_in_trade():
     assert groups[0].count == 1
 
 
-def test_plan_sorts_by_price_and_keeps_one_protected_copy():
+def test_plan_sorts_by_price_and_skips_protected_cards():
     groups = parse_collection([
         entry("a1", "A", "Cheap"),
         entry("b1", "B", "Château de Versailles"), entry("b2", "B", "Château de Versailles"),
@@ -55,18 +55,23 @@ def test_plan_sorts_by_price_and_keeps_one_protected_copy():
     plan = build_sale_plan(groups, {normalize_name("chateau de versailles"), normalize_name("TOUR EIFFEL")},
                            averages, [], 0.7)
     assert [(i.title, i.copies_to_sell, i.price) for i in plan.items] == [
-        ("Château de Versailles", 1, 350),  # protégée : 2 exemplaires, on en garde 1
-        ("Expensive", 1, 210),
+        ("Expensive", 1, 210),  # protégées, même en 2 exemplaires : aucune vendue
         ("Cheap", 1, 7),
     ]
     assert plan.skipped == [("No price", "pas de prix moyen")]
 
 
 def test_plan_counts_copies_already_on_auction():
-    groups = parse_collection([entry("b1", "B", "Protégée"), entry("b2", "B", "Protégée"), entry("x1", "X", "Libre")])
-    selling = [{"card_id": "b2", "status": "active"}, {"card_id": "x1", "status": "active"}]
-    plan = build_sale_plan(groups, {"protegee"}, {"B:R": 100, "X:R": 100}, selling, 0.7)
-    assert plan.items == []  # b2 déjà en vente => il ne reste que l'exemplaire à garder
+    groups = parse_collection([entry("x1", "X", "Libre"), entry("x2", "X", "Libre")])
+    selling = [{"card_id": "x1", "status": "active"}]
+    plan = build_sale_plan(groups, set(), {"X:R": 100}, selling, 0.7)
+    assert [(i.title, i.copies_to_sell) for i in plan.items] == [("Libre", 1)]  # x1 déjà en vente
+
+
+def test_protected_card_is_never_sold_automatically_even_with_duplicates():
+    groups = parse_collection([entry("b1", "B", "Protégée"), entry("b2", "B", "Protégée"),
+                               entry("b3", "B", "Protégée")])
+    assert build_sale_plan(groups, {"protegee"}, {"B:R": 100}, [], 0.7).items == []
 
 
 def test_cards_with_unreadable_price_wait_for_the_next_pass():

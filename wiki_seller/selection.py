@@ -8,7 +8,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-# Nombre d'exemplaires conservés pour une carte protégée (state/safe_cards.json).
+# Exemplaires gardés d'une carte protégée mise en vente par /sell (state/safe_cards.json) ;
+# la vente automatique, elle, n'en vend aucun.
 PROTECTED_COPIES_TO_KEEP = 1
 
 
@@ -142,8 +143,11 @@ class SalePlan:
 
 
 def copies_available(group: CardGroup, safe_names: set[str], selling: list[dict]) -> int:
-    keep = PROTECTED_COPIES_TO_KEEP if normalize_name(group.title) in safe_names else 0
-    return max(0, group.count - count_listed(group, selling) - keep)
+    """Exemplaires que la vente automatique peut mettre en vente : aucun pour une carte
+    protégée, même en plusieurs exemplaires."""
+    if normalize_name(group.title) in safe_names:
+        return 0
+    return max(0, group.count - count_listed(group, selling))
 
 
 def build_sale_plan(
