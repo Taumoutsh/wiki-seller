@@ -17,6 +17,9 @@ from .site import SiteClient, SiteError, WikiMasters
 
 log = logging.getLogger(__name__)
 
+# Requête d'une passe ou de la défausse pendant une fin d'enchère surveillée : attente au
+# plus ce temps (une guerre d'enchères ajoute une minute à chaque mise).
+WATCH_WAIT_LIMIT = 65 * 60
 SESSION_COOKIES_FILE = "session_cookies.txt"  # ancienne version : dernière session reçue par Telegram
 
 
@@ -59,8 +62,9 @@ class SessionGate:
 
     @contextmanager
     def watching(self):
-        """Une fin d'enchère est surveillée : la défausse s'interrompt et le fil des prix
-        laisse cette session, pour que rien ne gêne la mise de dernière seconde."""
+        """Une fin d'enchère est surveillée : les requêtes des passes et de la défausse
+        attendent (wait_watches) et le fil des prix laisse cette session, pour que rien ne
+        gêne la mise de dernière seconde."""
         with self._cond:
             self._watching += 1
         try:
@@ -69,6 +73,15 @@ class SessionGate:
             with self._cond:
                 self._watching -= 1
                 self._cond.notify_all()
+
+    def wait_watches(self) -> None:
+        """Avant chaque requête d'une passe ou de la défausse : une fin d'enchère surveillée
+        passe avant tout le reste ; la requête attend qu'elle soit terminée."""
+        with self._cond:
+            if not self._watching:
+                return
+            log.info("Fin d'enchère surveillée en cours : la passe attend qu'elle soit terminée.")
+            self._cond.wait_for(lambda: not self._watching, WATCH_WAIT_LIMIT)
 
     def in_pass(self) -> bool:
         """Une passe utilise la session, ou l'attend, ou une fin d'enchère est surveillée :
@@ -116,7 +129,9 @@ def open_site(config: Config, debug: bool = False, background: bool = False):
     config.state_dir.mkdir(parents=True, exist_ok=True)
     lock = gate(config)
     with lock.background() if background else lock.priority():
-        site = WikiMasters(SiteClient(config.base_url, session_store(config)), config, debug=debug)
+        client = SiteClient(config.base_url, session_store(config))
+        client.before = lock.wait_watches  # les fins d'enchère surveillées passent avant
+        site = WikiMasters(client, config, debug=debug)
         ensure_logged_in(site)
         yield site
 

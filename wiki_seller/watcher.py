@@ -4,10 +4,12 @@ surveillance par enchère dans son propre fil. Une passe longue, une demande de 
 sur Telegram ou une autre fin d'enchère ne peuvent donc plus faire manquer une fin.
 
 La session du compte est la même que celle des passes (session_store : un seul
-renouvellement à la fois) ; la surveillance ne tient pas le tour des passes, mais la
-défausse lui cède la place et le fil des prix n'utilise pas cette session pendant ce
-temps (SessionGate.watching). Elle ne demande jamais de cookies : si la session ne
-marche plus, la passe suivante s'en charge."""
+renouvellement à la fois) ; la surveillance passe avant tout le reste : les requêtes des
+passes et de la défausse du compte attendent qu'elle soit terminée, et le fil des prix
+s'arrête (SessionGate.watching). Elle relit l'enchère chaque seconde (mise actuelle, temps
+restant, qui mène) et surenchérit tant que la limite le permet, prolongations comprises.
+Elle ne demande jamais de cookies : si la session ne marche plus, la passe suivante s'en
+charge."""
 
 import dataclasses
 import logging
@@ -48,6 +50,10 @@ class EndWatcher:
         if self._thread is not None:
             self._thread.join(10)
 
+    def busy(self) -> bool:
+        with self._lock:
+            return any(thread.is_alive() for thread in self._active.values())
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -81,47 +87,52 @@ class EndWatcher:
                 thread.start()
 
     def _watch(self, config: Config, key: str) -> None:
-        from .buying import AUTO, Budget, WantedState, _Buyer, buy_cards, fellow_accounts, my_user_id, wanted_lock
-        from .session import gate, session_store
+        from .session import gate
+
+        with gate(config).watching():  # les passes et la défausse du compte attendent
+            state = self._watch_end(config, key)
+        if state is not None:  # verrou du suivi pris hors surveillance : une passe qui le tient attend celle-ci
+            self._merge(config, key, state)
+
+    def _watch_end(self, config: Config, key: str):
+        from .buying import AUTO, Budget, WantedState, _Buyer, buy_cards, fellow_accounts, my_user_id
+        from .session import session_store
         from .site import SessionExpired, SiteClient, SiteError, WikiMasters
 
         account = str(config.session_file)
-        with gate(config).watching():
-            with wanted_lock(config):
-                state = WantedState(config.wanted_state_file)
-            entry = state.data["cards"].get(key)
-            card = next((c for c in buy_cards(config) if c.id == key), None)
-            if entry is None or card is None or entry.get("status") != "bidding":
-                return
-            if card.max_price == AUTO:
-                if not entry.get("auto_max"):
-                    return
-                card = dataclasses.replace(card, max_price=entry["auto_max"])
-            dry_run = self.dry_run or config.simulation
-            site = WikiMasters(SiteClient(config.base_url, session_store(config)), config)
-            try:
-                offset = site.server_clock_offset()
-                mine = site.fetch_mine()
-                state.my_id = my_user_id(mine, state.my_id) or site.user_id()
-                with self._lock:  # budget commun aux surveillances simultanées du compte
-                    if not any(t.is_alive() and t is not threading.current_thread()
-                               for (a, _), t in self._active.items() if a == account):
-                        self._budgets[account] = Budget(sum(
-                            int(a.get("current_bid") or 0) for a in mine.get("bidding") or []
-                            if isinstance(a, dict) and state.my_id and a.get("current_bidder_id") == state.my_id))
-                    budget = self._budgets.setdefault(account, Budget())
-                buyer = _Buyer(site, config, state, dry_run, lambda: datetime.now(timezone.utc) + offset, budget)
-                _, buyer.rivals = fellow_accounts(config)
-                auction = site.read_auction(entry["auction_id"]) or {
-                    "id": entry["auction_id"], "end_at": entry.get("end_at"), "status": "active"}
-                buyer.watch_until_end(card, entry, auction)
-            except SessionExpired as exc:
-                log.warning("Fin d'enchère de « %s » non surveillée : session refusée (%s) ; la passe suivante "
-                            "demandera de nouveaux cookies si besoin.", card.name, exc)
-            except (SiteError, OSError) as exc:
-                log.warning("Fin d'enchère de « %s » : site injoignable (%s).", card.name, exc)
-            finally:
-                self._merge(config, key, state)
+        state = WantedState(config.wanted_state_file)  # écriture atomique : relu sans verrou
+        entry = state.data["cards"].get(key)
+        card = next((c for c in buy_cards(config) if c.id == key), None)
+        if entry is None or card is None or entry.get("status") != "bidding":
+            return None
+        if card.max_price == AUTO:
+            if not entry.get("auto_max"):
+                return None
+            card = dataclasses.replace(card, max_price=entry["auto_max"])
+        dry_run = self.dry_run or config.simulation
+        site = WikiMasters(SiteClient(config.base_url, session_store(config)), config)
+        try:
+            offset = site.server_clock_offset()
+            mine = site.fetch_mine()
+            state.my_id = my_user_id(mine, state.my_id) or site.user_id()
+            with self._lock:  # budget commun aux surveillances simultanées du compte
+                if not any(t.is_alive() and t is not threading.current_thread()
+                           for (a, _), t in self._active.items() if a == account):
+                    self._budgets[account] = Budget(sum(
+                        int(a.get("current_bid") or 0) for a in mine.get("bidding") or []
+                        if isinstance(a, dict) and state.my_id and a.get("current_bidder_id") == state.my_id))
+                budget = self._budgets.setdefault(account, Budget())
+            buyer = _Buyer(site, config, state, dry_run, lambda: datetime.now(timezone.utc) + offset, budget)
+            _, buyer.rivals = fellow_accounts(config)
+            auction = site.read_auction(entry["auction_id"]) or {
+                "id": entry["auction_id"], "end_at": entry.get("end_at"), "status": "active"}
+            buyer.watch_until_end(card, entry, auction)
+        except SessionExpired as exc:
+            log.warning("Fin d'enchère de « %s » non surveillée : session refusée (%s) ; la passe suivante "
+                        "demandera de nouveaux cookies si besoin.", card.name, exc)
+        except (SiteError, OSError) as exc:
+            log.warning("Fin d'enchère de « %s » : site injoignable (%s).", card.name, exc)
+        return state
 
     @staticmethod
     def _merge(config: Config, key: str, state) -> None:
@@ -147,6 +158,11 @@ def start(accounts: Callable[[], list[Config]], dry_run: bool = False) -> EndWat
     WATCHER = EndWatcher(accounts, dry_run).start()
     log.info("Fins d'enchère surveillées à part, chacune dans son fil.")
     return WATCHER
+
+
+def busy() -> bool:
+    """Une fin d'enchère est en cours de surveillance (tous comptes confondus)."""
+    return WATCHER is not None and WATCHER.busy()
 
 
 def active() -> bool:

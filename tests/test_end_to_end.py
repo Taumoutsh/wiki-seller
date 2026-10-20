@@ -763,6 +763,40 @@ def test_snipe_keeps_watching_when_the_site_does_not_answer(tmp_path):
     assert datetime.now(timezone.utc) >= end
 
 
+def test_bid_refused_as_too_low_is_sent_again_at_the_minimum_given(tmp_path):
+    auction, end = ending_auction()
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        site.hidden_bids["s1"] = 60  # mise d'un autre, pas encore visible à la lecture
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+        close_after(site, end)
+        run_once(config)
+    assert site.bids == [("s1", 66)] and site.bid_attempts == 2  # refusée à 50, refaite aussitôt à 66
+    assert buy_cards(config) == []
+
+
+def test_extended_auction_is_bid_on_again_until_the_real_end(tmp_path):
+    import threading
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    auction, end = ending_auction(seconds=6)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=4))
+
+        def rival():  # un autre mise en dernière seconde ; la prolongation n'apparaît qu'après la fin lue
+            time.sleep(max(0.0, (end - datetime.now(timezone.utc)).total_seconds()) + 7)
+            site.auctions["s1"]["end_at"] = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+            site.outbid("s1", 60)
+            time.sleep(9)
+            site.settle("s1")
+
+        threading.Thread(target=rival, daemon=True).start()
+        run_once(config)
+    assert site.bids == [("s1", 50), ("s1", 66)]  # surenchère après la prolongation
+    assert buy_cards(config) == []
+
+
 def test_watched_auction_result_is_announced_right_away(tmp_path):
     import threading
     import time
@@ -1026,11 +1060,11 @@ def test_auction_end_is_watched_apart_from_the_pass(tmp_path):
                              snipe_lead=timedelta(seconds=8))
         watcher = EndWatcher(lambda: [config]).start()
         try:
-            started = time.monotonic()
-            run_once(config)  # la passe garde l'enchère et rend la main sans la surveiller
-            assert time.monotonic() - started < 8 and site.bids == []
-            assert tracked(config, "victor hugo")["auction_id"] == "s1"
             close_after(site, end)
+            # La passe garde l'enchère sans la surveiller ; ses requêtes suivantes (ventes)
+            # attendent que la fin, surveillée à part, soit passée.
+            run_once(config)
+            assert site.bids == [("s1", 50)]
             deadline = time.monotonic() + 30
             while buy_cards(config) and time.monotonic() < deadline:
                 time.sleep(0.5)

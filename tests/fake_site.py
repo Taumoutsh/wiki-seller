@@ -10,6 +10,7 @@ import math
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -80,6 +81,10 @@ class FakeWikiMasters:
         self.bid_lost_responses = 0
         self.auction_read_failures = 0
         self.bid_attempts = 0
+        # Mise d'un autre pas encore visible à la lecture de l'enchère (détail en retard sur
+        # les mises) : le site refuse alors la nôtre en indiquant le minimum.
+        self.hidden_bids: dict[str, int] = {}
+        self.extension: timedelta | None = None  # mise dans les 10 dernières s : fin repoussée d'autant
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -232,12 +237,17 @@ class FakeWikiMasters:
                     if site.bid_failures:
                         site.bid_failures -= 1
                         return self._send(503, {"error": "Service Unavailable"})
-                    current = auction["current_bid"]
+                    current = site.hidden_bids.pop(auction["id"], None) or auction["current_bid"]
+                    if current != auction["current_bid"]:  # la mise cachée devient visible
+                        auction.update(current_bid=current, effective_bid=current, current_bidder_id="rival")
                     minimum = auction["base_amount"] if current is None else max(math.ceil(1.1 * current), current + 1)
-                    if body.get("amount", 0) < minimum or auction["status"] != "active":
-                        return self._send(400, {"error": "mise trop basse"})
+                    if auction["status"] != "active":
+                        return self._send(400, {"error": "Enchère terminée", "code": "auction_ended"})
+                    if body.get("amount", 0) < minimum:
+                        return self._send(400, {"error": "Mise trop basse", "code": "bid_too_low", "min": minimum})
                     site.bids.append((auction["id"], body["amount"]))
                     auction.update(current_bid=body["amount"], effective_bid=body["amount"], current_bidder_id=ME)
+                    site.extend(auction["id"])
                     if site.bid_lost_responses:
                         site.bid_lost_responses -= 1
                         return self._send(502, {"error": "Bad Gateway"})
@@ -266,6 +276,15 @@ class FakeWikiMasters:
 
     def outbid(self, auction_id, amount):
         self.auctions[auction_id].update(current_bid=amount, effective_bid=amount, current_bidder_id="rival")
+        self.extend(auction_id)
+
+    def extend(self, auction_id):
+        """Mise dans les 10 dernières secondes : la fin est repoussée (self.extension)."""
+        auction = self.auctions[auction_id]
+        end = datetime.fromisoformat(auction["end_at"].replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if self.extension is not None and now <= end <= now + timedelta(seconds=10):
+            auction["end_at"] = (end + self.extension).isoformat()
 
     def we_bid(self, auction_id, amount):
         """Notre mise (celle de fin d'enchère, sans attendre la fin réelle)."""

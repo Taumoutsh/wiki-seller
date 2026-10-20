@@ -44,6 +44,11 @@ BID_RETRY_LIMIT = timedelta(minutes=2)
 # l'enchère est relue toutes les OUTCOME_POLL s, au plus OUTCOME_WAIT.
 OUTCOME_WAIT = timedelta(minutes=3)
 OUTCOME_POLL = 3
+# Une mise des 10 dernières secondes prolonge l'enchère de 60 s : tant que le site la dit
+# active, elle reste surveillée, même après l'heure de fin (prolongation vue en retard).
+BID_GRACE = timedelta(seconds=3)  # mise encore tentée jusqu'à ce délai après la fin lue
+BID_REREAD = 0.3  # s avant de relire une enchère dont la mise vient d'être refusée
+BID_TOO_LOW_TRIES = 3  # mises refaites aussitôt au minimum indiqué par le site
 LOST_KEPT = 50  # enchères perdues retenues par carte, pour ne les annoncer qu'une fois
 
 
@@ -663,10 +668,11 @@ class _Buyer:
 
     def watch_until_end(self, card: BuyCard, entry: dict, auction: dict) -> None:
         """Surveille l'enchère de près à partir de watch_start() avant la fin (relue chaque
-        seconde) et surenchérit dès que vous n'êtes plus en tête à SNIPE_LEAD de la fin,
-        dans la limite, puis à chaque fois que vous êtes dépassé. Une mise des 10
-        dernières secondes prolonge l'enchère de 60 s : on continue jusqu'à la fin réelle.
-        Une lecture sans réponse est simplement refaite la seconde suivante."""
+        seconde : mise actuelle, temps restant, qui mène) et surenchérit dès que vous n'êtes
+        plus en tête à SNIPE_LEAD de la fin, dans la limite, puis à chaque fois que vous
+        êtes dépassé. Une mise des 10 dernières secondes prolonge l'enchère de 60 s : on
+        continue tant que le site la dit active, même passé l'heure de fin lue (prolongation
+        vue en retard). Une lecture sans réponse est simplement refaite la seconde suivante."""
         lead = self.config.snipe_lead
         start = watch_start(lead)
         end = parse_time(auction.get("end_at"))
@@ -684,15 +690,21 @@ class _Buyer:
                 announced = True
             fresh = self.site.read_auction(auction["id"])
             if fresh is None:  # le site ne répond pas : on relit dans une seconde
-                if end - self.now() < -timedelta(minutes=2):
+                if end - self.now() < -OUTCOME_WAIT:
                     return  # la passe suivante verra si elle est gagnée
                 time.sleep(WATCH_POLL)
                 continue
             auction = fresh
-            if auction.get("status") != "active":
+            if str(auction.get("status") or "active").lower() != "active":
                 self.settle(card, entry, auction)
                 return
-            end = parse_time(auction.get("end_at")) or end
+            new_end = parse_time(auction.get("end_at"))
+            if new_end and new_end != end:
+                if new_end > end:
+                    log.info("Achat : « %s » — enchère prolongée jusqu'à %s (mise actuelle %s, %s).", card.name,
+                             auction["end_at"], auction.get("current_bid"),
+                             "vous menez" if self.leading(auction) else "vous n'êtes pas en tête")
+                end = new_end
             entry["end_at"] = auction.get("end_at")
             if auction.get("current_bidder_id") in self.rivals:
                 log.info("Achat : « %s » — un autre compte du bot mène cette enchère ; elle lui est laissée.",
@@ -700,45 +712,68 @@ class _Buyer:
                 _forget(entry)
                 return
             remaining = end - self.now()
-            if not self.leading(auction) and remaining <= lead:
-                self.fast_bid(card, entry, auction)
-                if entry.get("status") != "bidding" or self.dry_run:
+            if not self.leading(auction) and -BID_GRACE < remaining <= lead:
+                if self.fast_bid(card, entry, auction):
+                    if self.dry_run:
+                        return
+                    continue  # relire tout de suite : qui mène, fin repoussée ?
+                if entry.get("status") != "bidding":
                     return
-                continue  # relire tout de suite
-            if remaining < -timedelta(seconds=5):
-                self.settle(card, entry, auction)
+                time.sleep(BID_REREAD)  # mise refusée : l'enchère est relue et la mise refaite
+                continue
+            if remaining < -OUTCOME_WAIT:
+                log.info("Achat : résultat de « %s » pas encore connu ; vu à la prochaine passe.", card.name)
                 return
-            time.sleep(WATCH_POLL)
+            time.sleep(WATCH_POLL if remaining > -BID_GRACE else OUTCOME_POLL)
 
-    def fast_bid(self, card: BuyCard, entry: dict, auction: dict) -> None:
+    def fast_bid(self, card: BuyCard, entry: dict, auction: dict) -> bool:
         """Surenchère de dernière seconde : la mise minimale, calculée sur l'enchère qu'on
-        vient de relire, envoyée directement par l'API ; si elle est refusée (l'enchère a
-        bougé), l'enchère est relue et la mise refaite."""
+        vient de relire, envoyée directement par l'API. Si le site la refuse parce que
+        l'enchère a monté entre-temps, la mise est refaite aussitôt au minimum qu'il
+        indique, tant qu'il reste dans la limite. True si la mise est passée."""
         amount = min_next_bid(auction)
-        if amount > card.max_price:
-            log.info("Achat : « %s » — mise minimale %d au-dessus de la limite %d ; abandon.",
-                     card.name, amount, card.max_price)
-            self.lost(card, entry, auction)
-            _forget(entry)
-            return
-        with self.budget.lock:  # mise réservée avant l'envoi : deux fins simultanées ne dépassent pas le budget
-            if self.config.max_total_bids and self.budget_used + amount > self.config.max_total_bids:
-                log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; pas de mise sur « %s ».",
-                         self.budget_used, card.name)
+        for _ in range(BID_TOO_LOW_TRIES):
+            if amount > card.max_price:
+                log.info("Achat : « %s » — mise minimale %d au-dessus de la limite %d ; abandon.",
+                         card.name, amount, card.max_price)
+                self.lost(card, entry, auction)
                 _forget(entry)
-                return
-            self.budget_used += amount
-        if self.dry_run:
-            log.info("Simulation : surenchère de %d sur « %s ».", amount, card.name)
-            _forget(entry)
-            return
-        if self.site.post_bid(auction["id"], amount, self.deadline(auction), self.state.my_id):
-            entry["placed"] = auction["id"]
-            entry["my_bid"] = {"auction": auction["id"], "amount": amount}
-            log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
-                     (parse_time(auction.get("end_at")) - self.now()).total_seconds())
-            return
-        with self.budget.lock:
-            self.budget_used -= amount  # mise refusée : l'enchère est relue et la mise refaite
-        self.bid_if_needed(card, entry, auction)
+                return False
+            with self.budget.lock:  # mise réservée avant l'envoi : deux fins simultanées ne dépassent pas le budget
+                if self.config.max_total_bids and self.budget_used + amount > self.config.max_total_bids:
+                    log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; pas de mise sur « %s ».",
+                             self.budget_used, card.name)
+                    _forget(entry)
+                    return False
+                self.budget_used += amount
+            if self.dry_run:
+                log.info("Simulation : surenchère de %d sur « %s ».", amount, card.name)
+                _forget(entry)
+                return True
+            refusal: dict = {}
+            if self.site.post_bid(auction["id"], amount, self.deadline(auction), self.state.my_id, refusal):
+                entry["placed"] = auction["id"]
+                entry["my_bid"] = {"auction": auction["id"], "amount": amount}
+                entry.pop("bid_blocked_notified", None)
+                log.info("Achat : surenchère de %d sur « %s » à %.0f s de la fin.", amount, card.name,
+                         (parse_time(auction.get("end_at")) - self.now()).total_seconds())
+                return True
+            with self.budget.lock:
+                self.budget_used -= amount
+            code, minimum = refusal.get("code"), refusal.get("min")
+            if code == "bid_too_low" and isinstance(minimum, int) and minimum > amount:
+                log.info("Achat : « %s » — l'enchère a monté entre-temps, mise minimale %d.", card.name, minimum)
+                amount = minimum
+                continue
+            if code in ("insufficient_balance", "human_verification_required"):
+                why = ("solde insuffisant" if code == "insufficient_balance"
+                       else "le site demande une vérification (captcha) à faire sur le site")
+                log.warning("Achat : mise de %d sur « %s » impossible : %s.", amount, card.name, why)
+                if not entry.get("bid_blocked_notified"):
+                    entry["bid_blocked_notified"] = True
+                    notify(self.config, f"⚠️ Mise de {amount} sur « {card.name} » impossible : {why}.")
+                _forget(entry)
+                return False
+            return False
+        return False
 

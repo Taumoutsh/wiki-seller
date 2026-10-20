@@ -71,9 +71,12 @@ class SiteClient:
         self.base_url, self.store = base_url.rstrip("/"), store
         self.cookies: dict[str, str] = {}  # autres cookies posés par le site
         self.last: Response | None = None  # dernière réponse (--debug)
+        self.before = None  # appelé avant chaque requête (attente d'une fin d'enchère surveillée)
 
     def request(self, method: str, path: str, body: dict | None = None, timeout: float = 60,
                 accept: str = "application/json") -> Response:
+        if self.before is not None:
+            self.before()
         for attempt in (1, 2):
             self._fresh()
             used = (self.store.session or {}).get("access_token")
@@ -559,11 +562,12 @@ class WikiMasters:
                 and (not my_id or auction.get("current_bidder_id") == my_id))
 
     def post_bid(self, auction_id: str, amount: int, deadline: float | None = None,
-                 my_id: str | None = None) -> bool:
+                 my_id: str | None = None, refusal: dict | None = None) -> bool:
         """Mise (POST /api/marketplace/<id>/bid {amount}) ; True si acceptée. Le site ne
         répond pas toujours (délai dépassé, erreur 5xx) : on vérifie alors si la mise est
         passée, sinon on la renvoie, jusqu'à une réponse ou jusqu'à `deadline`
-        (time.monotonic())."""
+        (time.monotonic()). Mise refusée : la réponse du site est copiée dans `refusal`
+        (code « bid_too_low » avec le minimum « min », « insufficient_balance »…)."""
         path = f"/api/marketplace/{auction_id}/bid"
         tries = 0
         while True:
@@ -583,6 +587,8 @@ class WikiMasters:
                 return True  # un essai précédent était passé sans que la réponse arrive
             if answered:
                 log.warning("Mise de %d refusée par le site (HTTP %d : %s).", amount, status, text[:200])
+                if refusal is not None and isinstance(data, dict):
+                    refusal.update(data)
                 return False
             if deadline is None or time.monotonic() + BID_RETRY_PAUSE >= deadline:
                 log.warning("Mise de %d : pas de réponse du site après %d essai(s) (%s).", amount, tries,

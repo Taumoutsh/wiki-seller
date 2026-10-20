@@ -220,14 +220,21 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
 - sinon, le script choisit dans le Marché l'enchère la moins chère dont la mise minimale
   ne dépasse pas votre maximum, et **la garde sans miser** : à chaque passe, il vérifie
   qu'elle reste dans la limite (sinon il en cherche une autre) ;
-- il revient pour la dernière minute, relit l'enchère **chaque seconde** et mise à
-  `surenchere` secondes (30) de la fin **la mise minimale**, calculée comme le site (la
-  mise de départ, puis 10 % de plus que la mise en cours, au moins +1), puis surenchérit
-  **à chaque fois qu'il est dépassé**, dans la limite ; une mise des 10 dernières
-  secondes prolonge l'enchère de 60 s, la surveillance continue jusqu'à la vraie fin ;
-  plusieurs fins d'enchère proches sont surveillées **en même temps** (une par carte), par
-  le veilleur, à part des passes (une passe laisse tranquille une carte dont la fin
-  approche) ;
+- il revient pour la dernière minute, relit l'enchère **chaque seconde** (mise actuelle,
+  temps restant, qui mène) et mise à `surenchere` secondes (30) de la fin **la mise
+  minimale**, calculée comme le site (la mise de départ, puis 10 % de plus que la mise en
+  cours, au moins +1), puis surenchérit **à chaque fois qu'il est dépassé**, dans la
+  limite ;
+- **prolongations :** une mise des 10 dernières secondes prolonge l'enchère de 60 s ; la
+  surveillance continue tant que le site dit l'enchère active, même passé l'heure de fin
+  (prolongation vue en retard), et surenchérit de nouveau à `surenchere` secondes de la
+  nouvelle fin ; une mise refusée parce que l'enchère a monté entre-temps est refaite
+  aussitôt au minimum indiqué par le site, tant qu'il reste dans la limite (solde
+  insuffisant ou vérification demandée par le site : prévenu une fois) ;
+- plusieurs fins d'enchère proches sont surveillées **en même temps** (une par carte), par
+  le veilleur, à part des passes ; la surveillance **passe avant tout le reste** : pendant
+  ce temps, les requêtes des passes et de la défausse du compte attendent, et le fil des
+  prix s'arrête (une passe laisse aussi tranquille une carte dont la fin approche) ;
 - au-dessus de votre maximum, il abandonne cette enchère et en cherche une autre ;
 - **une seule enchère à la fois par carte** ; `budget` limite la somme des mises en
   cours, vérifiée au moment de miser.
@@ -335,7 +342,8 @@ lisent aucun : elles prennent le cache et lui demandent les autres.
   la carte (le prix moyen d'une carte se lit avec la session d'un compte qui la possède),
   jamais pendant une passe de ce compte.
 - **Fins d'enchère :** le fil se met en pause dès qu'un compte approche d'une fin
-  d'enchère suivie, pour qu'aucune requête de prix ne gêne la mise de dernière seconde.
+  d'enchère suivie, et tant qu'une fin d'enchère est surveillée (prolongations
+  comprises), pour qu'aucune requête de prix ne gêne la mise de dernière seconde.
 - **Passe anticipée :** quand tous les prix de vente demandés par un compte sont lus,
   sa boucle est réveillée pour mettre en vente sans attendre `intervalle`.
 - Un refus passager du site fait réessayer la carte 30 s plus tard (3 essais au plus).

@@ -167,6 +167,37 @@ def test_card_asked_for_a_sale_keeps_its_place_in_the_queue(tmp_path, worker):
     assert [c for kind, c in site.events if kind == "prix"] == ["B", "A", "C"]
 
 
+def test_pass_requests_wait_for_a_watched_auction_end():
+    import threading
+    import time
+
+    from wiki_seller.session import SessionGate
+
+    lock, done = SessionGate(), []
+    with lock.watching():
+        waiting = threading.Thread(target=lambda: (lock.wait_watches(), done.append(True)))
+        waiting.start()
+        time.sleep(0.3)
+        assert not done  # la requête de la passe attend la fin de la surveillance
+    waiting.join(2)
+    assert done
+
+
+def test_worker_pauses_while_an_auction_end_is_watched(tmp_path, worker, monkeypatch):
+    from wiki_seller import watcher
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        config = make_config(tmp_path, site.url, [])
+        with open_site(config):
+            pass
+        prices = worker([config])
+        prices.request(card("D"), config, SALES)
+        monkeypatch.setattr(watcher, "busy", lambda: True)  # prolongations : fin lue déjà passée
+        assert not prices.step() and site.events == []
+        monkeypatch.setattr(watcher, "busy", lambda: False)
+        assert prices.step()
+
+
 def test_discard_and_price_worker_give_way_during_an_auction_end(tmp_path):
     from wiki_seller.session import SessionGate
 

@@ -9,8 +9,9 @@ plusieurs comptes n'est lue qu'une fois.
 - Session : celle du Marché s'il y en a une, sinon celle d'un compte qui a demandé la
   carte (le prix moyen ne se lit qu'avec la session d'un compte qui la possède), jamais
   pendant une passe de ce compte.
-- Le fil se met en pause dès qu'un compte approche d'une fin d'enchère suivie : une mise
-  de dernière seconde ne doit pas tomber sur un refus du site (trop de requêtes).
+- Le fil se met en pause dès qu'un compte approche d'une fin d'enchère suivie, et tant
+  qu'une fin d'enchère est surveillée (prolongations comprises) : une mise de dernière
+  seconde ne doit pas tomber sur un refus du site (trop de requêtes).
 - Quand tous les prix de vente demandés par un compte sont lus, sa boucle est réveillée
   pour une passe de vente anticipée (on_ready)."""
 
@@ -151,9 +152,13 @@ class PriceWorker:
         return True
 
     def snipe_soon(self) -> bool:
-        """Un compte approche d'une fin d'enchère suivie (ou la surveille déjà)."""
+        """Un compte approche d'une fin d'enchère suivie (ou la surveille déjà, prolongations
+        comprises)."""
+        from . import watcher
         from .buying import WantedState
 
+        if watcher.busy():
+            return True
         limit = now_utc() + SNIPE_GUARD
         for config in self.accounts():
             if config.paused:
