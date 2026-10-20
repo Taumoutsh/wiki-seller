@@ -35,10 +35,10 @@ HELP_TEXT = ("📖 Commandes\n"
              "\n🛒 Acheter\n"
              "/buy <carte> [max] — acheter, protégée une fois obtenue\n"
              "/buyandsell <carte> [max] [revente] — acheter puis revendre\n"
-             "/unbuy <carte> — annuler un achat\n"
+             "/unbuy <carte> [rareté] — annuler un achat\n"
              "\n💰 Vendre\n"
              "/sell <carte> [prix] — vendre à ce prix, en priorité\n"
-             "/unsell <carte> — annuler une vente\n"
+             "/unsell <carte> [rareté] — annuler une vente\n"
              "\n🛡️ Protéger\n"
              "/safe <carte> — jamais défaussée, un exemplaire gardé\n"
              "/unsafe <carte> — ne plus la protéger\n"
@@ -229,15 +229,22 @@ def _run(config, command: str, args: str) -> str:
                 f"({total} carte(s) protégée(s))." if added else f"« {args} » est déjà protégée.")
     if command == "/unsafe":
         return f"« {args} » n'est plus protégée." if remove_safe(config, args) else f"« {args} » n'était pas protégée."
-    if command == "/unbuy":
-        return f"« {args} » retirée des achats." if remove_buy(config, args) else f"« {args} » n'est pas dans les achats."
-    if command == "/unsell":
-        return (f"« {args} » retirée des ventes (une enchère déjà lancée continue)." if remove_sell(config, args)
-                else f"« {args} » n'est pas dans les ventes.")
+    if command in ("/unbuy", "/unsell"):  # « /unbuy Tour Eiffel L+ » : cette rareté seulement
+        remove, where = (remove_buy, "achats") if command == "/unbuy" else (remove_sell, "ventes")
+        parsed = parse_card_command(args, 0, f"Usage : {command} <carte> [rareté]", ("rarete",), optional_prices=True)
+        removed = remove(config, parsed.name, parsed.rarity or None)
+        if not removed and parsed.rarity:  # le nom finit par un code de rareté (« Vitamine C »)
+            parsed = parsed.__class__(" ".join(args.replace(";", " ").split()), [])
+            removed = remove(config, parsed.name, None)
+        what = f"« {parsed.name} »{f' ({parsed.rarity})' if parsed.rarity else ''}"
+        if not removed:
+            return f"{what} n'est pas dans les {where}."
+        lines = f" ({removed} raretés)" if removed > 1 else ""
+        return f"{what} retirée des {where}{lines}" + (" (une enchère déjà lancée continue)." if where == "ventes" else ".")
     if command in ("/buy", "/want"):
         parsed = parse_card_command(args, 1, BUY_USAGE, ("copies", "vendeur", "rarete"), optional_prices=True)
         status, card = set_buy(config, parsed.name, parsed.prices[0], parsed.copies, seller=parsed.seller,
-                               rarity=parsed.rarity)
+                               rarity=parsed.rarity or None)
         resale = f", revendue à {_sell(card.sell_price)}{_for(card.sell_duration)} une fois obtenue" \
             if card.sell_price else ""
         return (f"🛒 « {card.name} »{_rarity(card)} {status} dans les achats ({_max(card.max_price)}, {card.copies} "
@@ -248,10 +255,11 @@ def _run(config, command: str, args: str) -> str:
                                     optional_prices=True)
         price, resale = parsed.prices
         if resale is None:  # revente au prix déjà demandé, sinon auto
-            known = next((c for c in buy_cards(config) if c.key == normalize_name(parsed.name)), None)
+            known = next((c for c in buy_cards(config) if c.key == normalize_name(parsed.name)
+                          and (not parsed.rarity or c.rarity == parsed.rarity)), None)
             resale = (known.sell_price if known else None) or AUTO
         status, card = set_buy(config, parsed.name, price, parsed.copies, sell_price=resale, seller=parsed.seller,
-                               sell_duration=parsed.duration, rarity=parsed.rarity)
+                               sell_duration=parsed.duration, rarity=parsed.rarity or None)
         warning = "\n⚠️ Prix de vente sous le prix d'achat maximum." \
             if AUTO not in (card.max_price, card.sell_price) and card.sell_price < card.max_price else ""
         return (f"🔁 « {card.name} »{_rarity(card)} {status} dans les achats ({_max(card.max_price)}, {card.copies} "
@@ -312,7 +320,7 @@ def list_text(config) -> str:
     lines = [f"🛡️ Protégées ({len(safe)}) : " + (", ".join(safe) if safe else "aucune")]
     lines.append(f"🛒 À acheter ({len(buy)})" + (" :" if buy else " : aucune"))
     for card in buy:
-        tracked = won.get(card.key) or {}
+        tracked = won.get(card.id) or {}
         got = len(tracked.get("won") or {})
         lines.append(f"• {card.name}{_rarity(card)} : {_max(card.max_price, tracked.get('auto_max'))}, {got}/{card.copies} obtenu(s)"
                      f"{_from(card.seller)}"

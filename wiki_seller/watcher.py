@@ -90,7 +90,7 @@ class EndWatcher:
             with wanted_lock(config):
                 state = WantedState(config.wanted_state_file)
             entry = state.data["cards"].get(key)
-            card = next((c for c in buy_cards(config) if c.key == key), None)
+            card = next((c for c in buy_cards(config) if c.id == key), None)
             if entry is None or card is None or entry.get("status") != "bidding":
                 return
             if card.max_price == AUTO:

@@ -97,7 +97,7 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
     plus proches de la fin d'abord : ✅ vous menez, ⚠️ dépassé avec surenchère prévue
     avant la fin, ❌ abandonnée (au-dessus du max), 👀 suivie sans mise encore."""
     try:
-        cards = {c.key: c for c in buy_cards(config)}
+        cards = {c.id: c for c in buy_cards(config)}
     except ListError:
         return []
     tracked = read_json(config.wanted_state_file, {}).get("cards", {})
@@ -106,10 +106,11 @@ def bid_lines(config, mine: dict, my_id: str | None, now: datetime | None = None
     for auction in mine.get("bidding") or []:
         if not isinstance(auction, dict) or auction.get("status", "active") != "active":
             continue
-        card = cards.get(normalize_name(auction_title(auction)))
-        if card is None or ended(auction, now) or not rarity_matches(auction, card, unknown_ok=True):
+        card = next((c for c in cards.values() if c.key == normalize_name(auction_title(auction))
+                     and rarity_matches(auction, c, unknown_ok=True)), None)
+        if card is None or ended(auction, now):
             continue
-        entry = tracked.get(card.key) or {}
+        entry = tracked.get(card.id) or {}
         current, end = auction.get("current_bid"), parse_time(auction.get("end_at"))
         max_price = entry.get("auto_max") if card.max_price == AUTO else card.max_price
         if my_id and auction.get("current_bidder_id") == my_id:

@@ -116,8 +116,13 @@ exemplaire shiny n'est **jamais vendu automatiquement ni défaussé** : seul un 
 le vend.
 
 Avec une rareté, l'achat ne vise que les enchères de cette rareté, et la vente (ou la
-revente de `/buyandsell`) que vos exemplaires de cette rareté. Une carte n'a qu'une ligne
-par liste : renvoyer `/buy Tour Eiffel L` change la rareté voulue. Pour un nom qui finit
+revente de `/buyandsell`) que vos exemplaires de cette rareté. Une carte peut être dans
+une liste **une fois par rareté** : `/buy Tour Eiffel 500 L` et `/buy Tour Eiffel 5000 L+`
+font deux lignes, chacune avec son prix et son suivi. Renvoyer la commande avec la même
+rareté met sa ligne à jour ; sans rareté, une carte présente en plusieurs raretés demande
+de préciser laquelle. `/unbuy Tour Eiffel L+` retire une ligne, `/unbuy Tour Eiffel` toutes
+(de même pour `/unsell`). Une vente demandée ne réserve que les exemplaires de sa rareté :
+les autres restent à la vente automatique. Pour un nom qui finit
 par un code de rareté (« Vitamine C »), terminez le nom par `;` : `/buy Vitamine C; 50`.
 
 **Prix `auto` :** calculé à chaque passe d'après le prix du marché (voir « Prix des

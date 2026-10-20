@@ -195,7 +195,7 @@ class WantedState:
             self.data["my_id"] = value
 
     def card(self, card: BuyCard) -> dict:
-        return self.data["cards"].setdefault(card.key, {"name": card.name})
+        return self.data["cards"].setdefault(card.id, {"name": card.name})
 
     def save(self) -> None:
         write_json(self.path, self.data)
@@ -246,7 +246,11 @@ def run_bids(site, config: Config, dry_run: bool, snipe_only: bool = False) -> N
 def _run_bids(site, config: Config, dry_run: bool, snipe_only: bool) -> None:
     wanted = buy_cards(config)
     state = WantedState(config.wanted_state_file)
-    dropped = set(state.data["cards"]) - {c.key for c in wanted}  # /unbuy : suivi oublié
+    for card in wanted:  # ancien suivi, au nom seul, d'une carte achetée dans une seule rareté
+        if card.id != card.key and card.id not in state.data["cards"] and card.key in state.data["cards"] \
+                and not any(c.id == card.key for c in wanted):
+            state.data["cards"][card.id] = state.data["cards"].pop(card.key)
+    dropped = set(state.data["cards"]) - {c.id for c in wanted}  # /unbuy : suivi oublié
     if dropped and not dry_run:
         for key in dropped:
             del state.data["cards"][key]
@@ -351,7 +355,8 @@ def _run_bids(site, config: Config, dry_run: bool, snipe_only: bool) -> None:
 
             if auction is None:
                 found = site.search_auctions(card.name)
-                auction = choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned | taken, rivals)
+                own = {e.get("auction_id") for k, e in state.data["cards"].items() if k != card.id}  # autres lignes
+                auction = choose_auction(found, card, state.my_id, buyer.now(), my_sales, abandoned | taken | own, rivals)
                 if auction is not None and not claim(config, auction["id"]):
                     auction = None  # choisie au même instant par un autre compte
                 if auction is None:
@@ -489,7 +494,7 @@ class _Buyer:
             return
         message = complete_purchase(self.config, card, bought)
         collection.forget(self.config)  # carte obtenue : collection relue à la passe suivante
-        del self.state.data["cards"][card.key]  # redemandée plus tard, elle repartira de zéro
+        del self.state.data["cards"][card.id]  # redemandée plus tard, elle repartira de zéro
         log.info("Achat : %s", message)
         notify(self.config, message)
 

@@ -192,7 +192,7 @@ def test_rarity_option_buys_and_sells_only_that_rarity(tmp_path):
         assert "« Victor Hugo » (SR) ajoutée" in run_list_command(config, "/sell", "Victor Hugo 900 SR")
         assert "• Gustave Eiffel (SR) : 100 max" in run_list_command(config, "/list", "")
         run_once(config)
-    assert json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel"]["auction_id"] == "s1"  # pas C
+    assert json.loads(config.wanted_state_file.read_text())["cards"]["gustave eiffel|SR"]["auction_id"] == "s1"  # pas C
     assert [(l["card_id"], l["price"]) for l in site.listings] == [("h1", "900")]  # l'exemplaire SR
     assert buy_cards(config)[0].rarity == "SR" and sell_cards(config)[0].rarity == "SR"
 
@@ -219,10 +219,11 @@ def test_shiny_legendaries(tmp_path):
         assert "(L+ shiny) ajoutée" in run_list_command(config, "/sell", "Victor Hugo 5000 L+")
         run_once(config)
     state = json.loads(config.wanted_state_file.read_text())["cards"]
-    assert state["gustave eiffel"]["auction_id"] == "s1"  # la shiny, pas la normale moins chère
-    assert state["loire"]["auction_id"] == "n2"  # L sans « + » : pas la shiny, pourtant moins chère
-    # /sell … L+ vend l'exemplaire shiny ; la vente automatique (raretés L) ne vend que le Rhône normal.
-    assert sorted((l["card_id"], l["price"]) for l in site.listings) == [("h2", "5000"), ("r1", "350")]
+    assert state["gustave eiffel|L+"]["auction_id"] == "s1"  # la shiny, pas la normale moins chère
+    assert state["loire|L"]["auction_id"] == "n2"  # L sans « + » : pas la shiny, pourtant moins chère
+    # /sell … L+ vend l'exemplaire shiny ; la vente automatique (raretés L) vend les normaux, jamais un shiny.
+    assert sorted((l["card_id"], l["price"]) for l in site.listings) == [
+        ("h1", "700"), ("h2", "5000"), ("r1", "350")]
     assert sell_cards(config)[0].rarity == "L+"
 
 
@@ -238,3 +239,22 @@ def test_shiny_copies_are_never_discarded(tmp_path):
         run_once(config)
         DISCARDER.join(120)
     assert site.discarded == ["Commune"] and [c["id"] for c in site.collection] == ["c2"]  # la shiny reste
+
+
+
+def test_same_card_in_two_rarities_has_two_lines(tmp_path):
+    from wiki_seller.commands import run_list_command
+    from wiki_seller.lists import buy_cards, sell_cards
+
+    config = make_config(tmp_path, "http://127.0.0.1:1", [], wanted=[])
+    assert "(L) ajoutée" in run_list_command(config, "/buy", "Tour Eiffel 500 L")
+    assert "(L+ shiny) ajoutée" in run_list_command(config, "/buy", "Tour Eiffel 5000 L+")
+    assert "(L) mise à jour" in run_list_command(config, "/buy", "Tour Eiffel 600 L")
+    assert [(c.rarity, c.max_price) for c in buy_cards(config)] == [("L", 600), ("L+", 5000)]
+    assert "précisez laquelle" in run_list_command(config, "/buy", "Tour Eiffel x2")  # quelle ligne ?
+    assert run_list_command(config, "/unbuy", "Tour Eiffel L+") == "« Tour Eiffel » (L+) retirée des achats."
+    assert [c.rarity for c in buy_cards(config)] == ["L"]
+    run_list_command(config, "/sell", "Loire 80 L")
+    run_list_command(config, "/sell", "Loire 900 L+")
+    assert run_list_command(config, "/unsell", "Loire").startswith("« Loire » retirée des ventes (2 raretés)")
+    assert sell_cards(config) == []

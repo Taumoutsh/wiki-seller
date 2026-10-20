@@ -48,6 +48,29 @@ class ListError(Exception):
     pass
 
 
+def line_id(name: str, rarity: str = "") -> str:
+    """Identifiant d'une ligne d'achat ou de vente : nom, et rareté s'il y en a une."""
+    return normalize_name(name) + (f"|{rarity}" if rarity else "")
+
+
+def _find(data: list[dict], name: str, rarity: str | None, what: str) -> dict | None:
+    """Ligne de cette carte : celle de la rareté demandée (« » : la ligne sans rareté) ;
+    rareté non précisée (None) : la seule ligne de la carte, ListError s'il y en a plusieurs."""
+    same = [e for e in data if normalize_name(e["name"]) == normalize_name(name)]
+    if rarity is None:
+        if len(same) > 1:
+            raise ListError(f"« {same[0]['name']} » est {what} en plusieurs raretés "
+                            f"({', '.join(e.get('rarity') or 'toutes' for e in same)}) : précisez laquelle.")
+        return same[0] if same else None
+    return next((e for e in same if e.get("rarity", "") == rarity), None)
+
+
+def _remove(data: list[dict], name: str, rarity: str | None) -> list[dict]:
+    """Liste sans les lignes de cette carte (toutes ses raretés si rarity est None)."""
+    return [e for e in data if normalize_name(e["name"]) != normalize_name(name)
+            or (rarity is not None and e.get("rarity", "") != rarity)]
+
+
 @dataclass(frozen=True)
 class BuyCard:
     name: str
@@ -61,6 +84,11 @@ class BuyCard:
     @property
     def key(self) -> str:
         return normalize_name(self.name)
+
+    @property
+    def id(self) -> str:
+        """Ligne de la liste : une carte peut y être une fois par rareté (ex. L et L+)."""
+        return line_id(self.name, self.rarity)
 
 
 @dataclass(frozen=True)
@@ -79,6 +107,10 @@ class SellCard:
     @property
     def key(self) -> str:
         return normalize_name(self.name)
+
+    @property
+    def id(self) -> str:
+        return line_id(self.name, self.rarity)
 
     @property
     def remaining(self) -> int:
@@ -217,16 +249,17 @@ def set_buy(config, name: str, max_price: int | str | None, copies: int | None =
             sell_price: int | str | None = None, seller: str | None = None,
             sell_duration: str | None = None, rarity: str | None = None) -> tuple[str, BuyCard]:
     """Ajoute une carte aux achats, ou met à jour ses prix (et options indiquées) ; sans
-    prix max, celui de la liste est gardé (AUTO pour une nouvelle carte).
+    prix max, celui de la liste est gardé (AUTO pour une nouvelle carte). Une carte a une
+    ligne par rareté : rarity choisit la ligne (None : la seule ligne de la carte).
     Renvoie (« ajoutée » | « mise à jour » | « inchangée », carte)."""
     with LISTS_LOCK:
         data = _buy_raw(config)
-        entry = next((e for e in data if normalize_name(e["name"]) == normalize_name(name)), None)
+        entry = _find(data, name, rarity, "dans les achats")
         before = dict(entry) if entry else None
         if entry is None:
             entry = {"name": name}
             data.append(entry)
-            _forget_purchase(config, name)  # une carte déjà obtenue peut être rachetée
+            _forget_purchase(config, line_id(name, rarity or ""))  # une carte déjà obtenue peut être rachetée
         if max_price is not None or "max_price" not in entry:
             entry["max_price"] = AUTO if max_price is None else max_price
         if copies:
@@ -247,22 +280,23 @@ def set_buy(config, name: str, max_price: int | str | None, copies: int | None =
         return status, _buy_card(entry)
 
 
-def remove_buy(config, name: str) -> bool:
+def remove_buy(config, name: str, rarity: str | None = None) -> int:
+    """Retire la carte des achats (toutes ses raretés si rarity est None) ; renvoie le
+    nombre de lignes retirées."""
     with LISTS_LOCK:
         data = _buy_raw(config)
-        kept = [e for e in data if normalize_name(e["name"]) != normalize_name(name)]
-        if len(kept) == len(data):
-            return False
-        write_json(buy_file(config), kept)
-        return True
+        kept = _remove(data, name, rarity)
+        if len(kept) < len(data):
+            write_json(buy_file(config), kept)
+        return len(data) - len(kept)
 
 
-def _forget_purchase(config, name: str) -> None:
-    """Oublie le suivi d'achat d'une carte (state/wanted_state.json) : sans cela, une
+def _forget_purchase(config, card_id: str) -> None:
+    """Oublie le suivi d'achat d'une ligne (state/wanted_state.json) : sans cela, une
     carte déjà obtenue et redemandée serait considérée comme déjà achetée."""
     state = read_json(config.wanted_state_file, {})
-    if normalize_name(name) in state.get("cards", {}):
-        del state["cards"][normalize_name(name)]
+    if card_id in state.get("cards", {}):
+        del state["cards"][card_id]
         write_json(config.wanted_state_file, state)
 
 
@@ -270,9 +304,9 @@ def complete_purchase(config, card: BuyCard, bought: int) -> str:
     """Achat terminé : la carte quitte les achats et devient protégée, ou part dans les
     ventes (/buyandsell). Renvoie le message à envoyer."""
     with LISTS_LOCK:
-        remove_buy(config, card.name)
+        remove_buy(config, card.name, card.rarity)
         if card.sell_price:
-            set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None, card.rarity or None)
+            set_sell(config, card.name, card.sell_price, bought, card.sell_duration or None, card.rarity)
             duration = f" pour {card.sell_duration}" if card.sell_duration else ""
             return (f"🔁 « {card.name} » : achat terminé, mise en vente à "
                     f"{price_text(card.sell_price, AUTO_SELL_RATIO)}{duration} "
@@ -308,11 +342,11 @@ def set_sell(config, name: str, price: int | str | None, copies: int | None = No
              duration: str | None = None, rarity: str | None = None) -> tuple[str, SellCard]:
     """Ajoute une carte aux ventes, ou met à jour son prix (les exemplaires indiqués
     s'ajoutent alors à ceux restant à vendre, la durée indiquée remplace l'ancienne) ;
-    sans prix, celui de la liste est gardé (AUTO pour une nouvelle carte).
-    Renvoie (statut, carte)."""
+    sans prix, celui de la liste est gardé (AUTO pour une nouvelle carte). Une ligne par
+    rareté, comme les achats. Renvoie (statut, carte)."""
     with LISTS_LOCK:
         data = _sell_raw(config)
-        entry = next((e for e in data if normalize_name(e["name"]) == normalize_name(name)), None)
+        entry = _find(data, name, rarity, "dans les ventes")
         if entry is None:
             entry = {"name": name, "price": AUTO if price is None else price, "copies": copies or 1,
                      "added_at": now_utc().isoformat()}
@@ -334,22 +368,21 @@ def set_sell(config, name: str, price: int | str | None, copies: int | None = No
         return status, _sell_card(entry)
 
 
-def remove_sell(config, name: str) -> bool:
+def remove_sell(config, name: str, rarity: str | None = None) -> int:
     with LISTS_LOCK:
         data = _sell_raw(config)
-        kept = [e for e in data if normalize_name(e["name"]) != normalize_name(name)]
-        if len(kept) == len(data):
-            return False
-        write_json(sell_file(config), kept)
-        return True
+        kept = _remove(data, name, rarity)
+        if len(kept) < len(data):
+            write_json(sell_file(config), kept)
+        return len(data) - len(kept)
 
 
-def record_sale(config, name: str, auction_id: str) -> SellCard | None:
+def record_sale(config, name: str, auction_id: str, rarity: str = "") -> SellCard | None:
     """Note une vente conclue ; la carte quitte la liste une fois tous ses exemplaires
     vendus. Renvoie la carte à jour (None si elle n'était plus dans la liste)."""
     with LISTS_LOCK:
         data = _sell_raw(config)
-        entry = next((e for e in data if normalize_name(e["name"]) == normalize_name(name)), None)
+        entry = _find(data, name, rarity, "dans les ventes")
         if entry is None:
             return None
         entry["sold"] = [*entry.get("sold", []), auction_id]
@@ -358,14 +391,14 @@ def record_sale(config, name: str, auction_id: str) -> SellCard | None:
         return card
 
 
-def update_sell(config, name: str, /, **changes) -> None:
-    """Modifie des champs d'une carte à vendre (missing_notified, keep_one, copies)."""
+def update_sell(config, name: str, rarity: str, /, **changes) -> None:
+    """Modifie des champs d'une ligne à vendre (missing_notified, keep_one, copies, name)."""
     with LISTS_LOCK:
         data = _sell_raw(config)
-        for entry in data:
-            if normalize_name(entry["name"]) == normalize_name(name):
-                entry.update(changes)
-        write_json(sell_file(config), data)
+        entry = _find(data, name, rarity, "dans les ventes")
+        if entry is not None:
+            entry.update(changes)
+            write_json(sell_file(config), data)
 
 
 # ─────────────────────────── Tout ensemble ───────────────────────────

@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-from .buying import WantedState, auction_title, my_user_id
+from .buying import WantedState, auction_title, my_user_id, rarity_matches
 from .config import Config
 from .lists import (AUTO, AUTO_SELL_RATIO, ListError, SellCard, group_matches, record_sale, remove_safe, sell_cards,
                     update_sell)
@@ -161,7 +161,7 @@ def record_sales(config: Config, cards: list[SellCard], history: list, my_id: st
             settled = parse_time(auction.get("settled_at") or auction.get("end_at"))
             if (auction.get("id") in sold or auction_outcome(auction) != "sold"
                     or (my_id and auction.get("seller_id") != my_id)
-                    or normalize_name(auction_title(auction)) != card.key
+                    or normalize_name(auction_title(auction)) != card.key or not rarity_matches(auction, card)
                     or (added and (not settled or settled < added))):
                 continue
             sold.add(auction["id"])
@@ -169,7 +169,7 @@ def record_sales(config: Config, cards: list[SellCard], history: list, my_id: st
             if dry_run:
                 log.info("Simulation : vente de « %s » à %s (non notée).", card.name, price)
                 continue
-            updated = record_sale(config, card.name, auction["id"])
+            updated = record_sale(config, card.name, auction["id"], card.rarity)
             left = updated.remaining if updated else 0
             log.info("Vente demandée conclue : « %s » à %s%s.", card.name, price,
                      f" ; encore {left} exemplaire(s) à vendre" if left > 0 else " ; retirée de la liste")
@@ -198,13 +198,13 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
         if not owned:
             log.info("Vente demandée : « %s » introuvable dans la collection.", card.name)
             if not card.missing_notified and not dry_run:
-                update_sell(config, card.name, missing_notified=True)
+                update_sell(config, card.name, card.rarity, missing_notified=True)
                 notify(config, f"❓ « {card.name} »{f' {card.rarity}' if card.rarity else ''} est introuvable dans "
                                "votre collection : elle reste dans "
                                "les ventes et partira dès qu'elle y sera (/unsell pour l'annuler).")
             continue
         if not dry_run and (card.missing_notified or card.name != matching[0].title):
-            update_sell(config, card.name, missing_notified=False, name=matching[0].title)  # nom exact
+            update_sell(config, card.name, card.rarity, missing_notified=False, name=matching[0].title)  # nom exact
         card = dataclasses.replace(card, name=matching[0].title)
         keep_one = card.keep_one
         if keep_one is None:  # première fois que la carte est trouvée
@@ -255,7 +255,7 @@ def _settle_protection(config: Config, card: SellCard, keep_one: bool, owned: in
             remove_safe(config, card.name)
             notify(config, f"🛡️ « {card.name} » (un seul exemplaire) n'est plus protégée : elle est mise en vente.")
     if not dry_run:
-        update_sell(config, card.name, keep_one=keep_one, copies=copies)
+        update_sell(config, card.name, card.rarity, keep_one=keep_one, copies=copies)
     return dataclasses.replace(card, keep_one=keep_one, copies=copies)
 
 
@@ -294,9 +294,9 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
         _list_all(listings, items)
         if config.sell_rarities:
             entries = [e for e in entries if entry_rarity(e) in config.sell_rarities]
-    priority_keys = {c.key for c in priority}
+    # Exemplaires visés par une vente demandée : laissés à celle-ci (les autres raretés de la carte restent).
     groups = [g for g in parse_collection(entries, excluded_copy_ids=in_trade)
-              if normalize_name(g.title) not in priority_keys]
+              if not any(normalize_name(g.title) == c.key and group_matches(g, c.rarity) for c in priority)]
     if not config.selling:
         log.info("Ventes automatiques coupées (réglage raretes : aucune).")
     elif listings.room:
