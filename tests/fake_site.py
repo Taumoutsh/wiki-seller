@@ -84,6 +84,7 @@ class FakeWikiMasters:
         # Mise d'un autre pas encore visible à la lecture de l'enchère (détail en retard sur
         # les mises) : le site refuse alors la nôtre en indiquant le minimum.
         self.hidden_bids: dict[str, int] = {}
+        self.cards: list[dict] = []  # table des cartes de la base (/rest/v1/cards, clé publique)
         self.extension: timedelta | None = None  # mise dans les 10 dernières s : fin repoussée d'autant
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -152,6 +153,10 @@ class FakeWikiMasters:
                     return self._send(200, APP_JS, "application/javascript")
                 if url.path == "/marketplace":
                     return self._send(200, MARKET_HTML, "text/html; charset=utf-8")
+                if url.path == "/rest/v1/cards":
+                    if self.headers.get("apikey") != ANON_KEY:
+                        return self._send(401, {"message": "No API key found in request"})
+                    return self._send(200, site.query_cards(qs))
                 if not url.path.startswith("/api/"):
                     return self._send(404, "<html>404</html>", "text/html")
                 if not self._authed():
@@ -273,6 +278,30 @@ class FakeWikiMasters:
 
         return Handler
 
+
+    def query_cards(self, qs):
+        """Filtres de la base (PostgREST) que le bot utilise : eq, ilike, like (« * »), plfts."""
+        from wiki_seller.selection import normalize_name
+
+        def document(card):  # comme le site : titre puis description, minuscules sans accents
+            return normalize_name(f"{card['wikipedia_title']} {card.get('category', '')}")
+
+        def matches(card, column, condition):
+            op, _, value = condition.partition(".")
+            text = document(card) if column == "search_document" else str(card.get(column, ""))
+            if op == "eq":
+                return text == value
+            if op == "ilike":
+                return text.casefold() == value.casefold()
+            if op == "like":
+                return text.startswith(value.rstrip("*")) if value.endswith("*") else text == value
+            if op.startswith("plfts"):
+                return set(value.split()) <= set(document(card).split())
+            raise AssertionError(condition)
+
+        rows = [c for c in self.cards
+                if all(matches(c, k, v) for k, values in qs.items() if k not in ("select", "limit") for v in values)]
+        return rows[:int(qs.get("limit", ["1000"])[0])]
 
     def outbid(self, auction_id, amount):
         self.auctions[auction_id].update(current_bid=amount, effective_bid=amount, current_bidder_id="rival")

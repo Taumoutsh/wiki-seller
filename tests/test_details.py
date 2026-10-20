@@ -57,23 +57,44 @@ def test_command_arguments():
         details.parse("  ")
 
 
+def test_card_is_found_in_the_site_database_whatever_the_case_and_accents(tmp_path):
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        site.cards = [{"id": "V", "wikipedia_title": "Château de Versailles", "rarity": "UR"},
+                      {"id": "V2", "wikipedia_title": "Château de Versailles (homonymie)", "rarity": "PC"},
+                      {"id": "F", "wikipedia_title": "France", "rarity": "L"},
+                      {"id": "F2", "wikipedia_title": "France (marque)", "rarity": "C"}]
+        config = make_config(tmp_path, site.url, [])
+        with open_site(config) as wm:
+            assert details.find_card(wm, "Château de Versailles")["id"] == "V"  # titre exact
+            assert details.find_card(wm, "FRANCE")["id"] == "F"  # majuscules
+            assert details.find_card(wm, "chateau de versailles")["id"] == "V"  # accents
+            assert details.find_card(wm, "Château") is None
+            assert details.card_by_id(wm, "F2")["wikipedia_title"] == "France (marque)"
+
+
 def test_details_page_is_sent_to_telegram(tmp_path):
     auction = market_auction("a1", "Victor Hugo", 80)
     auction["card"].update(id="D", rarity="R")
     with FakeWikiMasters(COLLECTION, API_AVERAGES, auctions=[auction]) as site, FakeTelegram() as tg:
+        site.cards = [{"id": "D", "wikipedia_title": "Victor Hugo", "rarity": "L", "atk": 10000,
+                       "summary": "Écrivain français.", "image_url": "https://upload.wikimedia.org/vh.jpg"}]
         site.market_sales["D"] = [sale("s1", 280, 3), sale("s2", 300, 2), sale("s3", 320, 1)]
         config = make_config(tmp_path, site.url, [])
         with open_site(config):  # session du compte (pas de session Marché)
             pass
         before = {f for f in tmp_path.rglob("*") if f.is_file()}
         details.send_details(config, "victor hugo", TelegramBot(TOKEN, CHAT_ID, tmp_path / "tg.json", tg.url))
-        assert {f for f in tmp_path.rglob("*") if f.is_file()} == before  # fiche jamais écrite sur disque
+        written = {f for f in tmp_path.rglob("*") if f.is_file()} - before
+        assert {f.name for f in written} <= {"site.json"}  # fiche jamais écrite (site.json : clé publique du site)
         assert not [e for e in site.events if e[0] in ("mise", "vente", "défausse")]  # lectures seulement
     assert tg.sent == [] and len(tg.documents) == 1
     document = tg.documents[0]
     assert document["name"] == "fiche-victor-hugo.html" and document["chat_id"] == CHAT_ID
     assert document["caption"].startswith("📊 Victor Hugo\nR : 3 vente(s), moyenne 300, de 280 à 320")
-    assert b"<svg" in document["content"] and "Victor Hugo".encode() in document["content"]
+    page = document["content"].decode()
+    assert "<svg" in page and "<h1>Victor Hugo</h1>" in page
+    assert "Écrivain français." in page and "10\u202f000" in page and "upload.wikimedia.org/vh.jpg" in page
+    assert "https://wikimasters.fr" not in page and f"{site.url}/marketplace/a1" in page  # enchère en cours
 
 
 def test_unknown_card_is_reported(tmp_path):

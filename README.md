@@ -358,6 +358,8 @@ Sans la boucle (passe unique), les prix sont lus pendant la passe, comme avant.
 `/details Tour Eiffel` (ou `/fiche`) renvoie, en pièce jointe, une page HTML qui s'ouvre
 sur téléphone comme sur ordinateur (sans connexion, sans script) :
 
+- **la carte** telle que la décrit la base du site : image, rareté, ATK, DEF, vues,
+  Q-score, catégorie et description ;
 - **graphique des ventes** dans le temps, une couleur par rareté, avec le prix retenu par
   le bot en pointillé ; les ventes qu'il écarte (aberrantes, ou d'avant un changement de
   valeur) sont des cercles vides, celles hors échelle des triangles en haut ;
@@ -368,9 +370,11 @@ sur téléphone comme sur ordinateur (sans connexion, sans script) :
   ventes**, avec leur écart au prix retenu.
 
 `/details Tour Eiffel L+` (ou `SR`…) se limite à une rareté ; `/details Apollo 11; SR`
-quand le nom finit par un nombre. La carte se trouve par son **titre exact** : dans les
-enchères en cours, dans les collections lues récemment, sinon dans la base du site ; à
-défaut, collez le lien d'une de ses enchères. Les ventes se lisent avec la session Marché,
+quand le nom finit par un nombre. La carte se cherche par son **titre** (celui de
+Wikipédia, sans tenir compte des majuscules ni des accents) dans la **base du site**, la
+table des cartes de sa page « Toutes les cartes », lue avec sa clé publique ; si la base
+ne répond pas, dans les enchères en cours et les collections lues récemment. Un lien ou
+un identifiant d'enchère, ou l'identifiant de la carte, marchent aussi. Les ventes se lisent avec la session Marché,
 sinon avec celle du compte (qui doit alors avoir accès au Marché). Lecture seule : rien
 n'est envoyé au site. La fiche est préparée en mémoire et envoyée à Telegram : elle n'est
 jamais enregistrée sur le serveur.

@@ -6,8 +6,10 @@ La fiche est une page HTML autonome (graphique en SVG, sans script ni ressource 
 envoyée en document Telegram : elle s'ouvre sur téléphone comme sur ordinateur. Elle est
 préparée en mémoire et n'est jamais écrite sur le serveur.
 
-La carte se donne par son nom (titre exact), par un lien ou un identifiant d'enchère, ou
-par l'identifiant de la carte. Les ventes se lisent avec la session Marché, sinon avec
+La carte se donne par son nom (titre exact, sans tenir compte des majuscules ni des
+accents), cherché dans la base du site (table des cartes, lecture publique comme sa page
+« Toutes les cartes »), par un lien ou un identifiant d'enchère, ou par l'identifiant de
+la carte. Les ventes se lisent avec la session Marché, sinon avec
 celle du compte (qui doit alors avoir accès au Marché) ; rien n'est jamais envoyé au site
 (lectures seulement)."""
 
@@ -39,6 +41,10 @@ USAGE = ("Usage : /details <carte> [rareté], ex. /details Tour Eiffel, /details
          "/details Apollo 11; SR, ou le lien d'une enchère de la carte")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 LAST_SALES_LISTED = 40
+CARD_FIELDS = ("id,wikipedia_title,wikipedia_url,summary,image_url,hide_image,nsfw_image,category,rarity,atk,def,"
+               "pageviews,q_score")
+DB_TIMEOUT = 20  # s : requête à la base du site
+SUMMARY_SHOWN = 280  # caractères de la description affichés avant « lire la suite »
 OUT = " class='out'"  # vente écartée par le bot
 # Graphique dessiné en deux tailles (sans script) : large sur ordinateur, étroit sur téléphone.
 CHART_SIZES = {"wide": (720, 300, 56), "narrow": (360, 260, 44)}  # largeur, hauteur, marge gauche
@@ -82,6 +88,7 @@ class Details:
     auctions: list[dict]
     source: str  # « session Marché » ou « session du compte »
     at: datetime
+    card: dict = field(default_factory=dict)  # ligne de la base du site (image, description, ATK…)
 
 
 # ─────────────────────────── Lecture ───────────────────────────
@@ -170,32 +177,30 @@ def _site(config: Config, use_market: bool) -> tuple[WikiMasters, str]:
     return WikiMasters(client, config), "session du compte"
 
 
-def resolve_card(site: WikiMasters, config: Config, query: str) -> tuple[str | None, str, list[dict]]:
-    """(identifiant de la carte, titre, enchères en cours de la carte) ; identifiant None
-    si la carte est introuvable."""
+def resolve_card(site: WikiMasters, query: str) -> tuple[dict | None, list[dict]]:
+    """(carte de la base du site, ou au moins {"id", "wikipedia_title"} ; enchères en cours
+    de la carte). Carte None si introuvable."""
     found = UUID.search(query)
-    if found:  # lien ou identifiant d'enchère, sinon identifiant de carte
-        auction = site.read_auction(found.group(0))
-        if auction:
-            card = auction.get("card") if isinstance(auction.get("card"), dict) else {}
-            card_id = auction.get("card_id") or card.get("id")
-            title = card.get("wikipedia_title") or ""
-            auctions = [a for a in site.search_auctions(title) if _same_card(a, card_id, title)] if title else []
-            return (str(card_id) if card_id else None), title, auctions or [auction]
-        return found.group(0), "", []
-    key = normalize_name(query)
-    auctions = [a for a in site.search_auctions(query) if normalize_name(_title(a)) == key]
-    for auction in auctions:
-        card_id = _card_id(auction)
-        if card_id:
-            return card_id, _title(auction), [a for a in auctions if _card_id(a) in (None, card_id)]
-    for entry in collection.cached_entries():  # collections lues récemment (tous les comptes)
-        if normalize_name(_title(entry)) == key and _card_id(entry):
-            return _card_id(entry), _title(entry), auctions
-    card = _lookup_card(site, query)
-    if card:
-        return card[0], card[1], auctions
-    return None, query, auctions
+    if found:  # identifiant de carte, sinon lien ou identifiant d'enchère
+        card = card_by_id(site, found.group(0))
+        if card is None:
+            auction = site.read_auction(found.group(0))
+            if auction and _card_id(auction):
+                card = card_by_id(site, _card_id(auction)) or {"id": _card_id(auction),
+                                                                "wikipedia_title": _title(auction)}
+        card = card or {"id": found.group(0)}  # ventes lues quand même
+    else:
+        card = find_card(site, query)
+        if card is None:  # base du site injoignable : enchères en cours, collections lues récemment
+            key = normalize_name(query)
+            entries = [a for a in site.search_auctions(query)] + collection.cached_entries()
+            entry = next((e for e in entries if normalize_name(_title(e)) == key and _card_id(e)), None)
+            card = {"id": _card_id(entry), "wikipedia_title": _title(entry)} if entry else None
+    if card is None:
+        return None, []
+    title = card.get("wikipedia_title") or ""
+    auctions = [a for a in site.search_auctions(title) if _same_card(a, card["id"], title)] if title else []
+    return card, auctions
 
 
 def _title(entry: dict) -> str:
@@ -214,29 +219,50 @@ def _same_card(auction: dict, card_id, title: str) -> bool:
     return own == str(card_id) if own and card_id else normalize_name(_title(auction)) == normalize_name(title)
 
 
-def _lookup_card(site: WikiMasters, name: str) -> tuple[str, str] | None:
-    """Carte cherchée par son titre dans la base du site (lecture seule) ; None si la base
-    ne répond pas ou ne la connaît pas."""
-    if any(c in name for c in "*%,()"):
-        return None
+# ─────────────────────────── Base du site (table « cards », lecture publique) ───────────────────────────
+
+
+def _cards(site: WikiMasters, params: list[tuple[str, str]]) -> list[dict] | None:
+    """Lignes de la table des cartes (clé publique du site, comme sa page « Toutes les
+    cartes ») ; None si la base ne répond pas."""
     store = site.client.store
     try:
-        store.ensure_fresh()
-        token = (store.session or {}).get("access_token")
-        query = urllib.parse.urlencode({"select": "id,wikipedia_title", "wikipedia_title": f"ilike.{name.strip()}",
-                                        "limit": "10"})
+        key = store.anon_key()
+        query = urllib.parse.urlencode([("select", CARD_FIELDS), *params])
         request = urllib.request.Request(f"{store.supabase_url()}/rest/v1/cards?{query}", headers={
-            "apikey": store.anon_key(), "Authorization": f"Bearer {token}", "User-Agent": USER_AGENT,
-            "Accept": "application/json"})
-        with urllib.request.urlopen(request, timeout=20) as response:
+            "apikey": key, "Authorization": f"Bearer {key}", "User-Agent": USER_AGENT, "Accept": "application/json",
+            "Referer": f"{site.config.base_url}/global-collection"})
+        with urllib.request.urlopen(request, timeout=DB_TIMEOUT) as response:
             rows = json.loads(response.read() or b"[]")
     except Exception as exc:
-        log.info("Fiche : recherche de « %s » dans la base du site impossible (%s).", name, exc)
+        log.info("Fiche : base du site injoignable (%s).", str(exc)[:200])
         return None
-    key = normalize_name(name)
-    for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, dict) and row.get("id") and normalize_name(str(row.get("wikipedia_title") or "")) == key:
-            return str(row["id"]), str(row["wikipedia_title"])
+    return [r for r in rows if isinstance(r, dict) and r.get("id")] if isinstance(rows, list) else None
+
+
+def card_by_id(site: WikiMasters, card_id: str) -> dict | None:
+    rows = _cards(site, [("id", f"eq.{card_id}")])
+    return rows[0] if rows else None
+
+
+def find_card(site: WikiMasters, name: str) -> dict | None:
+    """Carte de ce titre dans la base du site, sans tenir compte des majuscules ni des
+    accents. Filtres que la base sert vite : titre exact, puis recherche plein texte
+    (search_document : titre et description, en minuscules sans accents) avec le titre
+    sans majuscules, puis avec le début de search_document (le titre sans accents)."""
+    name, key = name.strip(), normalize_name(name)
+    attempts = [[("wikipedia_title", f"eq.{name}"), ("limit", "5")]]
+    if key and not any(c in name for c in "*%"):
+        words = ("search_document", f"plfts(simple).{key}")
+        attempts += [[words, ("wikipedia_title", f"ilike.{name}"), ("limit", "5")],
+                     [words, ("search_document", f"like.{key}*"), ("limit", "200")]]
+    for params in attempts:
+        rows = _cards(site, params)
+        if rows is None:
+            return None
+        match = next((r for r in rows if normalize_name(str(r.get("wikipedia_title") or "")) == key), None)
+        if match:
+            return match
     return None
 
 
@@ -249,11 +275,11 @@ def collect(config: Config, query: str, rarity: str | None) -> Details:
         lock = market._LOCK if use_market else threading.RLock()
         try:
             with lock:
-                card_id, title, auctions = resolve_card(site, config, query)
-                if card_id is None:
-                    raise DetailsError(
-                        f"« {query} » introuvable : aucune enchère en cours de cette carte et elle n'est pas dans "
-                        "vos collections. Donnez son titre exact, ou le lien d'une de ses enchères.")
+                card, auctions = resolve_card(site, query)
+                if card is None:
+                    raise DetailsError(f"« {query} » introuvable : donnez le titre exact de la carte (celui de "
+                                       "Wikipédia), ou le lien d'une de ses enchères.")
+                card_id, title = str(card["id"]), card.get("wikipedia_title") or ""
                 data = site.fetch_market_sales(card_id)
                 summary_data = site.api_get_ok(f"/api/marketplace/cards/{card_id}/sales?scope=summary")
         except SessionExpired as exc:
@@ -266,7 +292,7 @@ def collect(config: Config, query: str, rarity: str | None) -> Details:
         summary = summary_data.get("summary") if isinstance(summary_data, dict) else None
         now = now_utc()
         groups = build_groups(parse_market_sales(data), summary if isinstance(summary, dict) else None, rarity, now)
-        return Details(card_id, title, groups, auctions, source, now)
+        return Details(card_id, title, groups, auctions, source, now, card)
     raise DetailsError("Le Marché refuse la lecture des ventes : il faut une session Marché (/market) ou un compte "
                        f"qui y a accès ({last_error}).")
 
@@ -451,7 +477,39 @@ table{width:100%;border-collapse:collapse}th,td{padding:5px 4px;border-bottom:1p
 .badge{display:inline-block;min-width:2.2em;padding:1px 6px;border-radius:6px;color:#fff;font-size:.78em;
 font-weight:700;text-align:center}
 .auctions{margin:0;padding-left:1.1em}.auctions li{margin:.3em 0}
+.info{display:flex;gap:14px;align-items:flex-start}.info img{width:96px;height:auto;border-radius:8px;flex:none}
+.info p{margin:.4em 0}.info details{margin:.4em 0}.info summary{cursor:pointer;list-style:none}
+.info summary::-webkit-details-marker{display:none}.info details[open] summary{display:none}
+.more{color:#2563eb;white-space:nowrap}.chips{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.9em}
+@media (max-width:600px){.info{flex-direction:column}.info img{width:100%;max-width:240px}}
 """
+
+
+def _card_info(card: dict) -> str:
+    """Carte telle que la base du site la décrit : image, rareté, ATK/DEF, vues, description."""
+    chips = []
+    if card.get("rarity"):
+        chips.append(f"{_badge(str(card['rarity']))} rareté de la carte")
+    for label, key in (("ATK", "atk"), ("DEF", "def"), ("Vues", "pageviews"), ("Q-score", "q_score")):
+        if isinstance(card.get(key), (int, float)) and not isinstance(card.get(key), bool):
+            value = _money(card[key]) if key != "q_score" else f"{card[key]:g}"
+            chips.append(f"<span><b>{label}</b> {value}</span>")
+    image = card.get("image_url") if not card.get("hide_image") and not card.get("nsfw_image") else None
+    summary = str(card.get("summary") or "").strip()
+    text = ""
+    if len(summary) > SUMMARY_SHOWN:  # début seulement, la suite se déplie (sans script)
+        cut = summary.rfind(" ", 0, SUMMARY_SHOWN)
+        text = (f"<details><summary>{html.escape(summary[:cut if cut > 0 else SUMMARY_SHOWN])}… "
+                f"<span class=\"more\">lire la suite</span></summary><p>{html.escape(summary)}</p></details>")
+    elif summary:
+        text = f"<p>{html.escape(summary)}</p>"
+    category = f'<p class="muted">{html.escape(str(card["category"]))}</p>' if card.get("category") else ""
+    if not (chips or image or text):
+        return ""
+    img = (f'<img src="{html.escape(str(image))}" alt="" loading="lazy" referrerpolicy="no-referrer">'
+           if isinstance(image, str) and image.startswith("https://") else "")
+    return (f'<section class="card info">{img}<div><div class="chips">{"".join(chips)}</div>{category}{text}</div>'
+            "</section>")
 
 
 def render(details: Details, base_url: str) -> str:
@@ -461,7 +519,8 @@ def render(details: Details, base_url: str) -> str:
     legend = "".join(f"<span>{_badge(g.rarity)} {len(g.sales)} vente(s)</span>" for g in groups if g.sales)
     legend += ("<span>● vente · ○ écartée par le bot · ▲ hors échelle · ┄ prix retenu par le bot</span>"
                if legend else "")
-    wiki = f"https://fr.wikipedia.org/wiki/{urllib.parse.quote(details.title.replace(' ', '_'))}"
+    wiki = details.card.get("wikipedia_url") or \
+        f"https://fr.wikipedia.org/wiki/{urllib.parse.quote(details.title.replace(' ', '_'))}"
     return (
         '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -469,6 +528,7 @@ def render(details: Details, base_url: str) -> str:
         f"<h1>{title}</h1>"
         f'<p class="muted">Fiche du Marché du {details.at.astimezone(tz).strftime("%d/%m/%Y à %H:%M")} · '
         f'lue avec la {html.escape(details.source)} · <a href="{html.escape(wiki)}">Wikipédia</a></p>'
+        f"{_card_info(details.card)}"
         f'<section class="card"><h2>Ventes</h2>{_chart(groups, details.at, "wide")}'
         f'{_chart(groups, details.at, "narrow")}<div class="legend">{legend}</div>'
         "</section>"
