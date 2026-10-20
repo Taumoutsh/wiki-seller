@@ -93,7 +93,7 @@ def test_details_page_is_sent_to_telegram(tmp_path):
     assert document["caption"].startswith("📊 Victor Hugo\nR : 3 vente(s), moyenne 300, de 280 à 320")
     page = document["content"].decode()
     assert "<svg" in page and "<h1>Victor Hugo</h1>" in page
-    assert "Écrivain français." in page and "10\u202f000" in page and "upload.wikimedia.org/vh.jpg" in page
+    assert "Écrivain français." in page and "10\u202f000" in page and "vh.jpg" not in page  # pas d'image
     assert "https://wikimasters.fr" not in page and f"{site.url}/marketplace/a1" in page  # enchère en cours
 
 

@@ -41,14 +41,16 @@ USAGE = ("Usage : /details <carte> [rareté], ex. /details Tour Eiffel, /details
          "/details Apollo 11; SR, ou le lien d'une enchère de la carte")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 LAST_SALES_LISTED = 40
-CARD_FIELDS = ("id,wikipedia_title,wikipedia_url,summary,image_url,hide_image,nsfw_image,category,rarity,atk,def,"
-               "pageviews,q_score")
+CARD_FIELDS = "id,wikipedia_title,wikipedia_url,summary,category,rarity,atk,def,pageviews,q_score"
 DB_TIMEOUT = 20  # s : requête à la base du site
 SUMMARY_SHOWN = 280  # caractères de la description affichés avant « lire la suite »
 OUT = " class='out'"  # vente écartée par le bot
 # Graphique dessiné en deux tailles (sans script) : large sur ordinateur, étroit sur téléphone.
-CHART_SIZES = {"wide": (720, 300, 56), "narrow": (360, 260, 44)}  # largeur, hauteur, marge gauche
+CHART_SIZES = {"wide": (720, 300, 56), "narrow": (360, 300, 44)}  # largeur, hauteur, marge gauche
 PAD_R, PAD_T, PAD_B = 12, 14, 30
+TREND_WINDOW = 15  # ventes autour de chacune pour la tendance (médiane glissante)
+TREND_MIN = 4  # ventes retenues d'une rareté à partir desquelles la tendance est tracée
+DENSE_SALES = 60  # au-delà, les ventes sont de petits points discrets
 COLORS = {"L": "#d49a00", SHINY: "#d0258f", "UR": "#dc2626", "SR": "#7c3aed", "R": "#2563eb", "PC": "#0d9488",
           "C": "#6b7280", "": "#475569"}
 ORDER = ("L", SHINY, "UR", "SR", "R", "PC", "C", "")
@@ -88,7 +90,7 @@ class Details:
     auctions: list[dict]
     source: str  # « session Marché » ou « session du compte »
     at: datetime
-    card: dict = field(default_factory=dict)  # ligne de la base du site (image, description, ATK…)
+    card: dict = field(default_factory=dict)  # ligne de la base du site (description, ATK…)
 
 
 # ─────────────────────────── Lecture ───────────────────────────
@@ -319,16 +321,38 @@ def _nice_step(span: float) -> float:
     return next(m * power for m in (1, 2, 2.5, 5, 10) if m * power >= raw)
 
 
+def _quantile(values: list[float], share: float) -> float:
+    ordered = sorted(values)
+    k = (len(ordered) - 1) * share
+    low, high = math.floor(k), math.ceil(k)
+    return ordered[low] + (ordered[high] - ordered[low]) * (k - low)
+
+
+def _trend(sales: list[Sale]) -> list[tuple[Sale, float, float, float]]:
+    """(vente, médiane, premier et troisième quartiles) des TREND_WINDOW ventes autour de
+    chacune : la tendance du prix, et la bande des ventes courantes."""
+    half = TREND_WINDOW // 2
+    points = []
+    for k, sale in enumerate(sales):
+        window = [s.price for s in sales[max(0, k - half):k + half + 1]]
+        points.append((sale, statistics.median(window), _quantile(window, 0.25), _quantile(window, 0.75)))
+    return points
+
+
 def _chart(groups: list[Group], now: datetime, size: str) -> str:
+    """Tendance (médiane glissante, trait épais) sur la bande des ventes courantes, chaque
+    vente en petit point ; ventes écartées par le bot en cercles ; prix retenu en pointillé."""
     sales = [s for g in groups for s in g.sales]
     if not sales:
         return '<p class="muted">Aucune vente détaillée à afficher.</p>'
     chart_w, chart_h, pad_l = CHART_SIZES[size]
-    # Échelle d'après les ventes retenues de chaque rareté : une vente écartée hors échelle est posée en haut.
-    kept = [p for g in groups for i, p in enumerate(g.prices) if i not in g.outliers] or [s.price for s in sales]
-    top = max([*kept, *(g.clean.price for g in groups if g.clean)])
-    step = _nice_step(top)
-    y_max = step * math.ceil(top * 1.05 / step)
+    kept = {g.rarity: [s for i, s in enumerate(g.sales) if i not in g.outliers] for g in groups}
+    # Échelle d'après les ventes retenues : une vente écartée hors échelle est posée au bord.
+    prices = [s.price for v in kept.values() for s in v] or [s.price for s in sales]
+    prices += [g.clean.price for g in groups if g.clean]
+    step = _nice_step(max(prices) - min(prices) or max(prices))
+    y_max = step * math.ceil(max(prices) * 1.05 / step)
+    y_min = max(0.0, step * math.floor(min(prices) * 0.95 / step))
     start, end = min(s.at for s in sales), max(max(s.at for s in sales), now)
     if end - start < timedelta(hours=1):
         start = end - timedelta(hours=1)
@@ -339,11 +363,11 @@ def _chart(groups: list[Group], now: datetime, size: str) -> str:
         return pad_l + plot_w * (at - start).total_seconds() / (end - start).total_seconds()
 
     def y(price: float) -> float:
-        return PAD_T + plot_h * (1 - min(price, y_max) / y_max)
+        return PAD_T + plot_h * (1 - (min(max(price, y_min), y_max) - y_min) / (y_max - y_min))
 
     out = [f'<svg viewBox="0 0 {chart_w} {chart_h}" role="img" aria-label="Ventes de la carte" '
            f'class="chart chart-{size}">']
-    value = 0.0
+    value = y_min
     while value <= y_max + 1e-9:
         out.append(f'<line x1="{pad_l}" x2="{chart_w - PAD_R}" y1="{y(value):.1f}" y2="{y(value):.1f}" class="grid"/>'
                    f'<text x="{pad_l - 6}" y="{y(value) + 4:.1f}" class="axis" text-anchor="end">{_money(value)}</text>')
@@ -355,27 +379,31 @@ def _chart(groups: list[Group], now: datetime, size: str) -> str:
         label = at.astimezone(tz).strftime("%d/%m %Hh" if span < timedelta(days=3) else "%d/%m")
         anchor = "start" if i == 0 else "end" if i == ticks - 1 else "middle"
         out.append(f'<text x="{x(at):.1f}" y="{chart_h - 8}" class="axis" text-anchor="{anchor}">{label}</text>')
+    dense = len(sales) > DENSE_SALES  # beaucoup de ventes : points discrets, la tendance compte
     for group in groups:
         color = COLORS.get(group.rarity, COLORS[""])
-        if group.clean:
-            out.append(f'<line x1="{pad_l}" x2="{chart_w - PAD_R}" y1="{y(group.clean.price):.1f}" '
-                       f'y2="{y(group.clean.price):.1f}" stroke="{color}" class="clean"/>')
-        traced = [s for i, s in enumerate(group.sales) if i not in group.outliers]  # sans les ventes écartées
-        if len(traced) > 1:
-            points = " ".join(f"{x(s.at):.1f},{y(s.price):.1f}" for s in traced)
-            out.append(f'<polyline points="{points}" stroke="{color}" class="trace"/>')
+        trend = _trend(kept[group.rarity]) if len(kept[group.rarity]) >= TREND_MIN else []
+        if trend:
+            band = [f"{x(s.at):.1f},{y(q3):.1f}" for s, _, _, q3 in trend]
+            band += [f"{x(s.at):.1f},{y(q1):.1f}" for s, _, q1, _ in reversed(trend)]
+            out.append(f'<polygon points="{" ".join(band)}" fill="{color}" class="band"/>')
         for i, sale in enumerate(group.sales):
             when = sale.at.astimezone(tz).strftime("%d/%m %H:%M")
             tip = html.escape(f"{group.rarity or '?'} · {_money(sale.price)} · {when}"
                               + (" · écartée par le bot" if i in group.outliers else ""))
             cx, cy = x(sale.at), y(sale.price)
-            if sale.price > y_max:  # hors échelle : triangle en haut
-                out.append(f'<path d="M{cx:.1f},{cy - 1:.1f} l5,9 h-10 z" fill="{color}"><title>{tip}</title></path>')
-            elif i in group.outliers:
+            if i in group.outliers:
                 out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="none" stroke="{color}" '
-                           f'stroke-width="2"><title>{tip}</title></circle>')
+                           f'class="out"><title>{tip}</title></circle>')
             else:
-                out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="{color}"><title>{tip}</title></circle>')
+                out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{2.4 if dense else 3.5}" fill="{color}" '
+                           f'class="{"dot" if dense else "dot big"}"><title>{tip}</title></circle>')
+        if trend:
+            points = " ".join(f"{x(s.at):.1f},{y(median):.1f}" for s, median, _, _ in trend)
+            out.append(f'<polyline points="{points}" stroke="{color}" class="trend"/>')
+        if group.clean:
+            out.append(f'<line x1="{pad_l}" x2="{chart_w - PAD_R}" y1="{y(group.clean.price):.1f}" '
+                       f'y2="{y(group.clean.price):.1f}" stroke="{color}" class="clean"/>')
     out.append("</svg>")
     return "".join(out)
 
@@ -468,8 +496,11 @@ a{color:#2563eb}.muted{color:var(--muted);font-size:.85em}
 .grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 12px}
 .chart{width:100%;height:auto;display:block}.chart-narrow{display:none}
 @media (max-width:600px){.chart-wide{display:none}.chart-narrow{display:block}}.chart .grid{stroke:var(--grid)}
-.chart .axis{fill:var(--muted);font-size:11px}.chart .trace{fill:none;stroke-width:1.5;opacity:.45}
+.chart .axis{fill:var(--muted);font-size:11px}.chart .band{opacity:.16}
+.chart .dot{opacity:.38}.chart .dot.big{opacity:.75}.chart .out{stroke-width:1.5;opacity:.75}
+.chart .trend{fill:none;stroke-width:3;stroke-linejoin:round;stroke-linecap:round}
 .chart .clean{stroke-width:1.5;stroke-dasharray:6 4;opacity:.9}
+h3{font-size:.95em;margin:.8em 0 .2em;display:flex;gap:.5em;align-items:center}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:.85em;color:var(--muted)}
 table{width:100%;border-collapse:collapse}th,td{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left}
 .stats th{font-weight:500;color:var(--muted);width:48%}.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -477,16 +508,15 @@ table{width:100%;border-collapse:collapse}th,td{padding:5px 4px;border-bottom:1p
 .badge{display:inline-block;min-width:2.2em;padding:1px 6px;border-radius:6px;color:#fff;font-size:.78em;
 font-weight:700;text-align:center}
 .auctions{margin:0;padding-left:1.1em}.auctions li{margin:.3em 0}
-.info{display:flex;gap:14px;align-items:flex-start}.info img{width:96px;height:auto;border-radius:8px;flex:none}
 .info p{margin:.4em 0}.info details{margin:.4em 0}.info summary{cursor:pointer;list-style:none}
 .info summary::-webkit-details-marker{display:none}.info details[open] summary{display:none}
 .more{color:#2563eb;white-space:nowrap}.chips{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.9em}
-@media (max-width:600px){.info{flex-direction:column}.info img{width:100%;max-width:240px}}
+
 """
 
 
 def _card_info(card: dict) -> str:
-    """Carte telle que la base du site la décrit : image, rareté, ATK/DEF, vues, description."""
+    """Carte telle que la base du site la décrit : rareté, ATK/DEF, vues, description."""
     chips = []
     if card.get("rarity"):
         chips.append(f"{_badge(str(card['rarity']))} rareté de la carte")
@@ -494,7 +524,6 @@ def _card_info(card: dict) -> str:
         if isinstance(card.get(key), (int, float)) and not isinstance(card.get(key), bool):
             value = _money(card[key]) if key != "q_score" else f"{card[key]:g}"
             chips.append(f"<span><b>{label}</b> {value}</span>")
-    image = card.get("image_url") if not card.get("hide_image") and not card.get("nsfw_image") else None
     summary = str(card.get("summary") or "").strip()
     text = ""
     if len(summary) > SUMMARY_SHOWN:  # début seulement, la suite se déplie (sans script)
@@ -504,21 +533,35 @@ def _card_info(card: dict) -> str:
     elif summary:
         text = f"<p>{html.escape(summary)}</p>"
     category = f'<p class="muted">{html.escape(str(card["category"]))}</p>' if card.get("category") else ""
-    if not (chips or image or text):
+    if not (chips or text):
         return ""
-    img = (f'<img src="{html.escape(str(image))}" alt="" loading="lazy" referrerpolicy="no-referrer">'
-           if isinstance(image, str) and image.startswith("https://") else "")
-    return (f'<section class="card info">{img}<div><div class="chips">{"".join(chips)}</div>{category}{text}</div>'
-            "</section>")
+    return f'<section class="card info"><div class="chips">{"".join(chips)}</div>{category}{text}</section>'
+
+
+def _charts(groups: list[Group], now: datetime) -> str:
+    """Un graphique par rareté, chacun à son échelle (une L à 5 000 écraserait une SR à
+    900), en deux tailles : large sur ordinateur, étroit sur téléphone."""
+    shown = [g for g in groups if g.sales]
+    if not shown:
+        return '<p class="muted">Aucune vente détaillée à afficher.</p>'
+    parts = []
+    for group in shown:
+        title = f'<h3>{_badge(group.rarity)} {len(group.sales)} vente(s)</h3>' if len(shown) > 1 else ""
+        parts.append(f"{title}{_chart([group], now, 'wide')}{_chart([group], now, 'narrow')}")
+    return "".join(parts)
 
 
 def render(details: Details, base_url: str) -> str:
     groups = details.groups
     title = html.escape(details.title)
     tz = _tz()
-    legend = "".join(f"<span>{_badge(g.rarity)} {len(g.sales)} vente(s)</span>" for g in groups if g.sales)
-    legend += ("<span>● vente · ○ écartée par le bot · ▲ hors échelle · ┄ prix retenu par le bot</span>"
-               if legend else "")
+    shown = [g for g in groups if g.sales]
+    legend = ""
+    if len(shown) == 1:  # plusieurs raretés : compte au-dessus de chaque graphique
+        legend = f"<span>{_badge(shown[0].rarity)} {len(shown[0].sales)} vente(s)</span>"
+    if shown:
+        legend += ("<span>━ tendance (prix médian des 15 ventes autour) · zone claire : moitié centrale des "
+                   "ventes · ● vente · ○ écartée par le bot · ┄ prix retenu par le bot</span>")
     wiki = details.card.get("wikipedia_url") or \
         f"https://fr.wikipedia.org/wiki/{urllib.parse.quote(details.title.replace(' ', '_'))}"
     return (
@@ -529,8 +572,7 @@ def render(details: Details, base_url: str) -> str:
         f'<p class="muted">Fiche du Marché du {details.at.astimezone(tz).strftime("%d/%m/%Y à %H:%M")} · '
         f'lue avec la {html.escape(details.source)} · <a href="{html.escape(wiki)}">Wikipédia</a></p>'
         f"{_card_info(details.card)}"
-        f'<section class="card"><h2>Ventes</h2>{_chart(groups, details.at, "wide")}'
-        f'{_chart(groups, details.at, "narrow")}<div class="legend">{legend}</div>'
+        f'<section class="card"><h2>Ventes</h2>{_charts(groups, details.at)}<div class="legend">{legend}</div>'
         "</section>"
         f'<div class="grid-2">{"".join(_stats(g) for g in groups)}</div>'
         f"{_auctions(details, base_url)}{_last_sales(groups)}"

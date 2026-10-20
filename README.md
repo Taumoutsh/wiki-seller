@@ -358,11 +358,12 @@ Sans la boucle (passe unique), les prix sont lus pendant la passe, comme avant.
 `/details Tour Eiffel` (ou `/fiche`) renvoie, en pièce jointe, une page HTML qui s'ouvre
 sur téléphone comme sur ordinateur (sans connexion, sans script) :
 
-- **la carte** telle que la décrit la base du site : image, rareté, ATK, DEF, vues,
+- **la carte** telle que la décrit la base du site : rareté, ATK, DEF, vues,
   Q-score, catégorie et description ;
-- **graphique des ventes** dans le temps, une couleur par rareté, avec le prix retenu par
-  le bot en pointillé ; les ventes qu'il écarte (aberrantes, ou d'avant un changement de
-  valeur) sont des cercles vides, celles hors échelle des triangles en haut ;
+- **graphique des ventes** dans le temps, une couleur par rareté : la **tendance** en
+  trait épais (prix médian des 15 ventes autour de chacune), la moitié centrale des ventes
+  en zone claire, chaque vente en petit point, celles que le bot écarte (aberrantes, ou
+  d'avant un changement de valeur) en cercles, et le prix retenu par le bot en pointillé ;
 - **par rareté :** nombre de ventes, prix retenu par le bot, moyenne, médiane, plus bas,
   plus haut, dernière vente, moyenne affichée par le site, et prix `auto` qu'en tirerait
   le bot (achat 90 %, vente 110 %) ;
