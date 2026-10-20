@@ -372,7 +372,8 @@ quand le nom finit par un nombre. La carte se trouve par son **titre exact** : d
 enchères en cours, dans les collections lues récemment, sinon dans la base du site ; à
 défaut, collez le lien d'une de ses enchères. Les ventes se lisent avec la session Marché,
 sinon avec celle du compte (qui doit alors avoir accès au Marché). Lecture seule : rien
-n'est envoyé au site.
+n'est envoyé au site. La fiche est préparée en mémoire et envoyée à Telegram : elle n'est
+jamais enregistrée sur le serveur.
 
 ### Bilan
 

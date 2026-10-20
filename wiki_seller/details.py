@@ -3,7 +3,8 @@ prix (moyen, médian, plus bas, plus haut, prix retenu par le bot), par rareté,
 enchères en cours de la carte.
 
 La fiche est une page HTML autonome (graphique en SVG, sans script ni ressource externe)
-envoyée en document Telegram : elle s'ouvre sur téléphone comme sur ordinateur.
+envoyée en document Telegram : elle s'ouvre sur téléphone comme sur ordinateur. Elle est
+préparée en mémoire et n'est jamais écrite sur le serveur.
 
 La carte se donne par son nom (titre exact), par un lien ou un identifiant d'enchère, ou
 par l'identifiant de la carte. Les ventes se lisent avec la session Marché, sinon avec

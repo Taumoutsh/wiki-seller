@@ -65,7 +65,9 @@ def test_details_page_is_sent_to_telegram(tmp_path):
         config = make_config(tmp_path, site.url, [])
         with open_site(config):  # session du compte (pas de session Marché)
             pass
+        before = {f for f in tmp_path.rglob("*") if f.is_file()}
         details.send_details(config, "victor hugo", TelegramBot(TOKEN, CHAT_ID, tmp_path / "tg.json", tg.url))
+        assert {f for f in tmp_path.rglob("*") if f.is_file()} == before  # fiche jamais écrite sur disque
         assert not [e for e in site.events if e[0] in ("mise", "vente", "défausse")]  # lectures seulement
     assert tg.sent == [] and len(tg.documents) == 1
     document = tg.documents[0]
