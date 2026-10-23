@@ -294,8 +294,26 @@ def test_listing_sends_copy_ids_and_api_average(tmp_path):
     ]
 
 
+def test_card_no_longer_owned_is_not_retried_and_leaves_the_kept_collection(tmp_path, caplog):
+    from wiki_seller import collection
+
+    with FakeWikiMasters(list(COLLECTION), API_AVERAGES, max_auctions=1) as site:
+        config = make_config(tmp_path, site.url, [])
+        collection.remember(config, list(COLLECTION), set())  # collection lue il y a peu…
+        site.collection = [c for c in site.collection if c["id"] != "c1"]  # … puis Tour Eiffel défaussée ailleurs
+        with caplog.at_level("INFO"):
+            run_once(config)
+        assert site.listing_attempts.count("c1") == 1 and "C" not in site.listing_attempts  # ni nouvel essai
+        assert [l["title"] for l in site.listings] == ["Château de Versailles"]  # la carte suivante
+        site.selling.clear()
+        run_once(config)  # collection gardée sans elle : plus jamais proposée
+    assert site.listing_attempts.count("c1") == 1
+    assert not [e for e in collection.cached_entries() if e["card_id"] == "C"]
+    assert "vous ne la possédez plus" in caplog.text
+
+
 def test_listing_falls_back_to_card_id(tmp_path, caplog):
-    # Si le site attendait l'identifiant de la carte (409 avec celui de l'exemplaire).
+    # Si le site attendait l'identifiant de la carte (refus de celui de l'exemplaire).
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=1, listing_id="card") as site:
         with caplog.at_level("INFO"):
             run_once(make_config(tmp_path, site.url, []))

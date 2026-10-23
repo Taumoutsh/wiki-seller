@@ -37,6 +37,7 @@ BID_RETRY_PAUSE = 1  # s entre deux essais de mise
 LISTING_COPY_TRIES = 3  # exemplaires essayés pour une mise en vente (un peut être en vente ou en échange)
 
 SLOTS_FULL_TEXT = re.compile(r"maximum|limite|trop d.ench|max.*ench|concurrent", re.I)
+NOT_OWNED_TEXT = re.compile(r"ne poss[ée]dez pas", re.I)  # 409 : exemplaire défaussé, vendu, échangé…
 # Erreurs réseau (délai dépassé, connexion coupée) : le site bogue parfois.
 NETWORK_ERRORS = (OSError, http.client.HTTPException)
 
@@ -165,6 +166,7 @@ class ListingStatus(Enum):
     DRY_RUN = "simulation (non envoyée)"
     SLOTS_FULL = "plus de place aux enchères"
     NO_PRICE = "prix calculé nul"
+    NOT_OWNED = "plus dans la collection"
     FAILED = "échec"
 
 
@@ -477,8 +479,11 @@ class WikiMasters:
         """Mise en vente : POST /api/marketplace {card_id, base_amount, duration_minutes}.
         Malgré son nom, `card_id` attend l'identifiant de l'exemplaire possédé (avec celui
         de la carte, le site répond 409 « Vous ne possédez pas cette carte ») : on essaie
-        les exemplaires, puis la carte en dernier recours. `price` : prix exact (/sell),
-        sinon PRICE_RATIO du prix moyen, ajusté par `adjust`."""
+        les exemplaires, puis la carte en dernier recours. Un exemplaire que le site dit ne
+        plus vous appartenir (409 « Vous ne possédez pas cette carte » : défaussé, vendu,
+        échangé depuis la lecture de la collection) arrête tout : NOT_OWNED, sans autre
+        essai. `price` : prix exact (/sell), sinon PRICE_RATIO du prix moyen, ajusté par
+        `adjust`."""
         if price is None:
             price = sale_price(average, self.config.price_ratio)
             if adjust and price >= 1:
@@ -492,7 +497,7 @@ class WikiMasters:
         for candidate in (*copy_ids[:LISTING_COPY_TRIES], card_id):
             body = {"card_id": candidate, "base_amount": price, "duration_minutes": duration}
             try:
-                status, _, text = self.api_post("/api/marketplace", body)
+                status, data, text = self.api_post("/api/marketplace", body)
             except NETWORK_ERRORS as exc:  # réponse perdue : la passe suivante verra si elle est en vente
                 return ListingResult(ListingStatus.FAILED, price, average, f"pas de réponse ({exc})")
             if 200 <= status < 300:
@@ -501,6 +506,9 @@ class WikiMasters:
                 return ListingResult(ListingStatus.LISTED, price=price, average=average)
             if SLOTS_FULL_TEXT.search(text):
                 return ListingResult(ListingStatus.SLOTS_FULL, detail=text[:200])
+            message = str(data.get("error") or data.get("message") or text) if isinstance(data, dict) else text
+            if status == 409 and NOT_OWNED_TEXT.search(message):
+                return ListingResult(ListingStatus.NOT_OWNED, price, average, f"HTTP 409 : {message[:200]}")
             if status not in (400, 404, 409, 422):
                 break
         return ListingResult(ListingStatus.FAILED, price, average, f"HTTP {status} : {text[:200]}")

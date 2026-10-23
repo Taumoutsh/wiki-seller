@@ -186,7 +186,9 @@ script :
 1. vérifie la session (voir « Session du site ») ;
 2. mise sur les cartes à acheter (voir « Achats ») ;
 3. met en vente (collection reprise de la dernière lecture de moins d'une heure, par une
-   passe ou par la défausse : relire des milliers de cartes prend plusieurs minutes),
+   passe ou par la défausse : relire des milliers de cartes prend plusieurs minutes ; une
+   carte que le site dit ne plus vous appartenir, 409 « Vous ne possédez pas cette
+   carte », n'est pas réessayée et quitte cette collection gardée),
    s'il reste de la place (5 enchères à la fois sur le site), **d'abord
    les ventes demandées** (`/sell`), puis les cartes des raretés `raretes`, **de la plus
    chère à la moins chère**, sauf les cartes protégées (aucun exemplaire vendu, doublons

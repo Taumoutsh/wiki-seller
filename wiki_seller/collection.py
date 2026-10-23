@@ -47,6 +47,20 @@ def forget(config: Config) -> None:
         _READS.pop(_key(config), None)
 
 
+def drop_card(config: Config, card_id: str, rarity: str | None) -> int:
+    """Carte que le site dit ne plus vous appartenir : retirée de la collection gardée
+    (pas remise en vente avant la prochaine lecture). Renvoie les entrées retirées."""
+    with _LOCK:
+        read = _READS.get(_key(config))
+        if read is None:
+            return 0
+        kept = [e for e in read.entries if not (str(e.get("card_id") or (e.get("card") or {}).get("id")) == str(card_id)
+                                              and (not rarity or entry_rarity(e) == rarity))]
+        removed = len(read.entries) - len(kept)
+        read.entries = kept
+        return removed
+
+
 def cached_entries() -> list[dict]:
     """Entrées des collections lues récemment, tous comptes confondus (fiche /details)."""
     with _LOCK:

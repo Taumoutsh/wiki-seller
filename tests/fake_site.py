@@ -84,6 +84,7 @@ class FakeWikiMasters:
         # Mise d'un autre pas encore visible à la lecture de l'enchère (détail en retard sur
         # les mises) : le site refuse alors la nôtre en indiquant le minimum.
         self.hidden_bids: dict[str, int] = {}
+        self.listing_attempts: list[str] = []  # identifiants envoyés à POST /api/marketplace
         self.cards: list[dict] = []  # table des cartes de la base (/rest/v1/cards, clé publique)
         self.extension: timedelta | None = None  # mise dans les 10 dernières s : fin repoussée d'autant
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -259,11 +260,14 @@ class FakeWikiMasters:
                     return self._send(200, {"auction_id": auction["id"], "current_bid": body["amount"],
                                             "bidder_balance": 1747 - body["amount"]})
                 if self.path == "/api/marketplace" and self._authed():
+                    site.listing_attempts.append(body.get("card_id"))
                     if len(site.selling) >= site.max_auctions:
                         return self._send(400, {"error": "Nombre maximum d'enchères actives atteint"})
                     by_card = {c["card"]["id"]: c for c in site.collection}
                     by_copy = {c["id"]: c for c in site.collection}
                     known = by_copy if site.listing_id == "copy" else by_card
+                    if site.listing_id == "card" and body.get("card_id") in by_copy:  # identifiant d'un autre type
+                        return self._send(400, {"error": "Identifiant de carte invalide"})
                     if body.get("card_id") not in known:
                         return self._send(409, {"error": "Vous ne possédez pas cette carte"})
                     site.api_listings.append(body)
