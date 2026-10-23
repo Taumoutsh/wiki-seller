@@ -55,10 +55,15 @@ class MarketPrice:
 
 
 def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
+    """Prix des ventes récentes sans les aberrantes ; None sans vente récente. Avec moins de
+    MIN_SALES ventes, rien ne permet de dire laquelle est aberrante : leur médiane, avec leur
+    nombre (les décisions s'en méfient en dessous de ventes_min) et la plus basse."""
     recent = sorted((s for s in sales if s.at >= now - WINDOW and s.price > 0), key=lambda s: s.at)[-MAX_SALES:]
-    if len(recent) < MIN_SALES:
+    if not recent:
         return None
     prices = [s.price for s in recent]
+    if len(recent) < MIN_SALES:
+        return MarketPrice(statistics.median(prices), len(prices), 0, False, min(prices))
     median = statistics.median(prices)
     spread = max(MAD_TO_STDEV * statistics.median(abs(p - median) for p in prices), MIN_SPREAD_RATIO * median)
     sides = [0 if abs(p - median) <= OUTLIER_SPREAD * spread else 1 if p > median else -1 for p in prices]

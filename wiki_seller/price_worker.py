@@ -63,6 +63,7 @@ class PriceWorker:
         self._cond = threading.Condition()
         self._items: dict[str, _Item] = {}
         self._results: dict[str, tuple[str, float | None]] = {}
+        self._entries: dict[str, dict] = {}  # prix lus avec leur nombre de ventes et la plus basse
         self._order = itertools.count()
         self._sales: dict[str, set[str]] = {}  # compte → prix de vente encore attendus
         self._fresh: set[str] = set()  # comptes dont un prix de vente vient d'être lu
@@ -92,6 +93,11 @@ class PriceWorker:
                 self._sales.setdefault(_account(config), set()).add(key)
             self._cond.notify_all()
         return key
+
+    def entry(self, key: str) -> dict:
+        """Prix lu avec son nombre de ventes et la plus basse ({} si inconnu)."""
+        with self._cond:
+            return dict(self._entries.get(key) or {})
 
     def result(self, key: str) -> tuple[str, float | None] | None:
         """Prix déjà lu (ou illisible) pour cette carte, s'il y en a un."""
@@ -209,6 +215,8 @@ class PriceWorker:
         finally:
             reader.save()
         if status == reader.OK:
+            with self._cond:
+                self._entries[item.key] = {k: v for k, v in reader.entry(group).items() if k in ("count", "low")}
             self._finish(item, OK, average)
             return
         item.tries += 1
@@ -230,7 +238,9 @@ class PriceWorker:
             self._items.pop(item.key, None)
             self._results[item.key] = (status, average)
             while len(self._results) > RESULTS_KEPT:
-                self._results.pop(next(iter(self._results)))
+                oldest = next(iter(self._results))
+                del self._results[oldest]
+                self._entries.pop(oldest, None)
             for account, config in item.requesters.items():
                 waiting = self._sales.get(account)
                 if waiting is None or item.key not in waiting:

@@ -36,9 +36,11 @@ def test_last_sales_out_of_line_mean_a_new_value():
 
 def test_regular_prices_and_window():
     assert clean_price(sales(10, 10, 10, 10, 12), NOW).price == pytest.approx(10.4)  # écart minimal : 10 %
-    assert clean_price(sales(100, 120), NOW) is None  # trop peu de ventes
+    assert clean_price(sales(100, 120), NOW) == MarketPrice(110, 2, 0, False)  # trop peu de ventes : médiane…
+    assert clean_price(sales(22050, 10), NOW).low == 10  # … et la plus basse
     old = sales(5, 5, 5, start=NOW - timedelta(days=40))  # hors des 30 jours
-    assert clean_price(old + sales(100, 100), NOW) is None
+    assert clean_price(old + sales(100, 100), NOW).sales == 2  # ventes de plus de 30 jours ignorées
+    assert clean_price(old, NOW) is None
     assert clean_price(sales(*([1] * 10 + [100] * 50)), NOW).price == 100  # 50 dernières ventes
 
 
@@ -58,7 +60,7 @@ def test_real_rise_is_priced_by_the_median_of_the_new_level():
                      {"id": "l", "final_price": 6000, "settled_at": "2026-10-16T10:00:00+00:00", "rarity": "L"}]}
     found = clean_price(parse_sales(data, "C"), NOW)
     assert found == MarketPrice(1678.5, 4, 11, True)  # 1651, 1232, 1706, 4835 : 4835 ne pèse pas
-    assert clean_price(parse_sales(data, "L"), NOW) is None  # une seule vente L
+    assert clean_price(parse_sales(data, "L"), NOW) == MarketPrice(6000, 1, 0, False)  # une seule vente L
 
 
 def test_parse_sales():
@@ -258,3 +260,12 @@ def test_same_card_in_two_rarities_has_two_lines(tmp_path):
     run_list_command(config, "/sell", "Loire 900 L+")
     assert run_list_command(config, "/unsell", "Loire").startswith("« Loire » retirée des ventes (2 raretés)")
     assert sell_cards(config) == []
+
+
+def test_price_is_trusted_only_with_enough_sales():
+    from wiki_seller.pricing import decision_price, reliable
+
+    rosehill = {"average": 11030, "count": 2, "low": 10}
+    assert not reliable(rosehill, 4) and decision_price(rosehill, 11030, 4) == 10  # la plus basse
+    assert reliable({"count": 4}, 4) and decision_price({"count": 4, "low": 10}, 300, 4) == 300
+    assert reliable({"average": 50}, 4)  # prix en cache d'avant le comptage des ventes : gardé

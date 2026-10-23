@@ -148,7 +148,7 @@ commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 | `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
 | `/users` | Comptes : état (actif, pause, simulation), session, accès au Marché 🏪, nombre de cartes par liste |
 | `/set cache_prix 168` | Durée de validité des prix en cache, pour tous les comptes (`168`, `168h` ou `7j`) |
-| `/set ventes_min 4` | Ventes connues minimales pour vendre une carte automatiquement, pour tous les comptes (en dessous : mise de côté) |
+| `/set ventes_min 4` | Ventes connues minimales pour se fier au prix d'une carte, pour tous les comptes : en dessous, pas de vente automatique (mise de côté), pas de prix `auto`, et la défausse prend sa vente la plus basse |
 
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant.
 
@@ -293,6 +293,11 @@ des prix, après les prix utiles aux ventes)
 et la **défausse aussitôt** si elle vaut `defausse` ou moins (1 wikibidou par
 exemplaire).
 
+- **Prix sur trop peu de ventes** (moins de `ventes_min`, 4) : une vente aberrante (un
+  échange d'argent à 22 050 pour une commune vendue 10) pèse autant que les autres ; la
+  carte vaut alors sa **vente la plus basse connue** (Marché : la plus basse des ventes
+  récentes ; site : la plus basse de la moyenne et de la dernière vente). Le prix `auto`
+  de `/buy` et `/sell` attend, lui, d'avoir assez de ventes.
 - **Défaussées :** prix moyen égal ou inférieur au seuil ; pour une commune (`C`) ou peu
   commune (`PC`), aussi aucune vente connue ou un prix qui n'a pas pu être lu. Tous les
   exemplaires, y compris le dernier.

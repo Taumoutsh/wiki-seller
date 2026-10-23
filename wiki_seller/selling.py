@@ -16,7 +16,7 @@ from .config import Config
 from .lists import (AUTO, AUTO_SELL_RATIO, ListError, SellCard, buy_cards, group_matches, record_sale, remove_safe, sell_cards,
                     update_sell)
 from . import collection, price_worker
-from .pricing import PriceReader, fetch_averages, load_price_cache
+from .pricing import PriceReader, fetch_averages, load_price_cache, reliable
 from .settings import RARITIES
 from .selection import (
     PROTECTED_COPIES_TO_KEEP,
@@ -231,9 +231,14 @@ def priority_items(config: Config, cards: list[SellCard], groups: list[CardGroup
     return items
 
 
-def auto_sell_price(reader: PriceReader, group: CardGroup) -> int | None:
-    """Prix de vente « auto » : AUTO_SELL_RATIO du prix du marché."""
+def auto_sell_price(reader: PriceReader, group: CardGroup, min_sales: int = 1) -> int | None:
+    """Prix de vente « auto » : AUTO_SELL_RATIO du prix du marché, s'il repose sur assez de
+    ventes (ventes_min) pour s'y fier."""
     _, price = reader.read(group)
+    if price and not reliable(reader.entry(group), min_sales):
+        log.info("Vente demandée : « %s » — %s vente(s) connue(s) seulement (il en faut %d) pour un prix auto ; "
+                 "vente reportée.", group.title, reader.entry(group).get("count"), min_sales)
+        return None
     return max(1, math.floor(price * AUTO_SELL_RATIO)) if price else None
 
 
@@ -286,7 +291,7 @@ def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool)
         reader = PriceReader(site, config)
         try:
             items = priority_items(config, priority, groups, market.selling, safe_names, dry_run,
-                                   lambda group: auto_sell_price(reader, group))
+                                   lambda group: auto_sell_price(reader, group, config.min_sales_to_sell))
         finally:
             reader.save()
         if items:

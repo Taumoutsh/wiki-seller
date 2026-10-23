@@ -24,7 +24,7 @@ from . import collection
 from .config import Config
 from .lists import AUTO, AUTO_BUY_RATIO, AUTO_SELL_RATIO, SHINY, BuyCard, buy_cards, complete_purchase, price_text
 from .selection import is_shiny
-from .pricing import PriceReader
+from .pricing import PriceReader, reliable
 from .selection import normalize_name
 from .site import SiteError, entry_rarity, min_bid
 from .state import parse_time, read_json, write_json
@@ -642,12 +642,17 @@ class _Buyer:
                 return None
             entry["card_ref"] = ref
         reader = PriceReader(self.site, self.config)
+        group = SimpleNamespace(card_id=ref["id"], rarity=ref.get("rarity") or None, title=card.name)
         try:
-            _, price = reader.read(SimpleNamespace(card_id=ref["id"], rarity=ref.get("rarity") or None,
-                                                   title=card.name))
+            _, price = reader.read(group)
         finally:
             reader.save()
         if not price:
+            return None
+        if not reliable(reader.entry(group), self.config.min_sales_to_sell):
+            log.info("Achat : « %s » — %s vente(s) connue(s) seulement (il en faut %d) pour un prix max auto.",
+                     card.name, reader.entry(group).get("count"), self.config.min_sales_to_sell)
+            entry.pop("auto_max", None)  # un ancien prix max auto ne sert plus
             return None
         value = max(1, math.floor(price * AUTO_BUY_RATIO))
         if value != entry.get("auto_max"):

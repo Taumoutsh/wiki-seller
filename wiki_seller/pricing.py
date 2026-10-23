@@ -37,6 +37,21 @@ def load_price_cache(config: Config) -> dict:
             if isinstance(v, dict) and v.get("at", "") > (fallback_limit if v.get("fallback") else limit)}
 
 
+def reliable(entry: dict | None, min_sales: int) -> bool:
+    """Prix fondé sur assez de ventes (ventes_min) pour s'y fier ; un prix en cache d'avant
+    le comptage des ventes est gardé."""
+    count = (entry or {}).get("count")
+    return not isinstance(count, int) or count >= min_sales
+
+
+def decision_price(entry: dict | None, average: float | None, min_sales: int) -> float | None:
+    """Prix sur lequel décider (défausse) : le prix moyen, ou, avec trop peu de ventes pour
+    s'y fier (une vente aberrante pèse autant que les autres), la plus basse connue."""
+    if reliable(entry, min_sales):
+        return average
+    return (entry or {}).get("low") or average
+
+
 def pause(seconds: float, should_stop) -> bool:
     """Attend `seconds` secondes ; False dès qu'une passe attend la session."""
     deadline = time.monotonic() + seconds
@@ -84,14 +99,14 @@ class PriceReader:
         if self.worker is not None:  # lu par le fil des prix
             done = self.worker.result(key)
             if done is not None and done[0] == self.OK:  # déjà lu (demandé d'avance, ou par un autre compte)
-                self.cache[key] = {"average": done[1], "at": now_utc().isoformat()}
+                self.cache[key] = {**self.worker.entry(key), "average": done[1], "at": now_utc().isoformat()}
                 return done
             self.worker.request(group, self.config, self.priority)
             if not self.wait:
                 return self.UNKNOWN, None
             status, average = self.worker.wait(key, should_stop)
             if status == self.OK:
-                self.cache[key] = {"average": average, "at": now_utc().isoformat()}
+                self.cache[key] = {**self.worker.entry(key), "average": average, "at": now_utc().isoformat()}
             return status, average
         if not self.api_ok:
             return self.UNKNOWN, None
@@ -99,10 +114,11 @@ class PriceReader:
             return self.STOPPED, None
         started = time.monotonic()
         found, fallback = self._market(group)
-        if found is not None:
+        if found is not None and found.sales >= market.MIN_SALES:
             self.seconds += time.monotonic() - started
             return self._keep(key, {"average": found.price, "count": found.sales, "low": found.low,
                                     "source": "marche"})
+        recent_low = found.low if found is not None else None  # trop peu de ventes récentes : la plus basse sert
         try:
             average, count, low = self.site.fetch_average(group.card_id, group.rarity)
         except PriceApiUnavailable as exc:
@@ -118,6 +134,7 @@ class PriceReader:
         finally:
             self.seconds += time.monotonic() - started
         self.failures = 0
+        low = min((p for p in (low, recent_low) if p), default=None)
         return self._keep(key, {"average": average, "count": count, "low": low, "source": "moyenne",
                                 **({"fallback": True} if fallback else {})})
 
@@ -147,12 +164,17 @@ class PriceReader:
                 log.info("Marché : ventes de « %s » non lues (%s) ; moyenne du site.", group.title, exc)
             return None, True
         self.market_failures = 0
-        if found is None:
-            log.info("Marché : trop peu de ventes récentes de « %s » ; moyenne du site.", group.title)
+        if found is None or found.sales < market.MIN_SALES:
+            log.info("Marché : %s vente(s) récente(s) de « %s » seulement ; moyenne du site.",
+                     found.sales if found else "aucune", group.title)
         else:
             log.info("Marché : « %s » à %.0f (%d vente(s) retenue(s), %d écartée(s)%s).", group.title, found.price,
                      found.sales, found.removed, ", changement de valeur" if found.trend else "")
         return found, False
+
+    def entry(self, group) -> dict:
+        """Prix lu de la carte avec son nombre de ventes et la plus basse ({} si inconnu)."""
+        return self.cache.get(f"{group.card_id}:{group.rarity}") or {}
 
     def stats(self) -> str:
         """« 120 prix demandés au site, 7,9 s en moyenne, 85 nouvel(s) essai(s) après refus »."""

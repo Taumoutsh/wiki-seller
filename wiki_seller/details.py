@@ -80,7 +80,11 @@ class Group:
     rarity: str
     sales: list[Sale]
     site_average: float | None = None
-    clean: market.MarketPrice | None = None
+    clean: market.MarketPrice | None = None  # prix nettoyé des ventes du Marché (au moins 3 récentes)
+    retained: float | None = None  # prix sur lequel le bot décide (assez de ventes pour s'y fier)
+    source: str = ""  # « marche » ou « moyenne » (moyenne du site)
+    count: int | None = None  # ventes sur lesquelles repose le prix
+    low: float | None = None  # trop peu de ventes (ventes_min) : la plus basse, que le bot retient
     outliers: set[int] = field(default_factory=set)  # index (dans sales) des ventes écartées par le bot
 
     @property
@@ -128,9 +132,12 @@ def parse_market_sales(data: object) -> list[Sale]:
     return sorted(sales, key=lambda s: s.at)
 
 
-def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, now: datetime) -> list[Group]:
+def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, now: datetime,
+                 min_sales: int = 1) -> list[Group]:
     """Ventes par rareté (celle demandée seulement, si rarity), avec le prix retenu par le
-    bot (market.clean_price) et les ventes qu'il écarte."""
+    bot et les ventes qu'il écarte, comme pricing.PriceReader : prix nettoyé du Marché avec
+    au moins 3 ventes récentes, sinon moyenne du site ; avec moins de min_sales ventes
+    (ventes_min), le bot ne s'y fie pas et retient la plus basse connue."""
     by_rarity: dict[str, list[Sale]] = {}
     for sale in sales:
         by_rarity.setdefault(sale.rarity, []).append(sale)
@@ -140,6 +147,8 @@ def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, no
             continue
         group = Group(key, by_rarity[key])
         group.clean = market.clean_price([market.Sale(s.at, s.price) for s in group.sales], now)
+        if group.clean is not None and group.clean.sales < market.MIN_SALES:
+            group.low, group.clean = group.clean.low, None  # trop peu de ventes récentes : moyenne du site
         group.outliers = _outliers(group.sales, now)
         groups.append(group)
     for key, entry in (summary or {}).items():  # moyenne du site, même sans détail des ventes
@@ -153,6 +162,18 @@ def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, no
             groups.append(group)
         if group is not None:
             group.site_average = average
+            count, latest = entry.get("count"), market._number(entry.get("latest"))
+            group.count = count if isinstance(count, int) and not isinstance(count, bool) else None
+            group.low = min((p for p in (group.low, latest, average) if p), default=None)
+    for group in groups:
+        if group.clean is not None:
+            group.retained, group.source, group.count = group.clean.price, "marche", group.clean.sales
+        elif group.site_average:
+            group.retained, group.source = group.site_average, "moyenne"
+        if group.retained is not None and group.count is not None and group.count < min_sales:
+            group.retained = None  # pas assez de ventes pour s'y fier : la plus basse (group.low)
+        elif group.retained is not None:
+            group.low = None
     return groups
 
 
@@ -299,7 +320,8 @@ def collect(config: Config, query: str, rarity: str | None) -> Details:
         title = title or (data.get("wikipedia_title") if isinstance(data, dict) else "") or card_id
         summary = summary_data.get("summary") if isinstance(summary_data, dict) else None
         now = now_utc()
-        groups = build_groups(parse_market_sales(data), summary if isinstance(summary, dict) else None, rarity, now)
+        groups = build_groups(parse_market_sales(data), summary if isinstance(summary, dict) else None, rarity, now,
+                              config.min_sales_to_sell)
         return Details(card_id, title, groups, auctions, source, now, card)
     raise DetailsError("Le Marché refuse la lecture des ventes : il faut une session Marché (/market) ou un compte "
                        f"qui y a accès ({last_error}).")
@@ -384,7 +406,7 @@ def _chart(groups: list[Group], now: datetime, size: str) -> str:
     kept = {g.rarity: [s for i, s in enumerate(g.sales) if i not in g.outliers] for g in groups}
     # Échelle d'après les ventes retenues : une vente écartée hors échelle est posée au bord.
     prices = [s.price for v in kept.values() for s in v] or [s.price for s in sales]
-    prices += [g.clean.price for g in groups if g.clean]
+    prices += [g.retained for g in groups if g.retained]
     step = _nice_step(max(prices) - min(prices) or max(prices))
     y_max = step * math.ceil(max(prices) * 1.05 / step)
     y_min = max(0.0, step * math.floor(min(prices) * 0.95 / step))
@@ -432,9 +454,9 @@ def _chart(groups: list[Group], now: datetime, size: str) -> str:
         if trend:
             points = " ".join(f"{x(s.at):.1f},{y(median):.1f}" for s, median, _, _ in trend)
             out.append(f'<polyline points="{points}" stroke="{color}" class="trend"/>')
-        if group.clean:
-            out.append(f'<line x1="{pad_l}" x2="{chart_w - PAD_R}" y1="{y(group.clean.price):.1f}" '
-                       f'y2="{y(group.clean.price):.1f}" stroke="{color}" class="clean"/>')
+        if group.retained:
+            out.append(f'<line x1="{pad_l}" x2="{chart_w - PAD_R}" y1="{y(group.retained):.1f}" '
+                       f'y2="{y(group.retained):.1f}" stroke="{color}" class="clean"/>')
         # Par-dessus tout : chaque vente touchée (ou survolée) affiche sa bulle.
         medians = {id(s): median for s, median, _, _ in trend}
         for i, sale in enumerate(group.sales):
@@ -472,8 +494,7 @@ def _stats(group: Group) -> str:
     tz = _tz()
     rows = [
         ("Ventes connues", str(len(prices))),
-        ("Prix retenu par le bot", (_money(group.clean.price) + (" (nouvelle valeur)" if group.clean.trend else "")
-                                    if group.clean else "— (moins de 3 ventes en 30 j)")),
+        ("Prix retenu par le bot", _retained(group)),
         ("Moyenne", _money(statistics.fmean(prices)) if prices else "—"),
         ("Médiane", _money(statistics.median(prices)) if prices else "—"),
         ("Plus bas", _money(min(prices)) if prices else "—"),
@@ -482,14 +503,25 @@ def _stats(group: Group) -> str:
          if last else "—"),
         ("Moyenne du site", _money(group.site_average)),
     ]
-    if group.clean and group.rarity != SHINY:
-        rows.append(("Prix auto du bot", f"achat ≤ {_money(math.floor(group.clean.price * AUTO_BUY_RATIO))} · "
-                                         f"vente {_money(math.floor(group.clean.price * AUTO_SELL_RATIO))}"))
+    if group.retained and group.rarity != SHINY:
+        rows.append(("Prix auto du bot", f"achat ≤ {_money(math.floor(group.retained * AUTO_BUY_RATIO))} · "
+                                         f"vente {_money(math.floor(group.retained * AUTO_SELL_RATIO))}"))
     if group.outliers:
         rows.append(("Ventes écartées", f"{len(group.outliers)} (aberrantes ou d'avant un changement de valeur)"))
     body = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in rows)
     return f'<section class="card"><h2>{_badge(group.rarity)} Rareté {html.escape(group.rarity or "inconnue")}' \
            f'</h2><table class="stats">{body}</table></section>'
+
+
+def _retained(group: Group) -> str:
+    if group.retained is not None:
+        if group.source == "marche":
+            return _money(group.retained) + (" (nouvelle valeur)" if group.clean and group.clean.trend else "")
+        return f"{_money(group.retained)} (moyenne du site{f', {group.count} ventes' if group.count else ''})"
+    if group.low:  # une vente aberrante pèserait autant que les autres
+        return (f"— ({group.count if group.count is not None else 'trop peu de'} vente(s), pas assez pour s'y "
+                f"fier) : le bot retient la plus basse, {_money(group.low)}")
+    return "— (aucune vente connue)"
 
 
 def _last_sales(groups: list[Group]) -> str:
@@ -511,9 +543,9 @@ def _last_sales(groups: list[Group]) -> str:
 
 
 def _gap(price: float, group: Group) -> str:
-    if not group.clean:
+    if not group.retained:
         return ""
-    gap = (price / group.clean.price - 1) * 100
+    gap = (price / group.retained - 1) * 100
     return f"{gap:+.0f} %"
 
 
@@ -663,7 +695,8 @@ def caption(details: Details) -> str:
         prices = group.prices
         if not prices:
             continue
-        clean = f", retenu {_money(group.clean.price)}" if group.clean else ""
+        clean = (f", retenu {_money(group.retained)}" if group.retained else
+                 f", trop peu de ventes : retenue la plus basse, {_money(group.low)}" if group.low else "")
         parts.append(f"{group.rarity or '?'} : {len(prices)} vente(s), moyenne {_money(statistics.fmean(prices))}, "
                      f"de {_money(min(prices))} à {_money(max(prices))}{clean}")
         evolution = growth(group, details.at)
