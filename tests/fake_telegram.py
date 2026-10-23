@@ -21,6 +21,7 @@ class FakeTelegram:
         self.reject_html = False  # refuser la mise en forme, comme une balise mal formée
         self.deleted = []  # identifiants des messages supprimés
         self.documents = []  # fichiers envoyés : {"chat_id", "caption", "name", "content"}
+        self.menus = []  # menus de commandes publiés (setMyCommands)
         self._next_id = 1
 
     def say(self, text, chat_id=CHAT_ID):
@@ -71,6 +72,9 @@ class FakeTelegram:
                     fake.chats.append(str(body["chat_id"]))
                     fake.parse_modes.append(body.get("parse_mode"))
                     return self._send({"ok": True, "result": {"message_id": 0}})
+                if method == "setMyCommands":
+                    fake.menus.append(body)
+                    return self._send({"ok": True, "result": True})
                 if method == "deleteMessage":
                     fake.deleted.append(body["message_id"])
                     return self._send({"ok": True, "result": True})

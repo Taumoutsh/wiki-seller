@@ -264,7 +264,24 @@ class CommandListener:
         self._thread.join(POLL_SECONDS + 20)
         _LISTENING.clear()
 
+    def publish_commands(self) -> None:
+        """Menu des commandes affiché par Telegram en tapant « / » : celles de tous, et
+        celles de l'administrateur en plus dans sa conversation."""
+        from . import accounts
+        from .commands import menu_commands
+
+        try:
+            self.bot.call("setMyCommands", commands=menu_commands())
+            admin = accounts.admin_id(self.config) if self.config is not None else None
+            if admin and admin.lstrip("-").isdigit():
+                self.bot.call("setMyCommands", commands=menu_commands(admin=True),
+                              scope={"type": "chat", "chat_id": int(admin)})
+            log.info("Telegram : menu des commandes publié.")
+        except Exception as exc:  # le bot marche sans menu
+            log.warning("Telegram : menu des commandes non publié (%s).", exc)
+
     def _run(self) -> None:
+        self.publish_commands()
         while not self._stop.is_set():
             try:
                 messages = self.bot.poll(LISTEN_SECONDS)

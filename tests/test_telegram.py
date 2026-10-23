@@ -180,3 +180,27 @@ def test_formatting_refused_by_telegram_falls_back_to_plain_text(tmp_path):
         telegram.send("<b>Bilan</b>\n<pre>Loire &amp; Cher  40</pre>", html=True)
     assert fake.sent == ["<b>Bilan</b>\n<pre>Loire &amp; Cher  40</pre>", "Bilan\nLoire & Cher  40"]
     assert fake.parse_modes == ["HTML", None]
+
+
+def test_command_menu_is_published_with_admin_commands_for_the_admin(tmp_path):
+    from wiki_seller import accounts
+    from wiki_seller.telegram import CommandListener
+
+    from .test_end_to_end import make_config
+
+    base = make_config(tmp_path, "http://127.0.0.1:1", [], wanted=[], telegram_chat_id=CHAT_ID)
+    accounts.migrate(base)
+    with FakeTelegram() as fake:
+        listener = CommandListener(bot(tmp_path, fake), lambda chat, kind: None, base).start()
+        try:
+            assert wait_for(lambda: len(fake.menus) == 2)
+        finally:
+            listener.stop()
+    everyone, admin = fake.menus
+    names = [c["command"] for c in everyone["commands"]]
+    assert "scope" not in everyone and {"buy", "sell", "details", "settings", "help"} <= set(names)
+    assert "adduser" not in names and len(names) == len(set(names))
+    assert {c["command"]: c["description"] for c in everyone["commands"]}["buy"] == \
+        "Acheter, protégée une fois obtenue (<carte> [max])"
+    assert admin["scope"] == {"type": "chat", "chat_id": int(CHAT_ID)}
+    assert {"users", "adduser", "removeuser"} <= {c["command"] for c in admin["commands"]}

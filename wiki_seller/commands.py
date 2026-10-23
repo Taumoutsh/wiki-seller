@@ -2,6 +2,7 @@
 chaque réveil) et administration des comptes. Chaque fonction renvoie la réponse à
 envoyer dans la conversation."""
 
+import re
 from html import escape
 
 from . import accounts, settings
@@ -45,7 +46,8 @@ HELP_TEXT = ("📖 Commandes\n"
              "\n⚙️ Compte\n"
              "/settings — voir les réglages\n"
              "/set <réglage> <valeur> — changer un réglage\n"
-             "/pause · /resume — tout arrêter, tout reprendre\n"
+             "/pause — tout arrêter\n"
+             "/resume — tout reprendre\n"
              "/simulation on|off — tout simuler, rien n'est envoyé au site\n"
              "\n🏪 Marché\n"
              "/details <carte> [rareté] — fiche des ventes : graphique, prix moyen, min, max\n"
@@ -66,7 +68,7 @@ ADMIN_HELP = ("\n\n👑 Administration\n"
               "/adduser <chat_id> <nom> — ouvrir l'accès à une conversation\n"
               "/removeuser <chat_id> — retirer un compte (ses fichiers sont gardés)\n"
               "/set cache_prix <durée> — validité des prix en cache, pour tous (ex. 24h, 7j)\n"
-              "/set ventes_min <n> — ventes connues minimales pour vendre une carte automatiquement, pour tous")
+              "/set ventes_min <n> — ventes connues minimales pour se fier au prix d'une carte, pour tous")
 ADMIN_COMMANDS = ("/users", "/adduser", "/removeuser")
 WELCOME_TEXT = ("✅ Bienvenue {name} ! Votre accès au bot WikiMasters est ouvert.\n\n"
                 "1. Dans une fenêtre privée, connectez-vous à wiki-masters.com, ouvrez le favori « cookies » "
@@ -95,6 +97,22 @@ MAX_MESSAGE = 3800  # Telegram refuse les messages de plus de 4096 caractères
 
 def help_text(admin: bool = False) -> str:
     return HELP_TEXT + (ADMIN_HELP if admin else "")
+
+
+def menu_commands(admin: bool = False) -> list[dict]:
+    """Menu des commandes de Telegram (affiché en tapant « / »), tiré de l'aide : chaque
+    ligne « /commande <arguments> — description », une fois par commande."""
+    menu: dict[str, str] = {}
+    for line in help_text(admin).splitlines():
+        if not line.startswith("/"):
+            continue
+        head, _, description = line.partition(" — ")
+        name, _, arguments = head.lstrip("/").partition(" ")
+        if re.fullmatch(r"[a-z0-9_]{1,32}", name) and name not in menu:
+            text = description[:1].upper() + description[1:] + (f" ({arguments})" if arguments else "")
+            menu[name] = text[:256]
+    menu.setdefault("help", "Toutes les commandes et leurs options")
+    return [{"command": name, "description": text} for name, text in menu.items()]
 
 
 def run_admin_command(base, command: str, args: str, bot=None) -> str:

@@ -89,6 +89,10 @@ s'ils ne fonctionnent pas.
 
 ## Commandes du bot
 
+En tapant « / » dans Telegram, le menu des commandes s'affiche, avec leurs arguments ; les
+commandes d'administration n'y apparaissent que dans la conversation de l'administrateur.
+`/help` (ou tout message non compris) donne l'aide complète, avec les options.
+
 | Commande | Effet |
 |---|---|
 | `/update` (ou `/bilan`) | Bilan immédiat (voir « Bilan ») |
