@@ -146,3 +146,11 @@ def test_unsold_tracker_replays_history_in_order(tmp_path):
     # Comme le site : le plus récent d'abord. 3 invendues, puis vendue.
     tracker.update([ended(4, winner="w"), ended(3), ended(2), ended(1)], "me", now)
     assert tracker.paused("A", "Agen", now) is None
+
+
+def test_card_with_too_few_sales_is_left_to_the_discard():
+    groups = parse_collection([entry("a1", "A", "Rare", "R"), entry("b1", "B", "Légende", "L")])
+    plan = build_sale_plan(groups, set(), {"A:R": 900, "B:L": 900}, [], 0.7, sales_counts={"A:R": 2, "B:L": 2},
+                           min_sales=4, discard_below=15, discard_rarities=("R",))
+    assert plan.items == [] and ("Rare", "2 vente(s) connue(s) seulement, laissée à la défausse") in plan.skipped
+    assert [i.title for i in plan.set_aside] == ["Légende"]  # rareté jamais défaussée : vendue en dernier recours

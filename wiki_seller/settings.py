@@ -188,8 +188,8 @@ def _min_sales_text(config) -> str:
 
 GLOBAL_SETTINGS = (
     Setting("ventes_min", "ventes connues minimales pour se fier au prix d'une carte, pour tous les comptes : en "
-            "dessous, pas de vente automatique (mise de côté, vendue en dernier recours) ni de prix auto, et la "
-            "défausse prend sa vente la plus basse", lambda t: {"min_sales_to_sell": _integer(1, 100)(t)}, _min_sales_text),
+            "dessous, défaussée (raretés de raretes_defausse), sinon mise de côté et vendue en dernier recours ; "
+            "pas de prix auto", lambda t: {"min_sales_to_sell": _integer(1, 100)(t)}, _min_sales_text),
     Setting("cache_prix", "durée de validité d'un prix moyen en cache (ex. 24h, 168h ou 7j), pour tous les comptes",
             lambda t: {"price_cache_ttl": _hours(t)}, lambda c: _hours_text(c.price_cache_ttl)),
 )

@@ -148,7 +148,7 @@ commandes. (`/want` est l'ancien nom de `/buy`, encore accepté.)
 | `/removeuser <chat_id>` | Retire le compte (ses fichiers restent dans `state/users/<chat_id>/`) |
 | `/users` | Comptes : état (actif, pause, simulation), session, accès au Marché 🏪, nombre de cartes par liste |
 | `/set cache_prix 168` | Durée de validité des prix en cache, pour tous les comptes (`168`, `168h` ou `7j`) |
-| `/set ventes_min 4` | Ventes connues minimales pour se fier au prix d'une carte, pour tous les comptes : en dessous, pas de vente automatique (mise de côté), pas de prix `auto`, et la défausse prend sa vente la plus basse |
+| `/set ventes_min 4` | Ventes connues minimales pour se fier au prix d'une carte, pour tous les comptes : en dessous, défaussée (raretés de `raretes_defausse`), sinon mise de côté et vendue en dernier recours ; pas de prix `auto` |
 
 Une conversation inconnue qui écrit au bot reçoit seulement son identifiant.
 
@@ -189,9 +189,10 @@ script :
    compris) et les cartes à acheter (même déjà obtenues en partie) : mise de départ à `prix` (70 %) du prix moyen, arrondie à l'entier inférieur
    et ajustée d'après les enchères en cours de la même carte, pour `duree` (1h, ou la
    durée de nuit). Une carte sans prix moyen est ignorée ; une carte dont le prix repose
-   sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent) est **mise
-   de côté** (`ventes_min`, 4 : réglage commun de l'administrateur), jusqu'à ce que
-   d'autres ventes confirment son prix. Quand il ne reste plus rien d'autre à vendre et
+   sur **3 ventes ou moins** (ventes isolées, peut-être des échanges d'argent ;
+   `ventes_min`, 4 : réglage commun de l'administrateur) est **laissée à la défausse** si
+   sa rareté est dans `raretes_defausse` (défaussée quel que soit son prix), sinon **mise
+   de côté** jusqu'à ce que d'autres ventes confirment son prix. Quand il ne reste plus rien d'autre à vendre et
    qu'il reste des places, ces cartes partent **en dernier recours**, calculées sur leur
    **vente la plus basse connue** au lieu du prix moyen (Marché : la plus basse des
    ventes retenues ; sinon la plus basse de la moyenne et de la dernière vente) ; la
@@ -293,11 +294,11 @@ des prix, après les prix utiles aux ventes)
 et la **défausse aussitôt** si elle vaut `defausse` ou moins (1 wikibidou par
 exemplaire).
 
-- **Prix sur trop peu de ventes** (moins de `ventes_min`, 4) : une vente aberrante (un
-  échange d'argent à 22 050 pour une commune vendue 10) pèse autant que les autres ; la
-  carte vaut alors sa **vente la plus basse connue** (Marché : la plus basse des ventes
-  récentes ; site : la plus basse de la moyenne et de la dernière vente). Le prix `auto`
-  de `/buy` et `/sell` attend, lui, d'avoir assez de ventes.
+- **Trop peu de ventes** (moins de `ventes_min`, 4, ou aucune) : pas de prix auquel se
+  fier (un échange d'argent à 22 050 pour une commune vendue 10 pèse autant que les
+  autres ventes) ; la carte est **défaussée quel que soit son prix moyen**, et la vente
+  automatique la laisse à la défausse. Le prix `auto` de `/buy` et `/sell` attend, lui,
+  d'avoir assez de ventes.
 - **Défaussées :** prix moyen égal ou inférieur au seuil ; pour une commune (`C`) ou peu
   commune (`PC`), aussi aucune vente connue ou un prix qui n'a pas pu être lu. Tous les
   exemplaires, y compris le dernier.

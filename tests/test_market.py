@@ -263,9 +263,7 @@ def test_same_card_in_two_rarities_has_two_lines(tmp_path):
 
 
 def test_price_is_trusted_only_with_enough_sales():
-    from wiki_seller.pricing import decision_price, reliable
+    from wiki_seller.pricing import reliable
 
-    rosehill = {"average": 11030, "count": 2, "low": 10}
-    assert not reliable(rosehill, 4) and decision_price(rosehill, 11030, 4) == 10  # la plus basse
-    assert reliable({"count": 4}, 4) and decision_price({"count": 4, "low": 10}, 300, 4) == 300
+    assert not reliable({"average": 11030, "count": 2, "low": 10}, 4) and reliable({"count": 4}, 4)
     assert reliable({"average": 50}, 4)  # prix en cache d'avant le comptage des ventes : gardé

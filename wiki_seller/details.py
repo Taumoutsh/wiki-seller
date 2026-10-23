@@ -84,7 +84,7 @@ class Group:
     retained: float | None = None  # prix sur lequel le bot décide (assez de ventes pour s'y fier)
     source: str = ""  # « marche » ou « moyenne » (moyenne du site)
     count: int | None = None  # ventes sur lesquelles repose le prix
-    low: float | None = None  # trop peu de ventes (ventes_min) : la plus basse, que le bot retient
+    low: float | None = None  # trop peu de ventes (ventes_min) : la plus basse (vente en dernier recours)
     outliers: set[int] = field(default_factory=set)  # index (dans sales) des ventes écartées par le bot
 
     @property
@@ -137,7 +137,7 @@ def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, no
     """Ventes par rareté (celle demandée seulement, si rarity), avec le prix retenu par le
     bot et les ventes qu'il écarte, comme pricing.PriceReader : prix nettoyé du Marché avec
     au moins 3 ventes récentes, sinon moyenne du site ; avec moins de min_sales ventes
-    (ventes_min), le bot ne s'y fie pas et retient la plus basse connue."""
+    (ventes_min), le bot ne s'y fie pas (défausse, ou vente en dernier recours au plus bas)."""
     by_rarity: dict[str, list[Sale]] = {}
     for sale in sales:
         by_rarity.setdefault(sale.rarity, []).append(sale)
@@ -520,7 +520,8 @@ def _retained(group: Group) -> str:
         return f"{_money(group.retained)} (moyenne du site{f', {group.count} ventes' if group.count else ''})"
     if group.low:  # une vente aberrante pèserait autant que les autres
         return (f"— ({group.count if group.count is not None else 'trop peu de'} vente(s), pas assez pour s'y "
-                f"fier) : le bot retient la plus basse, {_money(group.low)}")
+                "fier) : défaussée si sa rareté est dans raretes_defausse, sinon vendue seulement en dernier "
+                f"recours, au plus bas ({_money(group.low)})")
     return "— (aucune vente connue)"
 
 
@@ -696,7 +697,7 @@ def caption(details: Details) -> str:
         if not prices:
             continue
         clean = (f", retenu {_money(group.retained)}" if group.retained else
-                 f", trop peu de ventes : retenue la plus basse, {_money(group.low)}" if group.low else "")
+                 ", trop peu de ventes pour s'y fier" if group.low else "")
         parts.append(f"{group.rarity or '?'} : {len(prices)} vente(s), moyenne {_money(statistics.fmean(prices))}, "
                      f"de {_money(min(prices))} à {_money(max(prices))}{clean}")
         evolution = growth(group, details.at)

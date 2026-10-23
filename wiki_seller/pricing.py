@@ -44,14 +44,6 @@ def reliable(entry: dict | None, min_sales: int) -> bool:
     return not isinstance(count, int) or count >= min_sales
 
 
-def decision_price(entry: dict | None, average: float | None, min_sales: int) -> float | None:
-    """Prix sur lequel décider (défausse) : le prix moyen, ou, avec trop peu de ventes pour
-    s'y fier (une vente aberrante pèse autant que les autres), la plus basse connue."""
-    if reliable(entry, min_sales):
-        return average
-    return (entry or {}).get("low") or average
-
-
 def pause(seconds: float, should_stop) -> bool:
     """Attend `seconds` secondes ; False dès qu'une passe attend la session."""
     deadline = time.monotonic() + seconds

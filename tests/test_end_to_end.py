@@ -441,31 +441,32 @@ def test_discard_runs_in_background_above_trigger(tmp_path):
         DISCARDER.join(120)
     assert not DISCARDER.running()
     # Les plus communes d'abord (C, PC, puis R), chacune dès son prix lu ; ni la carte
-    # protégée, ni la carte voulue, ni la rare sans prix ; « Pile quinze » (15) : seuil compris.
-    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Pile quinze", "Presque"]
-    assert sorted(c["card"]["wikipedia_title"] for c in site.collection) == [
-        "Rare sans prix", "Tour Eiffel", "Victor Hugo"]
+    # protégée, ni la carte voulue ; « Pile quinze » (15) : seuil compris ; « Rare sans
+    # prix » : aucune vente connue, pas de prix auquel se fier.
+    assert site.discarded == ["Caillou", "Caillou", "Feuille", "Pile quinze", "Presque", "Rare sans prix"]
+    assert sorted(c["card"]["wikipedia_title"] for c in site.collection) == ["Tour Eiffel", "Victor Hugo"]
 
 
-def test_price_resting_on_too_few_sales_is_its_lowest_sale(tmp_path, caplog):
+def test_cards_with_too_few_sales_are_discarded(tmp_path, caplog):
     import logging
 
     from wiki_seller.discard import DISCARDER
 
     cards = [entry("r1", "RO", "Cimetière de Rosehill", "C"), entry("r2", "RU", "Rubis", "R"),
-             entry("g1", "GA", "Galet", "C")]
+             entry("g1", "GA", "Galet", "C"), entry("s1", "SA", "Saphir", "UR"), entry("o1", "OR", "Or", "L")]
     # Rosehill : deux ventes, 22 050 (aberrante) et 10 ; Rubis : deux ventes, 2 000 et 3 000 ;
-    # Galet : cinq ventes, moyenne 400 (assez de ventes : le prix moyen compte).
-    with FakeWikiMasters(cards, {"RO": 11030, "RU": 2500, "GA": 400}, max_auctions=5) as site:
+    # Saphir : aucune vente ; Galet : cinq ventes, moyenne 400 (le prix moyen compte) ;
+    # Or : légendaire, jamais défaussée (raretes_defausse).
+    with FakeWikiMasters(cards, {"RO": 11030, "RU": 2500, "GA": 400, "OR": 9000}, max_auctions=5) as site:
         site.selling = list(FULL_SLOTS)
-        site.sale_counts.update(RO=2, RU=2)
+        site.sale_counts.update(RO=2, RU=2, OR=1)
         site.latest.update(RO=10, RU=2000, GA=5)
         config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
         caplog.set_level(logging.INFO)
         DISCARDER.start(config, False, False)
         DISCARDER.join(120)
-    assert site.discarded == ["Cimetière de Rosehill"]  # 10 ; Rubis : 2 000 au plus bas ; Galet : 400
-    assert "2 vente(s) seulement, la plus basse à 10" in caplog.text
+    assert site.discarded == ["Cimetière de Rosehill", "Rubis", "Saphir"]  # les plus communes d'abord
+    assert "2 vente(s) connue(s), il en faut 4, prix moyen 11030 peu fiable" in caplog.text
 
 
 def test_no_discard_at_or_below_trigger(tmp_path):
@@ -661,7 +662,7 @@ def test_progress_without_copy_ids_is_discarded_and_the_collection_reread(tmp_pa
         DISCARDER.join(120)
     assert pages_read(site, 1) == 1  # collection relue
     assert site.discarded == ["Caillou", "Caillou", "Tour Eiffel", "Victor Hugo", "Feuille", "Pile quinze",
-                              "Presque"]
+                              "Presque", "Rare sans prix"]
 
 
 def test_card_protected_during_the_discard_is_kept(tmp_path):

@@ -21,7 +21,7 @@ from .config import Config
 from .lists import protected_names
 from . import collection
 from .price_worker import DISCARD
-from .pricing import PriceReader, decision_price, reliable
+from .pricing import PriceReader, reliable
 from .report import record_discard
 from .selection import CardGroup, copies_not_on_sale, count_listed, normalize_name, parse_collection
 from .session import gate, open_site
@@ -59,7 +59,7 @@ class DiscardItem:
     copies: int
     copy_ids: list[str] = field(default_factory=list)
     unreadable: bool = False  # prix illisible (site en panne…) : défaussée seulement si C/PC
-    few_sales: int | None = None  # ventes connues sous ventes_min : average est la plus basse
+    few_sales: int | None = None  # ventes connues sous ventes_min : défaussée quel que soit son prix
 
 
 def total_copies(groups: list[CardGroup]) -> int:
@@ -276,13 +276,15 @@ def _round(config: Config, dry_run: bool, debug: bool, progress: DiscardProgress
                         progress.unpriced += 1  # rare au prix illisible : gardée, redemandée plus tard
                         _next_card(config, progress, reader)
                         continue
-                    # Trop peu de ventes pour se fier au prix moyen (une vente aberrante pèse autant
-                    # que les autres) : la carte vaut sa vente la plus basse.
+                    # Trop peu de ventes (ventes_min), ou aucune : pas de prix auquel se fier, la
+                    # carte est défaussée quel que soit son prix moyen.
                     known = reader.entry(item)
-                    item.few_sales = None if reliable(known, config.min_sales_to_sell) else known.get("count")
-                    average = decision_price(known, average, config.min_sales_to_sell)
+                    item.few_sales = None
+                    if status == reader.OK and (not average or not reliable(known, config.min_sales_to_sell)):
+                        item.few_sales = known.get("count") if isinstance(known.get("count"), int) else 0
                     item.average, item.unreadable = average, status == reader.UNKNOWN
-                    if not item.unreadable and not should_discard(item.rarity, average, config.discard_below):
+                    if (not item.unreadable and item.few_sales is None
+                            and not should_discard(item.rarity, average, config.discard_below)):
                         _next_card(config, progress, reader)
                         continue
                 if not _discard_copies(site, config, item, progress, dry_run):
@@ -335,7 +337,9 @@ class Unreadable:
 def _discard_copies(site: WikiMasters, config: Config, item: DiscardItem, progress: DiscardProgress,
                     dry_run: bool) -> bool:
     """Défausse les exemplaires de la carte. False si une passe attend la session."""
-    price = (f"{item.few_sales} vente(s) seulement, la plus basse à {item.average:g}" if item.few_sales and item.average
+    few = f"{item.few_sales} vente(s) connue(s), il en faut {config.min_sales_to_sell}"
+    price = (f"{few}, prix moyen {item.average:g} peu fiable" if item.few_sales is not None and item.average
+             else few if item.few_sales is not None
              else f"prix moyen {item.average:g}" if item.average else
              "prix illisible, déjà constaté" if item.unreadable and (item.rarity or "") not in DISCARD_WITHOUT_PRICE
              else "prix illisible" if item.unreadable else "aucune vente connue")

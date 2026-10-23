@@ -182,10 +182,14 @@ def build_sale_plan(
         if not average or average <= 0:
             skipped.append((group.title, "pas de prix moyen"))
             continue
-        if discard_below and average <= discard_below and (group.rarity or "") in discard_rarities:  # à défausser
+        to_discard = bool(discard_below) and (group.rarity or "") in discard_rarities
+        if to_discard and average <= discard_below:  # laissée à la défausse
             skipped.append((group.title, f"{average:g}, pas plus que le seuil de défausse {discard_below}"))
             continue
         count = (sales_counts or {}).get(group.key)
+        if to_discard and count is not None and count < min_sales:  # trop peu de ventes : laissée à la défausse
+            skipped.append((group.title, f"{count} vente(s) connue(s) seulement, laissée à la défausse"))
+            continue
         if count is not None and count < min_sales:  # ventes isolées, peut-être des échanges d'argent
             sales = f"{count} vente{'s' if count > 1 else ''} connue{'s' if count > 1 else ''}"
             skipped.append((group.title, f"mise de côté : {sales}, prix {average:g} peu fiable"))
