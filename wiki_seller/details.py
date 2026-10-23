@@ -83,7 +83,7 @@ class Group:
     clean: market.MarketPrice | None = None  # prix nettoyé des ventes du Marché (au moins 3 récentes)
     retained: float | None = None  # prix sur lequel le bot décide (assez de ventes pour s'y fier)
     source: str = ""  # « marche » ou « moyenne » (moyenne du site)
-    count: int | None = None  # ventes sur lesquelles repose le prix
+    count: int | None = None  # ventes connues, aberrantes comprises (comparées à ventes_min)
     low: float | None = None  # trop peu de ventes (ventes_min) : la plus basse (vente en dernier recours)
     outliers: set[int] = field(default_factory=set)  # index (dans sales) des ventes écartées par le bot
 
@@ -167,7 +167,8 @@ def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, no
             group.low = min((p for p in (group.low, latest, average) if p), default=None)
     for group in groups:
         if group.clean is not None:
-            group.retained, group.source, group.count = group.clean.price, "marche", group.clean.sales
+            group.retained, group.source = group.clean.price, "marche"
+            group.count = group.clean.sales + group.clean.removed  # ventes connues, aberrantes comprises
         elif group.site_average:
             group.retained, group.source = group.site_average, "moyenne"
         if group.retained is not None and group.count is not None and group.count < min_sales:

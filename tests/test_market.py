@@ -110,7 +110,8 @@ def test_market_session_prices_every_account(tmp_path):
         assert "session active, fournie par admin" in run_market_command(base, CHAT_ID, "")
         run_once(config)
     cache = json.loads((base.state_dir / "price_cache.json").read_text())
-    assert cache["D:R"]["average"] == 400 and cache["D:R"]["source"] == "marche"  # 9000 écarté
+    assert cache["D:R"]["average"] == 400 and cache["D:R"]["source"] == "marche"  # 9000 écarté…
+    assert cache["D:R"]["count"] == 5  # … mais compté parmi les ventes connues (ventes_min)
     assert cache["B:R"]["average"] == 800 and cache["B:R"]["source"] == "moyenne"  # une seule vente
     assert [(l["title"], l["price"]) for l in site.listings] == [
         ("Château de Versailles", "560"), ("Château de Versailles", "560"), ("Victor Hugo", "280")]  # 70 % de 400

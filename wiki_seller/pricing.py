@@ -108,7 +108,9 @@ class PriceReader:
         found, fallback = self._market(group)
         if found is not None and found.sales >= market.MIN_SALES:
             self.seconds += time.monotonic() - started
-            return self._keep(key, {"average": found.price, "count": found.sales, "low": found.low,
+            # Ventes connues (ventes_min) : toutes, les aberrantes comprises ; le prix, lui, ne
+            # repose que sur les ventes retenues.
+            return self._keep(key, {"average": found.price, "count": found.sales + found.removed, "low": found.low,
                                     "source": "marche"})
         recent_low = found.low if found is not None else None  # trop peu de ventes récentes : la plus basse sert
         try:
