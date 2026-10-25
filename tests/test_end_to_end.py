@@ -1197,9 +1197,9 @@ def test_anti_bot_check_is_reported_once_and_stops_the_listings(tmp_path):
         run_once(config)
         assert len(site.listing_attempts) == 1  # les autres mises en vente échoueraient aussi : la passe s'arrête
         run_once(config)
-    warnings = [t for t in tg.sent if "vérification anti-bot" in t]
-    assert len(warnings) == 1  # une fois (pas avant 3 h)
-    assert "« Vérification anti-bot requise. »" in warnings[0] and "navigateur" in warnings[0]
+    warnings = [t for t in tg.sent if "Vérification anti-bot" in t]
+    assert warnings == ["🤖 Vérification anti-bot demandée (mise en vente de « Tour Eiffel ») : validez-la sur "
+                        "wiki-masters.com, le bot reprendra seul."]  # une fois (pas avant 3 h)
     assert site.listings == []
 
 
@@ -1225,4 +1225,4 @@ def test_anti_bot_check_on_a_bid_is_reported(tmp_path):
                              telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
         run_once(config)
     assert site.bids == [] and buy_cards(config)  # rien d'acheté : toujours dans les achats
-    assert any("vérification anti-bot (mise de 50 sur « Victor Hugo »)" in t for t in tg.sent)
+    assert any("Vérification anti-bot demandée (mise de 50 sur « Victor Hugo »)" in t for t in tg.sent)

@@ -154,9 +154,7 @@ class HumanCheckRequired(SiteError):
 
 HUMAN_CHECK_CODE = "human_verification_required"
 HUMAN_CHECK_REMIND = timedelta(hours=3)  # pas de nouveau message Telegram avant ce délai (par compte)
-HUMAN_CHECK_TEXT = ("🤖 Le site demande une vérification anti-bot ({what}) : « {message} ».\n"
-                    "Ouvrez wiki-masters.com dans votre navigateur, avec ce compte, et validez la vérification : "
-                    "le bot reprend ensuite tout seul. En attendant, mises en vente, mises et défausse échouent.")
+HUMAN_CHECK_TEXT = "🤖 Vérification anti-bot demandée ({what}) : validez-la sur wiki-masters.com, le bot reprendra seul."
 _HUMAN_CHECKS: dict[str, datetime] = {}  # compte → dernier message envoyé
 _HUMAN_CHECKS_LOCK = threading.Lock()
 
@@ -510,7 +508,7 @@ class WikiMasters:
             _HUMAN_CHECKS[key] = now
         from .telegram import notify  # telegram lit les commandes, qui lisent le site
 
-        notify(self.config, HUMAN_CHECK_TEXT.format(what=what, message=message))
+        notify(self.config, HUMAN_CHECK_TEXT.format(what=what))
 
     def list_card(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float | None,
                   dry_run: bool, adjust=None, duration_label: str | None = None,
