@@ -26,7 +26,7 @@ from .lists import AUTO, AUTO_BUY_RATIO, AUTO_SELL_RATIO, SHINY, BuyCard, buy_ca
 from .selection import is_shiny
 from .pricing import PriceReader, reliable
 from .selection import normalize_name
-from .site import SiteError, entry_rarity, min_bid
+from .site import HUMAN_CHECK_CODE, SiteError, entry_rarity, min_bid
 from .state import parse_time, read_json, write_json
 from .telegram import notify
 
@@ -897,9 +897,13 @@ class _Buyer:
                 log.info("Achat : « %s » — l'enchère a monté entre-temps, mise minimale %d.", card.name, minimum)
                 amount = minimum
                 continue
-            if code in ("insufficient_balance", "human_verification_required"):
-                why = ("solde insuffisant" if code == "insufficient_balance"
-                       else "le site demande une vérification (captcha) à faire sur le site")
+            if code == HUMAN_CHECK_CODE:  # vérification anti-bot : prévenu (au plus toutes les 3 h)
+                self.site.human_check(f"mise de {amount} sur « {card.name} »",
+                                      str(refusal.get("error") or refusal.get("message") or code))
+                _forget(entry)
+                return False
+            if code == "insufficient_balance":
+                why = "solde insuffisant"
                 log.warning("Achat : mise de %d sur « %s » impossible : %s.", amount, card.name, why)
                 line = self.state.data["cards"].get(card.id, entry)  # prévenu une fois pour la ligne
                 if not line.get("bid_blocked_notified"):

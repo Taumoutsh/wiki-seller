@@ -85,6 +85,7 @@ class FakeWikiMasters:
         # les mises) : le site refuse alors la nôtre en indiquant le minimum.
         self.hidden_bids: dict[str, int] = {}
         self.listing_attempts: list[str] = []  # identifiants envoyés à POST /api/marketplace
+        self.human_check = False  # vérification anti-bot : mises en vente, mises et défausses refusées (403)
         self.cards: list[dict] = []  # table des cartes de la base (/rest/v1/cards, clé publique)
         self.extension: timedelta | None = None  # mise dans les 10 dernières s : fin repoussée d'autant
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -219,6 +220,11 @@ class FakeWikiMasters:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if site.human_check and self.path.startswith(("/api/marketplace", "/api/user-cards/")):
+                    if self.path == "/api/marketplace":
+                        site.listing_attempts.append(body.get("card_id"))
+                    return self._send(403, {"error": "Vérification anti-bot requise.",
+                                            "code": "human_verification_required"})
                 if self.path.startswith("/auth/v1/token"):
                     if self.headers.get("apikey") != ANON_KEY:
                         return self._send(401, {"message": "Invalid API key"})

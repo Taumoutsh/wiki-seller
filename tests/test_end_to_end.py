@@ -1185,3 +1185,44 @@ def test_auction_end_is_watched_apart_from_the_pass(tmp_path):
             watcher.stop()
     assert site.bids == [("s1", 50)] and buy_cards(config) == []  # mise à 8 s de la fin, gagnée
     assert "victor hugo" in safe_names(config)
+
+
+def test_anti_bot_check_is_reported_once_and_stops_the_listings(tmp_path):
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=5) as site, FakeTelegram() as tg:
+        site.human_check = True
+        config = make_config(tmp_path, site.url, [], telegram_token=TOKEN, telegram_chat_id=CHAT_ID,
+                             telegram_api_url=tg.url)
+        run_once(config)
+        assert len(site.listing_attempts) == 1  # les autres mises en vente échoueraient aussi : la passe s'arrête
+        run_once(config)
+    warnings = [t for t in tg.sent if "vérification anti-bot" in t]
+    assert len(warnings) == 1  # une fois (pas avant 3 h)
+    assert "« Vérification anti-bot requise. »" in warnings[0] and "navigateur" in warnings[0]
+    assert site.listings == []
+
+
+def test_anti_bot_check_stops_the_discard(tmp_path):
+    from wiki_seller.discard import DISCARDER
+
+    with discard_site() as site:
+        site.human_check = True
+        config = make_config(tmp_path, site.url, [], discard_below=15, discard_trigger=1)
+        run_once(config)
+        DISCARDER.join(120)
+    assert site.discarded == [] and len(site.collection) == len(DISCARD_COLLECTION)
+
+
+def test_anti_bot_check_on_a_bid_is_reported(tmp_path):
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    auction, end = ending_auction()
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site, \
+            FakeTelegram() as tg:
+        site.human_check = True
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+        run_once(config)
+    assert site.bids == [] and buy_cards(config)  # rien d'acheté : toujours dans les achats
+    assert any("vérification anti-bot (mise de 50 sur « Victor Hugo »)" in t for t in tg.sent)

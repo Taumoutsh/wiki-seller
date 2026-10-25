@@ -25,7 +25,7 @@ from .pricing import PriceReader, reliable
 from .report import record_discard
 from .selection import CardGroup, copies_not_on_sale, count_listed, normalize_name, parse_collection
 from .session import gate, open_site
-from .site import CollectionScan, DiscardStatus, SessionExpired, WikiMasters
+from .site import CollectionScan, DiscardStatus, HumanCheckRequired, SessionExpired, WikiMasters
 from .state import now_utc, parse_time, read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -239,6 +239,8 @@ def run_discard(config: Config, dry_run: bool, debug: bool) -> bool:
         return True
     except SessionExpired as exc:
         log.warning("Défausse interrompue : session expirée (%s).", exc)
+    except HumanCheckRequired as exc:
+        log.warning("Défausse interrompue : vérification anti-bot demandée (%s) ; reprise au prochain réveil.", exc)
     except Exception:
         log.exception("Défausse interrompue par une erreur ; nouvel essai au prochain réveil.")
     return False

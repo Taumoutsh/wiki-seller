@@ -50,6 +50,13 @@ version dans `state/users/<chat_id>/session.json`. La connexion par mot de passe
 pas possible (la page `/login` attend une case Cloudflare cochée par une personne) : la
 session vient toujours d'un navigateur connecté.
 
+**Vérification anti-bot :** si le site refuse une mise en vente, une mise ou une défausse
+avec « Vérification anti-bot requise » (`human_verification_required`), le bot vous
+prévient sur Telegram (au plus une fois toutes les 3 h) : ouvrez wiki-masters.com dans
+votre navigateur avec ce compte et validez la vérification, le bot reprend ensuite tout
+seul. Il ne la contourne jamais ; en attendant, la passe arrête ses mises en vente et la
+défausse s'interrompt jusqu'au réveil suivant.
+
 ### Copier la ligne de cookies
 
 Toujours dans une **fenêtre privée**, connectée à wiki-masters.com :

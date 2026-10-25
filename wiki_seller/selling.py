@@ -129,6 +129,11 @@ class _Listings:
                          result.average, round(self.config.price_ratio * 100))
             time.sleep(random.uniform(*LISTING_PAUSE))
             return True
+        if result.status is ListingStatus.HUMAN_CHECK:  # toute autre mise en vente échouerait aussi
+            log.warning("%s : %s (%s) ; plus de mise en vente pour cette passe.", item.title, result.status.value,
+                        result.detail)
+            self.slots_full = True
+            return False
         if result.status is ListingStatus.NOT_OWNED:  # ni nouvel essai, ni remise en vente avant relecture
             removed = collection.drop_card(self.config, item.card_id, item.rarity)
             log.info("%s : le site dit que vous ne la possédez plus (%s) ; retirée de la collection gardée "

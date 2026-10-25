@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -146,6 +147,29 @@ class SiteError(Exception):
     pass
 
 
+class HumanCheckRequired(SiteError):
+    """Le site demande une vérification anti-bot (captcha), à faire par une personne dans
+    un navigateur : le script ne la contourne jamais."""
+
+
+HUMAN_CHECK_CODE = "human_verification_required"
+HUMAN_CHECK_REMIND = timedelta(hours=3)  # pas de nouveau message Telegram avant ce délai (par compte)
+HUMAN_CHECK_TEXT = ("🤖 Le site demande une vérification anti-bot ({what}) : « {message} ».\n"
+                    "Ouvrez wiki-masters.com dans votre navigateur, avec ce compte, et validez la vérification : "
+                    "le bot reprend ensuite tout seul. En attendant, mises en vente, mises et défausse échouent.")
+_HUMAN_CHECKS: dict[str, datetime] = {}  # compte → dernier message envoyé
+_HUMAN_CHECKS_LOCK = threading.Lock()
+
+
+def human_check_message(status: int, data: object, text: str) -> str | None:
+    """Message du site s'il demande une vérification anti-bot, sinon None."""
+    if isinstance(data, dict) and data.get("code") == HUMAN_CHECK_CODE:
+        return str(data.get("error") or data.get("message") or HUMAN_CHECK_CODE)
+    if status in (401, 403, 429) and (HUMAN_CHECK_CODE in text or re.search(r"anti.?bot", text, re.I)):
+        return text[:200]
+    return None
+
+
 class PriceApiUnavailable(Exception):
     """L'API des prix a refusé la requête. `transient` : refus passager (trop de
     requêtes, panne), et non un accès interdit."""
@@ -167,6 +191,7 @@ class ListingStatus(Enum):
     SLOTS_FULL = "plus de place aux enchères"
     NO_PRICE = "prix calculé nul"
     NOT_OWNED = "plus dans la collection"
+    HUMAN_CHECK = "vérification anti-bot demandée"
     FAILED = "échec"
 
 
@@ -473,6 +498,20 @@ class WikiMasters:
 
     # ─────────────────────────── Vente et défausse ───────────────────────────
 
+    def human_check(self, what: str, message: str) -> None:
+        """Vérification anti-bot demandée par le site : journal, et message Telegram au plus
+        une fois toutes les HUMAN_CHECK_REMIND pour ce compte."""
+        log.warning("Le site demande une vérification anti-bot (%s) : %s", what, message)
+        key, now = str(self.config.session_file), datetime.now(timezone.utc)
+        with _HUMAN_CHECKS_LOCK:
+            last = _HUMAN_CHECKS.get(key)
+            if last is not None and now - last < HUMAN_CHECK_REMIND:
+                return
+            _HUMAN_CHECKS[key] = now
+        from .telegram import notify  # telegram lit les commandes, qui lisent le site
+
+        notify(self.config, HUMAN_CHECK_TEXT.format(what=what, message=message))
+
     def list_card(self, card_id: str, copy_ids: tuple[str, ...], title: str, average: float | None,
                   dry_run: bool, adjust=None, duration_label: str | None = None,
                   price: int | None = None) -> ListingResult:
@@ -507,6 +546,9 @@ class WikiMasters:
             if SLOTS_FULL_TEXT.search(text):
                 return ListingResult(ListingStatus.SLOTS_FULL, detail=text[:200])
             message = str(data.get("error") or data.get("message") or text) if isinstance(data, dict) else text
+            if (check := human_check_message(status, data, text)) is not None:
+                self.human_check(f"mise en vente de « {title} »", check)
+                return ListingResult(ListingStatus.HUMAN_CHECK, price, average, f"HTTP {status} : {check}")
             if status == 409 and NOT_OWNED_TEXT.search(message):
                 return ListingResult(ListingStatus.NOT_OWNED, price, average, f"HTTP 409 : {message[:200]}")
             if status not in (400, 404, 409, 422):
@@ -520,11 +562,14 @@ class WikiMasters:
         if dry_run:
             return DiscardStatus.DRY_RUN, ""
         try:
-            status, _, text = self.api_post(path)
+            status, data, text = self.api_post(path)
         except NETWORK_ERRORS as exc:
             return DiscardStatus.FAILED, f"POST {path} → pas de réponse ({exc})"
         if 200 <= status < 300:
             return DiscardStatus.DISCARDED, f"POST {path}"
+        if (check := human_check_message(status, data, text)) is not None:
+            self.human_check("défausse", check)
+            raise HumanCheckRequired(check)  # chaque défausse échouerait : la défausse s'arrête
         return DiscardStatus.FAILED, f"POST {path} → HTTP {status} : {text[:200]}"
 
     # ─────────────────────────── Achats ───────────────────────────
