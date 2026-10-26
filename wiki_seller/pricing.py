@@ -106,7 +106,7 @@ class PriceReader:
             return self.STOPPED, None
         started = time.monotonic()
         found, fallback = self._market(group)
-        if found is not None and found.sales >= market.MIN_SALES:
+        if found is not None and found.sales + found.removed >= market.MIN_SALES:  # assez de ventes pour filtrer
             self.seconds += time.monotonic() - started
             # Ventes connues (ventes_min) : toutes, les aberrantes comprises ; le prix, lui, ne
             # repose que sur les ventes retenues.
@@ -158,8 +158,8 @@ class PriceReader:
                 log.info("Marché : ventes de « %s » non lues (%s) ; moyenne du site.", group.title, exc)
             return None, True
         self.market_failures = 0
-        if found is None or found.sales < market.MIN_SALES:
-            log.info("Marché : %s vente(s) récente(s) de « %s » seulement ; moyenne du site.",
+        if found is None or found.sales + found.removed < market.MIN_SALES:
+            log.info("Marché : %s vente(s) de « %s » seulement ; moyenne du site.",
                      found.sales if found else "aucune", group.title)
         else:
             log.info("Marché : « %s » à %.0f (%d vente(s) retenue(s), %d écartée(s)%s).", group.title, found.price,

@@ -80,7 +80,7 @@ class Group:
     rarity: str
     sales: list[Sale]
     site_average: float | None = None
-    clean: market.MarketPrice | None = None  # prix nettoyé des ventes du Marché (au moins 3 récentes)
+    clean: market.MarketPrice | None = None  # prix nettoyé des ventes du Marché (au moins 3)
     retained: float | None = None  # prix sur lequel le bot décide (assez de ventes pour s'y fier)
     source: str = ""  # « marche » ou « moyenne » (moyenne du site)
     count: int | None = None  # ventes connues, aberrantes comprises (comparées à ventes_min)
@@ -147,7 +147,7 @@ def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, no
             continue
         group = Group(key, by_rarity[key])
         group.clean = market.clean_price([market.Sale(s.at, s.price) for s in group.sales], now)
-        if group.clean is not None and group.clean.sales < market.MIN_SALES:
+        if group.clean is not None and group.clean.sales + group.clean.removed < market.MIN_SALES:
             group.low, group.clean = group.clean.low, None  # trop peu de ventes récentes : moyenne du site
         group.outliers = _outliers(group.sales, now)
         groups.append(group)
@@ -180,7 +180,8 @@ def build_groups(sales: list[Sale], summary: dict | None, rarity: str | None, no
 
 def _outliers(sales: list[Sale], now: datetime) -> set[int]:
     """Ventes que le calcul du bot écarte (même règle que market.clean_price)."""
-    recent = [i for i, s in enumerate(sales) if s.at >= now - market.WINDOW][-market.MAX_SALES:]
+    used = {(s.at, s.price) for s in market.used_sales([market.Sale(s.at, s.price) for s in sales], now)}
+    recent = [i for i, s in enumerate(sales) if (s.at, s.price) in used]
     prices = [sales[i].price for i in recent]
     if len(prices) < market.MIN_SALES:
         return set()

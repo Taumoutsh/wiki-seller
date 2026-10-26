@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -39,8 +40,9 @@ def test_regular_prices_and_window():
     assert clean_price(sales(100, 120), NOW) == MarketPrice(110, 2, 0, False)  # trop peu de ventes : médiane…
     assert clean_price(sales(22050, 10), NOW).low == 10  # … et la plus basse
     old = sales(5, 5, 5, start=NOW - timedelta(days=40))  # hors des 30 jours
-    assert clean_price(old + sales(100, 100), NOW).sales == 2  # ventes de plus de 30 jours ignorées
-    assert clean_price(old, NOW) is None
+    assert clean_price(old + sales(100, 101, 99), NOW).price == 100  # trois ventes récentes : les anciennes ignorées
+    assert clean_price(old + sales(100, 100), NOW) == MarketPrice(100, 2, 3, True)  # trop peu : anciennes comprises
+    assert clean_price(old, NOW).price == 5 and clean_price([], NOW) is None
     assert clean_price(sales(*([1] * 10 + [100] * 50)), NOW).price == 100  # 50 dernières ventes
 
 
@@ -268,3 +270,29 @@ def test_price_is_trusted_only_with_enough_sales():
 
     assert not reliable({"average": 11030, "count": 2, "low": 10}, 4) and reliable({"count": 4}, 4)
     assert reliable({"average": 50}, 4)  # prix en cache d'avant le comptage des ventes : gardé
+
+
+def test_isolated_spike_is_removed_with_older_sales_when_few_are_recent():
+    # Moria (PC) : deux ventes seulement sur 30 jours (1 756 et 100) ; avec les plus anciennes,
+    # les deux sont écartées, et 1 756 puis 100 ne font pas un « changement de valeur ».
+    moria = [Sale(NOW - timedelta(days=d), p) for d, p in ((108, 20), (53, 5), (44, 10), (11, 1756), (1, 100))]
+    found = clean_price(moria, NOW)
+    assert found == MarketPrice(pytest.approx(35 / 3), 3, 2, False) and found.low == 5
+
+
+def test_coherent_last_sales_are_still_a_new_value():
+    assert clean_price(sales(100, 100, 102, 98, 100, 101, 300, 320), NOW).trend  # 300 puis 320 : même niveau
+    assert not clean_price(sales(100, 100, 102, 98, 100, 101, 1756, 300), NOW).trend  # sans rapport entre elles
+
+
+def test_market_price_is_used_even_when_most_sales_are_removed(tmp_path):
+    from wiki_seller.pricing import PriceReader
+
+    with FakeWikiMasters(COLLECTION, API_AVERAGES) as site:
+        base, config = market_accounts(tmp_path, site)
+        assert run_market_command(base, "42", site.session_cookies()).startswith("✅")
+        site.market_sales = {"D": market_sales(20, 10, 1756, 100, 15)}  # deux aberrantes sur cinq
+        reader = PriceReader(None, config)
+        group = SimpleNamespace(card_id="D", rarity="R", title="Moria")
+        assert reader.read(group) == ("ok", 15)
+        assert reader.entry(group)["source"] == "marche" and reader.entry(group)["count"] == 5

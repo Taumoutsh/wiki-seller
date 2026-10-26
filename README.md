@@ -338,12 +338,15 @@ s'y connecte, copie les cookies (voir « Copier la ligne de cookies ») et envoi
 `/market` suivi de la ligne, puis ferme la fenêtre. Il faut une autre fenêtre que celle
 de sa session de compte : les deux se gêneraient (le bot refuse la même session). Cette
 session, dans `state/market/`, ne sert qu'à lire les prix, pour tous les comptes. Le prix
-est calculé sur les ventes des 30 derniers jours (50 au plus) :
+est calculé sur les ventes des 30 derniers jours (50 au plus), ou, s'il y en a moins de 3,
+sur toutes les ventes connues (sans quoi une vente aberrante récente ne pourrait pas être
+écartée) :
 
 - une vente est **aberrante** si elle s'écarte de la médiane de plus de 3 écarts
   « robustes » (écart absolu médian, au moins 10 % de la médiane) : un échange d'argent
   ne fausse pas le calcul de l'écart lui-même, comme il fausserait un écart type ;
-- si **les dernières ventes** (au moins 2) sont aberrantes, toutes dans le même sens, la
+- si **les dernières ventes** (au moins 2) sont aberrantes, toutes dans le même sens et
+  **au même niveau** (à un facteur 2 près : 300 puis 320 oui, 1 756 puis 100 non), la
   carte **change de valeur** : le prix est la **médiane** des dernières ventes nettement
   de ce côté, qu'un échange d'argent parmi elles ne fausse pas (ventes réelles 700, 700…,
   1651, 1232, 1706, 4835 → 1678). Une seule dernière vente aberrante peut être un échange
@@ -351,7 +354,7 @@ est calculé sur les ventes des 30 derniers jours (50 au plus) :
   auto pourrait miser sur un prix gonflé) ;
 - sinon les ventes aberrantes isolées (échanges d'argent) sont écartées, et le prix est la
   **moyenne des autres** ;
-- moins de 3 ventes récentes : la moyenne du site.
+- moins de 3 ventes connues en tout : la moyenne du site.
 
 Le journal donne pour chaque carte le prix retenu, les ventes gardées et écartées.
 

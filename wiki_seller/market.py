@@ -35,7 +35,8 @@ MAX_SALES = 50
 MIN_SALES = 3
 OUTLIER_SPREAD = 3  # écarts robustes au-delà desquels une vente est aberrante
 MIN_SPREAD_RATIO = 0.1  # écart robuste minimal, en part de la médiane (prix très réguliers)
-TREND_MIN_SALES = 2  # dernières ventes aberrantes (même sens) pour conclure à un changement de valeur
+TREND_MIN_SALES = 2  # dernières ventes aberrantes (même sens) pour conclure à un changement de valeur…
+TREND_COHERENCE = 2  # … et au même niveau : à ce facteur près de leur médiane (1 756 puis 100 : non)
 MAD_TO_STDEV = 1.4826  # écart absolu médian → écart type, pour des prix sans valeurs aberrantes
 
 
@@ -54,11 +55,21 @@ class MarketPrice:
     low: float | None = field(default=None, compare=False)  # vente retenue la plus basse
 
 
+def used_sales(sales: list[Sale], now: datetime) -> list[Sale]:
+    """Ventes sur lesquelles le prix est calculé, des plus anciennes aux plus récentes : celles
+    des 30 derniers jours (WINDOW), ou, s'il y en a moins de MIN_SALES, aussi les plus
+    anciennes (sinon une vente aberrante récente ne pourrait pas être écartée) ; MAX_SALES
+    au plus."""
+    known = sorted((s for s in sales if s.price > 0), key=lambda s: s.at)
+    recent = [s for s in known if s.at >= now - WINDOW]
+    return (recent if len(recent) >= MIN_SALES else known)[-MAX_SALES:]
+
+
 def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
-    """Prix des ventes récentes sans les aberrantes ; None sans vente récente. Avec moins de
-    MIN_SALES ventes, rien ne permet de dire laquelle est aberrante : leur médiane, avec leur
-    nombre (les décisions s'en méfient en dessous de ventes_min) et la plus basse."""
-    recent = sorted((s for s in sales if s.at >= now - WINDOW and s.price > 0), key=lambda s: s.at)[-MAX_SALES:]
+    """Prix des ventes (used_sales) sans les aberrantes ; None sans aucune vente. Avec moins
+    de MIN_SALES ventes, rien ne permet de dire laquelle est aberrante : leur médiane, avec
+    leur nombre (les décisions s'en méfient en dessous de ventes_min) et la plus basse."""
+    recent = used_sales(sales, now)
     if not recent:
         return None
     prices = [s.price for s in recent]
@@ -70,7 +81,7 @@ def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
     tail = 0
     while tail < len(sides) and sides[-1 - tail] != 0 and sides[-1 - tail] == sides[-1]:
         tail += 1
-    if tail >= TREND_MIN_SALES:
+    if tail >= TREND_MIN_SALES and _coherent(prices[-tail:]):
         # Nouvelle valeur : les dernières ventes nettement du même côté (au-delà d'un écart),
         # et leur médiane, qu'un échange d'argent parmi elles ne fausse pas.
         side, start = sides[-1], len(prices)
@@ -80,6 +91,13 @@ def clean_price(sales: list[Sale], now: datetime) -> MarketPrice | None:
         return MarketPrice(statistics.median(kept), len(kept), len(prices) - len(kept), True, min(kept))
     kept = [p for p, side in zip(prices, sides) if side == 0]
     return MarketPrice(statistics.fmean(kept), len(kept), len(prices) - len(kept), False, min(kept))
+
+
+def _coherent(prices: list[float]) -> bool:
+    """Dernières ventes hors norme à peu près au même niveau (un vrai changement de valeur),
+    et non des ventes aberrantes sans rapport entre elles."""
+    middle = statistics.median(prices)
+    return sum(middle / TREND_COHERENCE <= p <= middle * TREND_COHERENCE for p in prices) >= TREND_MIN_SALES
 
 
 def _number(value) -> float | None:
