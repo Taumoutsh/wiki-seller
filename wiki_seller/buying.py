@@ -394,10 +394,11 @@ def _buy_line(buyer: "_Buyer", card: BuyCard, info: SimpleNamespace, snipe_only:
             _forget(slot)
             extra -= 1
 
-    if not snipe_only and len(active()) < remaining:
+    needed = remaining - len(active())
+    if not snipe_only and needed > 0:
         found = site.search_auctions(card.name)
         picked: set[str] = set()
-        while len(active()) < remaining:
+        while needed > 0:  # une enchère par exemplaire manquant (même abandonnée ou simulée aussitôt)
             own = {e.get("auction_id") for e in state.data["cards"].values() if e.get("auction_id")}
             auction = choose_auction(found, card, state.my_id, now, info.my_sales,
                                      abandoned | info.taken | own | picked, buyer.rivals)
@@ -407,11 +408,11 @@ def _buy_line(buyer: "_Buyer", card: BuyCard, info: SimpleNamespace, snipe_only:
             picked.add(auction["id"])
             if not claim(config, auction["id"]):
                 continue  # choisie au même instant par un autre compte
+            needed -= 1
             line.pop("blocked_notified", None)
             _, slot = state.free_slot(card, near)
-            if buyer.leading(auction):  # misée à la main, ou déjà menée
-                slot.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
-                buyer.bid_if_needed(card, slot, auction)
+            if buyer.leading(auction) or config.bid_now:  # mise tout de suite (mise_directe)
+                buyer.bid_now(card, slot, auction)
             else:  # gardée et surveillée : la mise part juste avant la fin
                 buyer.track(card, slot, auction, outbid=False)
     state.drop_empty_slots(card)
@@ -530,15 +531,17 @@ class _Buyer:
             return ""
         claim(self.config, auction["id"])
         if self.leading(auction):  # misée à la main, ou déjà menée
-            slot.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding")
-            self.bid_if_needed(card, slot, auction)
+            self.bid_now(card, slot, auction)
             return ""
-        # Enchère déjà suivie (dépassé, ou pas encore misé) : pas de mise maintenant,
-        # seulement à la fin (réveil SNIPE_LEAD avant), tant que la limite le permet.
+        # Enchère déjà suivie : dépassé, surenchère seulement à la fin (réveil SNIPE_LEAD
+        # avant) ; pas encore misé, mise tout de suite avec mise_directe, sinon à la fin.
         outbid = auction["id"] in info.bidding_ids or slot.get("placed") == auction["id"]
         minimum = min_next_bid(auction)
         if minimum <= card.max_price:
-            self.track(card, slot, auction, outbid)
+            if self.config.bid_now and not outbid:
+                self.bid_now(card, slot, auction)
+            else:
+                self.track(card, slot, auction, outbid)
             return ""
         log.info("Achat : « %s » dépasse la limite (%d > %d) ; abandon de cette enchère.",
                  card.name, minimum, card.max_price)
@@ -744,6 +747,20 @@ class _Buyer:
         log.info("Achat : « %s » — %s, mise minimale %d (limite %d) ; mise à %d s de la fin (%s).", card.name,
                  f"dépassé ({auction.get('current_bid')})" if outbid else "enchère suivie sans miser", minimum,
                  card.max_price, self.config.snipe_lead.total_seconds(), auction.get("end_at"))
+        if WATCH_APART.is_set():  # surveillée à part : enregistrée tout de suite si la fin approche
+            if in_watch_window(entry, self.config.snipe_lead, self.now()):
+                self.state.save()
+            return
+        self.watch_later(card, entry, auction)
+
+    def bid_now(self, card: BuyCard, entry: dict, auction: dict) -> None:
+        """Mise minimale tout de suite (mise_directe, ou enchère déjà menée), puis enchère
+        surveillée jusqu'à la fin : surenchère à SNIPE_LEAD de la fin si vous êtes dépassé."""
+        entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding",
+                     watch_price=min_next_bid(auction))
+        self.bid_if_needed(card, entry, auction)
+        if entry.get("status") != "bidding" or entry.get("auction_id") != auction["id"]:
+            return  # abandonnée (au-dessus du max), ou simulation
         if WATCH_APART.is_set():  # surveillée à part : enregistrée tout de suite si la fin approche
             if in_watch_window(entry, self.config.snipe_lead, self.now()):
                 self.state.save()

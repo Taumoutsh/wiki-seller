@@ -181,6 +181,7 @@ suivante. Un réglage jamais modifié prend la valeur du `.env` (voir « Réglag
 | `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant ce prix ou moins (`0` = coupée), au-delà de ce nombre d'exemplaires ; ces cartes ne sont jamais mises en vente automatiquement |
 | `raretes_defausse` | `UR,SR,R,PC,C`, `toutes`, `aucune` | Raretés que la défausse peut toucher (par défaut, jamais les légendaires) |
 | `budget` | `2000`, `aucun` | Somme maximale des mises en cours |
+| `mise_directe` | `on` | Achat : mise minimale dès qu'une enchère est choisie (`on`), ou seulement avant la fin (`off`) ; dépassé, surenchère avant la fin dans les deux cas |
 | `surenchere` | `30` | Secondes avant la fin d'une enchère pour surenchérir (2 à 300) |
 | `bilan` | `2` | Bilan automatique toutes les N heures (`0` = jamais) |
 | `simulation` | `on` / `off` | Tout simuler |
@@ -235,8 +236,10 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
   menez d'abord ;
 - pour les exemplaires qui restent, le script choisit dans le Marché les enchères les
   moins chères dont la mise minimale
-  ne dépasse pas votre maximum, et **la garde sans miser** : à chaque passe, il vérifie
-  qu'elle reste dans la limite (sinon il en cherche une autre) ;
+  ne dépasse pas votre maximum, et **mise aussitôt la mise minimale** (`mise_directe`,
+  on par défaut) ; avec `mise_directe off`, il **la garde sans miser** jusqu'à la fin. À
+  chaque passe, il vérifie qu'elle reste dans la limite (sinon il en cherche une autre) ;
+  dépassé, il ne surenchérit qu'à la fin ;
 - il revient pour la dernière minute, relit l'enchère **chaque seconde** (mise actuelle,
   temps restant, qui mène) et mise à `surenchere` secondes (30) de la fin **la mise
   minimale**, calculée comme le site (la mise de départ, puis 10 % de plus que la mise en
@@ -494,6 +497,7 @@ modifiables ensuite par `/set`.
 | `DISCARD_RARITIES` | `UR,SR,R,PC,C` | Par compte (`raretes_defausse`) |
 | `MAX_TOTAL_BIDS` | *(vide)* | Par compte (`budget`) |
 | `SNIPE_LEAD` | `30` | Par compte (`surenchere`) |
+| `BID_NOW` | `true` | Par compte (`mise_directe`) |
 | `REPORT_HOURS` | `2` | Par compte (`bilan`) |
 | `PRICE_CACHE_HOURS` | `24` | Commun (`/set cache_prix`) |
 | `MIN_SALES_TO_SELL` | `4` | Commun (`/set ventes_min`) |

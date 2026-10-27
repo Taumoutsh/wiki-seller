@@ -178,6 +178,9 @@ class Config:
     # sans descendre sous price_floor_ratio × prix moyen.
     market_adjust: bool = False
     price_floor_ratio: float = 0.5
+    # Achats : mise minimale dès qu'une enchère est choisie (puis surenchère à snipe_lead de
+    # la fin si dépassé), ou seulement à snipe_lead de la fin (enchère suivie sans miser).
+    bid_now: bool = True
     # Défausse en arrière-plan des cartes valant moins de discard_below (0 = désactivée),
     # lancée quand la collection dépasse discard_trigger exemplaires.
     discard_below: int = 0
@@ -277,6 +280,7 @@ def load_config() -> Config:
         min_sales_to_sell=_positive_int("MIN_SALES_TO_SELL") or 4,
         night_durations=_night_durations(os.getenv("NIGHT_DURATIONS", DEFAULT_NIGHT_DURATIONS)),
         market_adjust=_bool(os.getenv("MARKET_ADJUST"), True),
+        bid_now=_bool(os.getenv("BID_NOW"), True),
         price_floor_ratio=_ratio("PRICE_FLOOR_RATIO", "0.5"),
         discard_below=_non_negative_int("DISCARD_BELOW", 15),
         discard_trigger=_non_negative_int("DISCARD_TRIGGER", 150),

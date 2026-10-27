@@ -1,5 +1,6 @@
 """Parcours complet contre le faux site local (tests/fake_site.py)."""
 
+import dataclasses
 import json
 import time
 
@@ -35,7 +36,9 @@ def make_config(tmp_path, url, safe, wanted=None, **extra):
     wanted_file = tmp_path / "wanted_cards.json"
     if wanted is not None:
         wanted_file.write_text(json.dumps(wanted), encoding="utf-8")
-    extra = {"wanted_cards_file": wanted_file, "supabase_url": url, **extra}
+    # Achats : la plupart des tests suivent l'enchère sans miser (mise_directe off) ; ceux
+    # de la mise directe (réglage par défaut) le demandent.
+    extra = {"wanted_cards_file": wanted_file, "supabase_url": url, "bid_now": False, **extra}
     if "session_cookies" not in extra and url in RUNNING:  # session neuve du faux site
         extra["session_cookies"] = RUNNING[url].session_cookies()
     return Config(
@@ -178,6 +181,29 @@ def test_watches_without_bidding_then_bids_at_the_end_or_moves_on(tmp_path):
     assert "gustave eiffel" not in json.loads(config.wanted_state_file.read_text())["cards"]
 
 
+def test_direct_bid_places_the_minimum_bid_right_away(tmp_path):
+    wanted = [{"name": "gustave eiffel", "max_price": 300}]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=wanted, bid_now=True)
+        run_once(config)  # mise minimale aussitôt sur la moins chère
+        assert site.bids == [("e2", 150)] and tracked(config, "gustave eiffel")["auction_id"] == "e2"
+        run_once(config)  # en tête : pas de nouvelle mise
+        assert site.bids == [("e2", 150)]
+        site.outbid("e2", 200)
+        run_once(config)  # dépassé : surenchère seulement avant la fin
+        assert site.bids == [("e2", 150)] and tracked(config, "gustave eiffel")["status"] == "bidding"
+
+
+def test_direct_bid_on_an_auction_already_followed_without_bidding(tmp_path):
+    wanted = [{"name": "gustave eiffel", "max_price": 300}]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=wanted)  # mise_directe off : suivie sans miser
+        run_once(config)
+        assert site.bids == []
+        run_once(dataclasses.replace(config, bid_now=True))  # réglage passé à on : mise aussitôt
+        assert site.bids == [("e2", 150)]
+
+
 def test_copies_are_watched_on_several_auctions_at_once(tmp_path):
     wanted = [{"name": "Gustave Eiffel", "max_price": 300, "copies": 2}]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
@@ -308,7 +334,8 @@ def test_card_no_longer_owned_is_not_retried_and_leaves_the_kept_collection(tmp_
         site.selling.clear()
         run_once(config)  # collection gardée sans elle : plus jamais proposée
     assert site.listing_attempts.count("c1") == 1
-    assert not [e for e in collection.cached_entries() if e["card_id"] == "C"]
+    kept = collection._READS[collection._key(config)].entries  # la collection gardée de ce compte
+    assert kept and not [e for e in kept if e["card_id"] == "C"]
     assert "vous ne la possédez plus" in caplog.text
 
 
