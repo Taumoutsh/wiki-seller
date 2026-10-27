@@ -652,9 +652,10 @@ class WikiMasters:
             time.sleep(BID_RETRY_PAUSE)
 
     def place_bid(self, auction_id: str, max_price: int, dry_run: bool, deadline: float | None = None,
-                  my_id: str | None = None) -> tuple[str, int | None]:
-        """Mise minimale (calculée sur l'enchère relue), si elle ne dépasse pas max_price ni
-        le solde. Enchère ou mise sans réponse : nouvel essai jusqu'à `deadline`.
+                  my_id: str | None = None, exact: bool = False) -> tuple[str, int | None]:
+        """Mise minimale (calculée sur l'enchère relue), ou max_price lui-même si `exact`,
+        si la mise minimale ne dépasse pas max_price et la mise ne dépasse pas le solde.
+        Enchère ou mise sans réponse : nouvel essai jusqu'à `deadline`.
         Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
         auction = self.read_auction(auction_id)
         while auction is None and deadline is not None and time.monotonic() + BID_RETRY_PAUSE < deadline:
@@ -665,6 +666,8 @@ class WikiMasters:
         amount = min_bid(auction)
         if amount > max_price:
             return "too_high", amount
+        if exact:
+            amount = max_price
         balance = self.fetch_balance()
         if balance is not None and amount > balance:
             return "no_funds", amount

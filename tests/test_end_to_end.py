@@ -181,17 +181,18 @@ def test_watches_without_bidding_then_bids_at_the_end_or_moves_on(tmp_path):
     assert "gustave eiffel" not in json.loads(config.wanted_state_file.read_text())["cards"]
 
 
-def test_direct_bid_places_the_minimum_bid_right_away(tmp_path):
+def test_direct_bid_places_the_max_price_right_away(tmp_path):
     wanted = [{"name": "gustave eiffel", "max_price": 300}]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
         config = make_config(tmp_path, site.url, [], wanted=wanted, bid_now=True)
-        run_once(config)  # mise minimale aussitôt sur la moins chère
-        assert site.bids == [("e2", 150)] and tracked(config, "gustave eiffel")["auction_id"] == "e2"
+        run_once(config)  # votre prix max aussitôt, sur la moins chère
+        assert site.bids == [("e2", 300)] and tracked(config, "gustave eiffel")["auction_id"] == "e2"
         run_once(config)  # en tête : pas de nouvelle mise
-        assert site.bids == [("e2", 150)]
-        site.outbid("e2", 200)
-        run_once(config)  # dépassé : surenchère seulement avant la fin
-        assert site.bids == [("e2", 150)] and tracked(config, "gustave eiffel")["status"] == "bidding"
+        assert site.bids == [("e2", 300)]
+        site.outbid("e2", 310)
+        run_once(config)  # dépassé au-delà du max : abandonnée, votre max misé sur la suivante
+        assert site.bids == [("e2", 300), ("e1", 300)]
+        assert tracked(config, "gustave eiffel")["auction_id"] == "e1"
 
 
 def test_direct_bid_on_an_auction_already_followed_without_bidding(tmp_path):
@@ -200,8 +201,8 @@ def test_direct_bid_on_an_auction_already_followed_without_bidding(tmp_path):
         config = make_config(tmp_path, site.url, [], wanted=wanted)  # mise_directe off : suivie sans miser
         run_once(config)
         assert site.bids == []
-        run_once(dataclasses.replace(config, bid_now=True))  # réglage passé à on : mise aussitôt
-        assert site.bids == [("e2", 150)]
+        run_once(dataclasses.replace(config, bid_now=True))  # réglage passé à on : votre max aussitôt
+        assert site.bids == [("e2", 300)]
 
 
 def test_copies_are_watched_on_several_auctions_at_once(tmp_path):

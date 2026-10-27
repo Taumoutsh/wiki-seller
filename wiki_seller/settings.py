@@ -151,7 +151,8 @@ SETTINGS = (
             lambda t: {"discard_trigger": _integer(0)(t)}, lambda c: str(c.discard_trigger)),
     Setting("budget", "somme maximale des mises en cours, ou aucun",
             lambda t: {"max_total_bids": _budget(t)}, lambda c: str(c.max_total_bids or "aucun")),
-    Setting("mise_directe", "achat : mise tout de suite sur l'enchère choisie (on), ou seulement avant la fin (off)",
+    Setting("mise_directe", "achat : votre prix max misé tout de suite sur l'enchère choisie, abandonnée si dépassé "
+            "(on), ou mise minimale seulement avant la fin (off)",
             lambda t: {"bid_now": _switch(t)}, lambda c: _on(c.bid_now)),
     Setting("surenchere", "secondes avant la fin d'une enchère pour surenchérir (2 à 300)",
             lambda t: {"snipe_lead": timedelta(seconds=_integer(2, 300)(t))},

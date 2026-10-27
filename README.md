@@ -181,7 +181,7 @@ suivante. Un réglage jamais modifié prend la valeur du `.env` (voir « Réglag
 | `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant ce prix ou moins (`0` = coupée), au-delà de ce nombre d'exemplaires ; ces cartes ne sont jamais mises en vente automatiquement |
 | `raretes_defausse` | `UR,SR,R,PC,C`, `toutes`, `aucune` | Raretés que la défausse peut toucher (par défaut, jamais les légendaires) |
 | `budget` | `2000`, `aucun` | Somme maximale des mises en cours |
-| `mise_directe` | `on` | Achat : mise minimale dès qu'une enchère est choisie (`on`), ou seulement avant la fin (`off`) ; dépassé, surenchère avant la fin dans les deux cas |
+| `mise_directe` | `on` | Achat : votre prix max misé dès qu'une enchère est choisie, abandonnée si dépassé (`on`) ; ou enchère suivie sans miser, mise minimale avant la fin et surenchères dans la limite (`off`) |
 | `surenchere` | `30` | Secondes avant la fin d'une enchère pour surenchérir (2 à 300) |
 | `bilan` | `2` | Bilan automatique toutes les N heures (`0` = jamais) |
 | `simulation` | `on` / `off` | Tout simuler |
@@ -236,10 +236,11 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
   menez d'abord ;
 - pour les exemplaires qui restent, le script choisit dans le Marché les enchères les
   moins chères dont la mise minimale
-  ne dépasse pas votre maximum, et **mise aussitôt la mise minimale** (`mise_directe`,
-  on par défaut) ; avec `mise_directe off`, il **la garde sans miser** jusqu'à la fin. À
-  chaque passe, il vérifie qu'elle reste dans la limite (sinon il en cherche une autre) ;
-  dépassé, il ne surenchérit qu'à la fin ;
+  ne dépasse pas votre maximum, et **mise aussitôt votre prix max** (`mise_directe`, on
+  par défaut) : dépassé, la mise suivante dépasserait votre max, l'enchère est abandonnée
+  et il en cherche une autre ; avec `mise_directe off`, il **la garde sans miser** et ne
+  mise la mise minimale qu'à la fin. À chaque passe, il vérifie qu'elle reste dans la
+  limite (sinon il en cherche une autre) ;
 - il revient pour la dernière minute, relit l'enchère **chaque seconde** (mise actuelle,
   temps restant, qui mène) et mise à `surenchere` secondes (30) de la fin **la mise
   minimale**, calculée comme le site (la mise de départ, puis 10 % de plus que la mise en

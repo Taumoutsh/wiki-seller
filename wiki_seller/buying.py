@@ -754,11 +754,12 @@ class _Buyer:
         self.watch_later(card, entry, auction)
 
     def bid_now(self, card: BuyCard, entry: dict, auction: dict) -> None:
-        """Mise minimale tout de suite (mise_directe, ou enchère déjà menée), puis enchère
-        surveillée jusqu'à la fin : surenchère à SNIPE_LEAD de la fin si vous êtes dépassé."""
+        """Mise tout de suite de votre prix max (mise_directe), puis enchère surveillée
+        jusqu'à la fin : dépassé, la mise minimale suivante dépasse votre max et l'enchère
+        est abandonnée pour une autre. Une enchère déjà menée est seulement suivie."""
         entry.update(auction_id=auction["id"], end_at=auction.get("end_at"), status="bidding",
                      watch_price=min_next_bid(auction))
-        self.bid_if_needed(card, entry, auction)
+        self.bid_if_needed(card, entry, auction, exact=self.config.bid_now)
         if entry.get("status") != "bidding" or entry.get("auction_id") != auction["id"]:
             return  # abandonnée (au-dessus du max), ou simulation
         if WATCH_APART.is_set():  # surveillée à part : enregistrée tout de suite si la fin approche
@@ -767,7 +768,9 @@ class _Buyer:
             return
         self.watch_later(card, entry, auction)
 
-    def bid_if_needed(self, card: BuyCard, entry: dict, auction: dict) -> None:
+    def bid_if_needed(self, card: BuyCard, entry: dict, auction: dict, exact: bool = False) -> None:
+        """Mise sur l'enchère si vous n'y êtes pas en tête : la mise minimale, ou votre prix
+        max lui-même si `exact` (mise_directe)."""
         if self.leading(auction):
             log.info("Achat : « %s » — vous menez à %s (fin %s).", card.name, auction.get("current_bid"),
                      auction.get("end_at"))
@@ -778,13 +781,14 @@ class _Buyer:
             self.lost(card, entry, auction)
             _forget(entry)
             return
-        if self.config.max_total_bids and self.budget_used + min_next_bid(auction) > self.config.max_total_bids:
+        wanted = card.max_price if exact else min_next_bid(auction)
+        if self.config.max_total_bids and self.budget_used + wanted > self.config.max_total_bids:
             log.info("Achat : budget MAX_TOTAL_BIDS atteint (%d engagés) ; « %s » attendra.",
                      self.budget_used, card.name)
             return
 
         result, amount = self.site.place_bid(auction["id"], card.max_price, self.dry_run,
-                                             self.deadline(auction), self.state.my_id)
+                                             self.deadline(auction), self.state.my_id, exact)
         if result == "bid":
             self.budget_used += amount
             entry["placed"] = auction["id"]
@@ -793,8 +797,8 @@ class _Buyer:
             if not self.state.my_id and refreshed.get("current_bid") == amount:
                 self.state.my_id = refreshed.get("current_bidder_id")
             entry["end_at"] = refreshed.get("end_at") or entry.get("end_at")  # fin repoussée ?
-            log.info("Achat : mise de %d sur « %s » (limite %d, fin %s).", amount, card.name,
-                     card.max_price, entry["end_at"])
+            log.info("Achat : mise de %d sur « %s » (%s, fin %s).", amount, card.name,
+                     "votre prix max, mise directe" if exact else f"limite {card.max_price}", entry["end_at"])
         elif result == "dry_run":
             log.info("Simulation : mise de %d sur « %s » (limite %d).", amount, card.name, card.max_price)
             _forget(entry)  # rien n'est misé : rien à surveiller
