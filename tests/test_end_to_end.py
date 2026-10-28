@@ -465,6 +465,33 @@ def test_unsold_cards_set_aside_are_relisted_when_nothing_else_can_be_sold(tmp_p
     assert site.api_listings[-1] == {"card_id": "c1", "base_amount": 3500, "duration_minutes": 60}
 
 
+def test_oldest_set_aside_goes_first_and_goes_back_aside_if_still_unsold(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+
+    def aside(days_ago):
+        return {"fails": 0, "since": (now - timedelta(days=days_ago)).isoformat(),
+                "until": (now + timedelta(days=5 - days_ago)).isoformat()}
+
+    eiffel, versailles = entry("c1", "C", "Tour Eiffel"), entry("b1", "B", "Château de Versailles")
+    with FakeWikiMasters([eiffel, versailles], API_AVERAGES, max_auctions=1) as site:
+        config = make_config(tmp_path, site.url, [])
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        config.unsold_file.write_text(json.dumps({"seen": [], "cards": {
+            "C": {**aside(1), "title": "tour eiffel"}, "B": {**aside(3), "title": "chateau de versailles"}}}))
+        run_once(config)  # une place : Versailles, mise de côté depuis plus longtemps, bien que moins chère
+        assert [l["card_id"] for l in site.api_listings] == ["b1"]
+        site.selling.clear()
+        site.history = [{"id": "h1", "seller_id": ME, "status": "settled_unsold", "winner_id": None,
+                         "final_price": None, "settled_at": now.isoformat(),
+                         "card": {"id": "B", "wikipedia_title": "Château de Versailles"}}]
+        run_once(config)  # toujours invendue : remise de côté aussitôt (fin de la file), Tour Eiffel part
+        assert [l["card_id"] for l in site.api_listings] == ["b1", "c1"]
+    state = json.loads(config.unsold_file.read_text())["cards"]["B"]
+    assert datetime.fromisoformat(state["since"]) > now - timedelta(minutes=1) and state["fails"] == 0
+
+
 # ─────────────────────────── Défausse ───────────────────────────
 
 DISCARD_COLLECTION = [

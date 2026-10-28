@@ -398,13 +398,20 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
         _list_all(listings, plan.set_aside)
     # Toujours des places libres, et aucune autre carte à vendre (ni prix en cours de lecture,
     # qui la rendrait vendable à la passe suivante) : les invendues mises de côté repartent
-    # sans attendre la fin de leur pause, au même prix qu'une vente habituelle.
+    # sans attendre la fin de leur pause, au même prix qu'une vente habituelle, les plus
+    # anciennement mises de côté d'abord (sans acheteur, elles y retournent : fin de la file).
     if paused_groups and listings.room and not unknown:
         paused_prices, paused_unknown, _ = fetch_averages(site, config, paused_groups)
         relist = plan_for(paused_groups, paused_prices, paused_unknown)
+        oldest = {g.card_id: unsold.set_aside_since(g.card_id, g.title) or now_utc() for g in paused_groups}
+        relist.items.sort(key=lambda i: oldest.get(i.card_id) or now_utc())
+        relist.set_aside.sort(key=lambda i: oldest.get(i.card_id) or now_utc())
         if relist.items or relist.set_aside:
             log.info("Plus d'autre carte à vendre : %d invendue(s) mise(s) de côté remise(s) en vente avant la fin "
-                     "de leur pause.", len(relist.items) + len(relist.set_aside))
+                     "de leur pause, les plus anciennement mises de côté d'abord : %s.",
+                     len(relist.items) + len(relist.set_aside),
+                     ", ".join(f"{i.title} (depuis le {oldest[i.card_id].astimezone():%d/%m})"
+                               for i in relist.items[:listings.free - listings.listed]))
             _list_all(listings, relist.items)
             _list_all(listings, relist.set_aside)
             return

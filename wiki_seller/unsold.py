@@ -1,6 +1,10 @@
 """Cartes qui ne se vendent pas : après UNSOLD_MAX_TRIES enchères terminées sans
 acheteur, la carte est mise de côté UNSOLD_COOLDOWN_DAYS jours, puis retentée.
 
+Quand plus rien d'autre ne peut être vendu, les cartes mises de côté repartent avant la
+fin de leur pause, les plus anciennement mises de côté d'abord ; une telle remise en
+vente sans acheteur la remet aussitôt de côté (nouvelle date : fin de la file).
+
 Les échecs sont lus dans l'historique de vos ventes (/api/marketplace?mine=1, clé
 « history ») et notés dans state/unsold.json."""
 
@@ -69,11 +73,13 @@ class UnsoldTracker:
                 entry.pop("until", None)
                 continue
             entry["fails"] = entry.get("fails", 0) + 1
-            if entry["fails"] >= self.max_tries:
+            in_pause = (parse_time(entry.get("until")) or now) > now  # remise en vente avant la fin de sa pause
+            if entry["fails"] >= self.max_tries or in_pause:
                 until = now + self.cooldown
-                entry.update(fails=0, until=until.isoformat())
-                log.info("Invendue %d fois : « %s » mise de côté jusqu'au %s.", self.max_tries,
-                         title or card_id, until.astimezone().strftime("%d/%m %H:%M"))
+                entry.update(fails=0, until=until.isoformat(), since=now.isoformat())
+                log.info("%s : « %s » mise de côté jusqu'au %s.",
+                         "Toujours invendue" if in_pause else f"Invendue {self.max_tries} fois", title or card_id,
+                         until.astimezone().strftime("%d/%m %H:%M"))
         self.data["seen"] = self.data["seen"][-SEEN_LIMIT:]
 
     def paused(self, card_id: str, title: str, now: datetime) -> datetime | None:
@@ -85,6 +91,18 @@ class UnsoldTracker:
             until = parse_time(entry.get("until"))
             if until and until > now:
                 return until
+        return None
+
+    def set_aside_since(self, card_id: str, title: str) -> datetime | None:
+        """Date à laquelle la carte a été mise de côté (estimée d'après la fin de sa pause
+        pour une mise de côté d'avant cette date)."""
+        title = normalize_name(title)
+        for key, entry in self.data["cards"].items():
+            if key != card_id and entry.get("title") != title:
+                continue
+            since = parse_time(entry.get("since"))
+            until = parse_time(entry.get("until"))
+            return since or (until - self.cooldown if until else None)
         return None
 
     def save(self) -> None:

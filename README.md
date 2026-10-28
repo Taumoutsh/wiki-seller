@@ -177,7 +177,7 @@ suivante. Un réglage jamais modifié prend la valeur du `.env` (voir « Réglag
 | `duree` | `1h` | Durée des ventes (`10m`, `30m`, `1h`, `3h`, `6h`, `12h`) |
 | `nuit` | `1-3=12h;3-6=6h`, `aucune` | Durées de nuit, heures de Paris |
 | `intervalle` | `1h`, `auto` | Délai entre deux passes (`auto` : durée des ventes) |
-| `invendues` · `pause_invendues` | `3` · `5` | Ventes ratées d'affilée avant de mettre une carte de côté, et jours de mise de côté ; s'il ne reste rien d'autre à vendre et des places libres, elle repart avant la fin de sa pause, au même prix |
+| `invendues` · `pause_invendues` | `3` · `5` | Ventes ratées d'affilée avant de mettre une carte de côté, et jours de mise de côté ; s'il ne reste rien d'autre à vendre et des places libres, les cartes mises de côté repartent avant la fin de leur pause, au même prix, les plus anciennement mises de côté d'abord ; sans acheteur, elles sont aussitôt remises de côté (fin de la file) |
 | `defausse` · `seuil_defausse` | `15` · `150` | Défausse des cartes valant ce prix ou moins (`0` = coupée), au-delà de ce nombre d'exemplaires ; ces cartes ne sont jamais mises en vente automatiquement |
 | `raretes_defausse` | `UR,SR,R,PC,C`, `toutes`, `aucune` | Raretés que la défausse peut toucher (par défaut, jamais les légendaires) |
 | `budget` | `2000`, `aucun` | Somme maximale des mises en cours |
