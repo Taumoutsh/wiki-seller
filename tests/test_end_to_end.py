@@ -450,6 +450,21 @@ def test_unsold_card_is_set_aside_then_retried(tmp_path):
     assert site.api_listings[-1]["card_id"] == "c1"
 
 
+def test_unsold_cards_set_aside_are_relisted_when_nothing_else_can_be_sold(tmp_path):
+    unsold = [{"id": f"h{i}", "seller_id": ME, "status": "expired", "winner_id": None, "final_price": None,
+               "card": {"id": "C", "wikipedia_title": "Tour Eiffel"}} for i in range(3)]
+    eiffel, versailles = entry("c1", "C", "Tour Eiffel"), entry("b1", "B", "Château de Versailles")
+    with FakeWikiMasters([eiffel, versailles], API_AVERAGES, max_auctions=1) as site:
+        site.history = unsold
+        config = make_config(tmp_path, site.url, [])
+        run_once(config)  # une seule place : l'autre carte d'abord, l'invendue attend
+        assert [l["card_id"] for l in site.api_listings] == ["b1"]
+        site.collection = [eiffel]
+        site.selling.clear()
+        run_once(config)  # plus rien d'autre à vendre : l'invendue repart, au même prix (70 % de 5000)
+    assert site.api_listings[-1] == {"card_id": "c1", "base_amount": 3500, "duration_minutes": 60}
+
+
 # ─────────────────────────── Défausse ───────────────────────────
 
 DISCARD_COLLECTION = [

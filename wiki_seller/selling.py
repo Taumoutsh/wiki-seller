@@ -358,6 +358,7 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
     unsold.update(market.history, my_id, now_utc())
     unsold.save()
     paused = {g.card_id: until for g in sellable if (until := unsold.paused(g.card_id, g.title, now_utc()))}
+    paused_groups = [g for g in sellable if g.card_id in paused]  # remises en vente s'il ne reste rien d'autre
     if paused:
         examples = [f"{g.title} (jusqu'au {paused[g.card_id].astimezone().strftime('%d/%m')})"
                     for g in sellable if g.card_id in paused]
@@ -371,9 +372,14 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
         log.info("%d prix en cours de lecture en arrière-plan : ces cartes partiront à la passe suivante "
                  "(anticipée dès qu'ils sont lus).", len(unknown))
     cache = load_price_cache(config)
-    plan = build_sale_plan(groups, safe_names, averages, market.selling, config.price_ratio, unknown,
-                           {k: e.get("count") for k, e in cache.items()}, config.min_sales_to_sell,
-                           {k: e.get("low") for k, e in cache.items()}, config.discard_below, config.discard_rarities)
+
+    def plan_for(cards: list[CardGroup], prices: dict, unreadable: set[str]):
+        return build_sale_plan(cards, safe_names, prices, market.selling, config.price_ratio, unreadable,
+                               {k: e.get("count") for k, e in cache.items()}, config.min_sales_to_sell,
+                               {k: e.get("low") for k, e in cache.items()}, config.discard_below,
+                               config.discard_rarities)
+
+    plan = plan_for(groups, averages, unknown)
     set_aside = [(t, r) for t, r in plan.skipped if r.startswith("mise de côté")]
     if set_aside:
         log.info("%d carte(s) mise(s) de côté, trop peu de ventes pour s'y fier : %s", len(set_aside),
@@ -390,5 +396,17 @@ def _sell_plan(site: WikiMasters, config: Config, listings: _Listings, groups: l
         log.info("Plus d'autre carte à vendre : %d carte(s) mise(s) de côté vendue(s) en dernier recours, au "
                  "prix de leur vente la plus basse connue.", len(plan.set_aside))
         _list_all(listings, plan.set_aside)
-    elif not plan.items:
+    # Toujours des places libres, et aucune autre carte à vendre (ni prix en cours de lecture,
+    # qui la rendrait vendable à la passe suivante) : les invendues mises de côté repartent
+    # sans attendre la fin de leur pause, au même prix qu'une vente habituelle.
+    if paused_groups and listings.room and not unknown:
+        paused_prices, paused_unknown, _ = fetch_averages(site, config, paused_groups)
+        relist = plan_for(paused_groups, paused_prices, paused_unknown)
+        if relist.items or relist.set_aside:
+            log.info("Plus d'autre carte à vendre : %d invendue(s) mise(s) de côté remise(s) en vente avant la fin "
+                     "de leur pause.", len(relist.items) + len(relist.set_aside))
+            _list_all(listings, relist.items)
+            _list_all(listings, relist.set_aside)
+            return
+    if not plan.items and not plan.set_aside:
         log.info("Aucune carte à mettre en vente.")
