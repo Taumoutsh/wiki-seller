@@ -266,8 +266,10 @@ correspond, le journal liste les vendeurs vus). Pour chaque carte :
 
 Le site ne répond pas toujours pendant les enchères : une mise sans réponse (8 s, ou
 erreur du site) est vérifiée sur l'enchère ; passée malgré tout, elle n'est pas renvoyée,
-sinon elle repart chaque seconde jusqu'à la fin de l'enchère (2 min au plus pendant une
-passe). Une lecture sans réponse est refaite la seconde suivante jusqu'à la fin ; si les
+sinon, près de la fin, elle repart chaque seconde jusqu'à la fin de l'enchère (2 min au
+plus) ; loin de la fin (mise directe pendant une passe), une seule tentative, la passe
+suivante réessaie. La mise directe envoie votre max sans relire l'enchère (le site refuse
+lui-même une mise déjà dépassée). Une lecture sans réponse est refaite la seconde suivante jusqu'à la fin ; si les
 lectures ne répondent plus au moment de surenchérir (et que vous n'étiez pas en tête à la
 dernière lecture), la mise part quand même, une fois par coupure, d'après la dernière
 lecture : refusée parce que l'enchère a monté, elle est refaite au minimum indiqué par le

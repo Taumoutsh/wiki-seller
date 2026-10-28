@@ -787,8 +787,13 @@ class _Buyer:
                      self.budget_used, card.name)
             return
 
+        # Fin encore loin (mise en passe) : une seule tentative, sans réponse la passe suivante
+        # réessaie ; près de la fin, la mise est renvoyée jusqu'à la fin (au plus BID_RETRY_LIMIT).
+        end = parse_time(auction.get("end_at"))
+        near = end is None or end - self.now() <= watch_start(self.config.snipe_lead) + SNIPE_STARTUP
         result, amount = self.site.place_bid(auction["id"], card.max_price, self.dry_run,
-                                             self.deadline(auction), self.state.my_id, exact)
+                                             self.deadline(auction) if near else time.monotonic(),
+                                             self.state.my_id, exact)
         if result == "bid":
             self.budget_used += amount
             entry["placed"] = auction["id"]
@@ -809,8 +814,12 @@ class _Buyer:
             _forget(entry)
         elif result == "no_funds":
             log.warning("Achat : solde insuffisant pour miser %d sur « %s ».", amount, card.name)
-        else:
+        elif result == "human_check":
+            self.site.human_check(f"mise de {amount} sur « {card.name} »", "mise refusée")
+        elif near:
             log.warning("Achat : la mise sur « %s » n'a pas été confirmée par le site.", card.name)
+        else:
+            log.info("Achat : « %s » — le site ne répond pas ; mise reportée à la passe suivante.", card.name)
 
     def watch_until_end(self, card: BuyCard, entry: dict, auction: dict) -> None:
         """Surveille l'enchère de près à partir de watch_start() avant la fin (relue chaque

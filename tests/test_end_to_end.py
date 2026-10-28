@@ -195,6 +195,20 @@ def test_direct_bid_places_the_max_price_right_away(tmp_path):
         assert tracked(config, "gustave eiffel")["auction_id"] == "e1"
 
 
+def test_direct_bid_far_from_the_end_is_tried_once_then_at_the_next_pass(tmp_path, caplog):
+    wanted = [{"name": "gustave eiffel", "max_price": 300}]
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:
+        config = make_config(tmp_path, site.url, [], wanted=wanted, bid_now=True)
+        site.bid_failures = 5  # le site ne répond pas aux mises
+        with caplog.at_level("INFO"):
+            run_once(config)
+        assert site.bid_attempts == 1 and site.bids == []  # une seule tentative : la fin est loin
+        assert "mise reportée à la passe suivante" in caplog.text
+        site.bid_failures = 0
+        run_once(config)
+    assert site.bids == [("e2", 300)] and site.bid_attempts == 2  # votre max, sans relire l'enchère
+
+
 def test_direct_bid_on_an_auction_already_followed_without_bidding(tmp_path):
     wanted = [{"name": "gustave eiffel", "max_price": 300}]
     with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=eiffel_auctions()) as site:

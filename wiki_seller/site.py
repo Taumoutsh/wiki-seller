@@ -653,14 +653,21 @@ class WikiMasters:
 
     def place_bid(self, auction_id: str, max_price: int, dry_run: bool, deadline: float | None = None,
                   my_id: str | None = None, exact: bool = False) -> tuple[str, int | None]:
-        """Mise minimale (calculée sur l'enchère relue), ou max_price lui-même si `exact`,
-        si la mise minimale ne dépasse pas max_price et la mise ne dépasse pas le solde.
-        Enchère ou mise sans réponse : nouvel essai jusqu'à `deadline`.
-        Renvoie ("bid" | "dry_run" | "too_high" | "no_funds" | "failed", montant)."""
-        auction = self.read_auction(auction_id)
+        """Mise minimale (calculée sur l'enchère relue), si elle ne dépasse ni max_price ni le
+        solde ; ou max_price lui-même si `exact`, envoyé sans relire l'enchère (le site
+        refuse une mise trop basse ou au-delà du solde). Enchère ou mise sans réponse :
+        nouvel essai jusqu'à `deadline`. Renvoie ("bid" | "dry_run" | "too_high" |
+        "no_funds" | "human_check" | "failed", montant)."""
+        if exact:
+            return self._place_exact_bid(auction_id, max_price, dry_run, deadline, my_id)
+        auction, silent = self.read_auction(auction_id), 0
         while auction is None and deadline is not None and time.monotonic() + BID_RETRY_PAUSE < deadline:
+            silent += 1
             time.sleep(BID_RETRY_PAUSE)
-            auction = self.read_auction(auction_id)
+            auction = self.read_auction(auction_id, quiet=True)  # une ligne au journal, puis le résumé
+        if silent:
+            log.info("Enchère %s : %d nouvel(s) essai(s) de lecture, %s.", auction_id, silent,
+                     "sans réponse" if auction is None else "puis réponse")
         if auction is None:
             return "failed", None
         amount = min_bid(auction)
@@ -676,4 +683,21 @@ class WikiMasters:
         if self.post_bid(auction_id, amount, deadline, my_id):
             return "bid", amount
         self.snapshot(f"bid-refused-{auction_id}")
+        return "failed", amount
+
+    def _place_exact_bid(self, auction_id: str, amount: int, dry_run: bool, deadline: float | None,
+                         my_id: str | None) -> tuple[str, int | None]:
+        if dry_run:
+            return "dry_run", amount
+        refusal: dict = {}
+        if self.post_bid(auction_id, amount, deadline, my_id, refusal):
+            return "bid", amount
+        code = refusal.get("code")
+        if code == "bid_too_low":  # l'enchère a déjà dépassé votre max
+            minimum = refusal.get("min")
+            return "too_high", minimum if isinstance(minimum, int) else amount
+        if code == "insufficient_balance":
+            return "no_funds", amount
+        if code == HUMAN_CHECK_CODE:
+            return "human_check", amount
         return "failed", amount
