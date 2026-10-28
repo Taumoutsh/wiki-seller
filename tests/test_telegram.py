@@ -204,3 +204,24 @@ def test_command_menu_is_published_with_admin_commands_for_the_admin(tmp_path):
         "Acheter, protégée une fois obtenue (<carte> [max])"
     assert admin["scope"] == {"type": "chat", "chat_id": int(CHAT_ID)}
     assert {"users", "adduser", "removeuser"} <= {c["command"] for c in admin["commands"]}
+
+
+def test_commands_are_logged_without_their_parameters(tmp_path, caplog):
+    from wiki_seller import accounts
+    from wiki_seller.telegram import CommandListener
+
+    from .test_end_to_end import make_config
+
+    base = make_config(tmp_path, "http://127.0.0.1:1", [], wanted=[], telegram_chat_id=CHAT_ID)
+    accounts.migrate(base)
+    with FakeTelegram() as fake, caplog.at_level("INFO"):
+        listener = CommandListener(bot(tmp_path, fake), lambda chat, kind: None, base).start()
+        try:
+            assert wait_for(lambda: (tmp_path / "telegram.json").exists())
+            fake.say("/buy Tour Eiffel 500")
+            fake.say("/SAFE@MonBot Victor Hugo")
+            assert wait_for(lambda: len(fake.sent) == 2)
+        finally:
+            listener.stop()
+    assert "envoie /buy." in caplog.text and "envoie /safe." in caplog.text
+    assert "Tour Eiffel" not in caplog.text and "500" not in caplog.text and "Victor Hugo" not in caplog.text

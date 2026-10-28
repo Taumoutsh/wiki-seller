@@ -311,11 +311,19 @@ class CommandListener:
         command = text.strip().split("@")[0].split(" ")[0].lower()
         args = text.strip().partition(" ")[2]
         if self.config is None:
-            known, account, admin = chat == self.bot.chat_id, None, False
+            known, account, admin, who = chat == self.bot.chat_id, None, False, chat
         else:
-            known = accounts.find(self.config, chat) is not None
+            found = accounts.find(self.config, chat)
+            known, who = found is not None, (found.name if found and found.name else chat)
             account = accounts.account_config(self.config, chat) if known else None
             admin = chat == accounts.admin_id(self.config)
+        if known:  # trace des commandes, jamais leurs paramètres (noms de cartes, prix, cookies…)
+            if re.fullmatch(r"/[a-z0-9_]{1,32}", command):
+                log.info("Telegram : %s envoie %s.", who, command)
+            elif session_cookie_names(text):
+                log.info("Telegram : %s envoie des cookies de session.", who)
+            else:
+                log.info("Telegram : %s envoie un message sans commande.", who)
         if not known:
             log.info("Telegram : message d'une conversation inconnue (id %s).", chat)
             if session_cookie_names(text):
