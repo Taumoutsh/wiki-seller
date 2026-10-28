@@ -826,6 +826,7 @@ class _Buyer:
             return  # pas encore l'heure : la boucle reviendra
         deadline = time.monotonic() + WATCH_GUARD.total_seconds()
         announced, silent = False, 0  # silent : lectures sans réponse d'affilée
+        blind = False  # mise déjà envoyée sans relire l'enchère pendant cette coupure
         while time.monotonic() < deadline:
             wait = (end - start - self.now()).total_seconds()
             if wait > 0:
@@ -837,6 +838,20 @@ class _Buyer:
             fresh = self.site.read_auction(auction["id"], quiet=silent > 0)
             if fresh is None:  # le site ne répond pas : relue dans une seconde avant la fin, plus rarement après
                 silent += 1
+                remaining = end - self.now()
+                if not blind and not self.leading(auction) and -BID_GRACE < remaining <= lead:
+                    # Lectures muettes au moment de miser : mise envoyée quand même, d'après la
+                    # dernière lecture (refusée si l'enchère a monté : refaite au minimum indiqué,
+                    # dans la limite). Une par coupure : la mise elle-même est renvoyée sans réponse.
+                    blind = True
+                    log.info("Achat : « %s » — le site ne répond plus à %.0f s de la fin ; mise envoyée sans "
+                             "relire l'enchère, d'après la dernière lecture.", card.name, remaining.total_seconds())
+                    blind_auction = {**auction, "end_at": entry.get("end_at") or auction.get("end_at")}
+                    if not self.fast_bid(card, entry, blind_auction) and entry.get("status") != "bidding":
+                        return
+                    if self.dry_run:
+                        return
+                    continue
                 after_end = self.now() - end
                 if after_end > SILENT_WAIT:
                     log.info("Achat : « %s » — le site ne répond plus depuis la fin de l'enchère (%d lecture(s) "
@@ -846,7 +861,7 @@ class _Buyer:
                 continue
             if silent > 1:
                 log.info("Achat : « %s » — le site répond de nouveau (%d lecture(s) sans réponse).", card.name, silent)
-            silent = 0
+            silent, blind = 0, False
             auction = fresh
             if str(auction.get("status") or "active").lower() != "active":
                 self.settle(card, entry, auction)

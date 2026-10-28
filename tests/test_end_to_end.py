@@ -952,6 +952,32 @@ def test_extended_auction_is_bid_on_again_until_the_real_end(tmp_path):
     assert buy_cards(config) == []
 
 
+def test_bid_is_sent_without_reading_when_the_site_stops_answering_at_the_end(tmp_path, monkeypatch, caplog):
+    import threading
+    from datetime import datetime, timedelta, timezone
+
+    from wiki_seller import buying
+
+    monkeypatch.setattr(buying, "SILENT_WAIT", timedelta(seconds=3))
+    auction, end = ending_auction(seconds=12)
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        site.outbid("s1", 70)
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             snipe_lead=timedelta(seconds=5))
+
+        def go_silent():  # 8 s avant la fin : plus aucune lecture, et un autre mise 80 sans qu'on le voie
+            time.sleep(max(0.0, (end - datetime.now(timezone.utc)).total_seconds() - 8))
+            site.auction_read_failures = 1000
+            site.outbid("s1", 80)
+
+        threading.Thread(target=go_silent, daemon=True).start()
+        with caplog.at_level("INFO"):
+            run_once(config)
+    # Mise d'après la dernière lecture (77), refusée : refaite au minimum indiqué (88), sous le max.
+    assert site.bids == [("s1", 88)]
+    assert "mise envoyée sans relire l'enchère" in caplog.text
+
+
 def test_silent_site_after_the_end_is_not_read_again_and_again(tmp_path, monkeypatch, caplog):
     import threading
     from datetime import datetime, timedelta, timezone
