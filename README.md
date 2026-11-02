@@ -279,7 +279,11 @@ minute au plus, puis la passe suivante lit le résultat (le journal résume les 
 sans réponse au lieu d'une ligne chacune).
 
 Le bot annonce chaque enchère gagnée dès que le site désigne le gagnant, avec le compte
-d'exemplaires : « 🛒 Obtenue : Tour Eiffel pour 480 (1/2) », suivi de « · revente à 800 »
+d'exemplaires. Une enchère que vous menez, finie mais que le site laisse « active » (pas
+encore clôturée), est **finalisée par le bot lui-même** (bouton « Finaliser » du site) au
+lieu d'attendre indéfiniment : le gain est alors confirmé, annoncé et mis en vente sans
+tarder ; si la finalisation est refusée, le bot n'insiste pas et la passe suivante
+réessaie. Exemple d'annonce : « 🛒 Obtenue : Tour Eiffel pour 480 (1/2) », suivi de « · revente à 800 »
 pour `/buyandsell`. Les enchères perdues (remportées par un autre, ou montées au-dessus
 de votre max) ne font pas de message : elles sont listées au bilan suivant. Une fois tous les
 exemplaires obtenus, la carte **quitte la liste d'achat et devient protégée** ; avec

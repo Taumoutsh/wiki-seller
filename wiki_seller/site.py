@@ -607,6 +607,23 @@ class WikiMasters:
         auction = data.get("auction") if 200 <= status < 300 and isinstance(data, dict) else None
         return auction if isinstance(auction, dict) else None
 
+    def settle_auction(self, auction_id: str) -> bool:
+        """Finalise une enchère que le site n'a pas encore clôturée (fin passée, statut
+        toujours « active ») : POST /api/marketplace/<id>/settle, sans corps. True si c'est
+        fait, False sinon (le site n'était pas prêt, ou pas de réponse)."""
+        path = f"/api/marketplace/{auction_id}/settle"
+        try:
+            status, data, text = self.api_post(path)
+        except NETWORK_ERRORS as exc:
+            log.info("Enchère %s : finalisation sans réponse du site (%s).", auction_id,
+                     str(exc).splitlines()[0][:100])
+            return False
+        if 200 <= status < 300:
+            return True
+        message = str(data.get("error") or data.get("message") or text) if isinstance(data, dict) else text
+        log.info("Enchère %s : finalisation refusée (HTTP %d : %s).", auction_id, status, message[:150])
+        return False
+
     def _bid_went_through(self, auction_id: str, amount: int, my_id: str | None) -> bool:
         """La mise est-elle enregistrée (malgré une réponse perdue) ?"""
         auction = self.read_auction(auction_id) or {}

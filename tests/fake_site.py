@@ -85,6 +85,8 @@ class FakeWikiMasters:
         # les mises) : le site refuse alors la nôtre en indiquant le minimum.
         self.hidden_bids: dict[str, int] = {}
         self.listing_attempts: list[str] = []  # identifiants envoyés à POST /api/marketplace
+        self.settled_requests: list[str] = []  # enchères finalisées par POST .../settle
+        self.settle_fails = False  # le site refuse la finalisation (400)
         self.human_check = False  # vérification anti-bot : mises en vente, mises et défausses refusées (403)
         self.cards: list[dict] = []  # table des cartes de la base (/rest/v1/cards, clé publique)
         self.extension: timedelta | None = None  # mise dans les 10 dernières s : fin repoussée d'autant
@@ -243,6 +245,19 @@ class FakeWikiMasters:
                     site.discarded.append(copy["card"]["wikipedia_title"])
                     site.events.append(("défausse", copy["card"]["wikipedia_title"]))
                     return self._send(200, {"ok": True, "wikibidous": 1})
+                if self.path.startswith("/api/marketplace/") and self.path.endswith("/settle") and self._authed():
+                    auction = site.auctions.get(self.path.split("/")[3])
+                    if auction is None:
+                        return self._send(404, {"error": "not found"})
+                    site.settled_requests.append(auction["id"])
+                    if site.settle_fails or auction["status"] != "active":
+                        return self._send(400, {"error": "Impossible de finaliser"})
+                    if auction.get("current_bidder_id"):
+                        auction.update(status="settled_sold", winner_id=auction["current_bidder_id"],
+                                       final_price=auction["current_bid"])
+                    else:
+                        auction.update(status="settled_unsold", winner_id=None)
+                    return self._send(200, {"ok": True})
                 if self.path.startswith("/api/marketplace/") and self.path.endswith("/bid") and self._authed():
                     auction = site.auctions[self.path.split("/")[3]]
                     site.bid_attempts += 1

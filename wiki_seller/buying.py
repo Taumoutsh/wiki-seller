@@ -507,6 +507,12 @@ class _Buyer:
                 return ""
             # Fin d'enchère : on la surveille quand même, elle sera relue chaque seconde.
             auction = {"id": auction_id, "end_at": slot.get("end_at"), "status": "active"}
+        if (not snipe_only and not self.dry_run and auction and str(auction.get("status") or "active").lower()
+                == "active" and self.leading(auction)):
+            end = parse_time(auction.get("end_at"))
+            if end is not None and end <= self.now():  # finie mais pas clôturée, et on mène : on finalise
+                if self.site.settle_auction(auction["id"]):
+                    auction = self.site.read_auction(auction["id"]) or auction
         if auction and auction.get("status") != "active":
             if self.state.my_id and auction.get("winner_id") == self.state.my_id:
                 if self.count_wins(card, line, [auction]):
@@ -696,7 +702,8 @@ class _Buyer:
 
     def settle(self, card: BuyCard, entry: dict, auction: dict) -> None:
         """Fin de l'enchère surveillée : gagnée ou perdue, annoncée tout de suite. Si le
-        gagnant n'est pas encore connu au bout d'OUTCOME_WAIT, la passe suivante s'en charge."""
+        gagnant n'est pas encore connu au bout d'OUTCOME_WAIT, la passe suivante s'en charge
+        (et finalise elle-même, voir follow())."""
         deadline = time.monotonic() + OUTCOME_WAIT.total_seconds()
         silent_since = 0.0  # le site ne répond plus depuis (time.monotonic())
         while True:

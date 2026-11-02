@@ -1050,6 +1050,47 @@ def test_watched_auction_result_is_announced_right_away(tmp_path):
     assert any("achat terminé" in t for t in tg.sent) and buy_cards(config) == []
 
 
+def test_won_auction_left_open_is_settled_by_the_bot(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+
+    # Enchère que l'on mène, finie mais que le site laisse « active » : la passe la finalise.
+    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    auction = market_auction("s1", "Victor Hugo", 50, end_at=past, current=50)
+    auction["current_bidder_id"] = ME
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site, \
+            FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}],
+                             telegram_token=TOKEN, telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+        config.wanted_state_file.parent.mkdir(parents=True, exist_ok=True)
+        config.wanted_state_file.write_text(json.dumps({"my_id": ME, "cards": {"victor hugo": {
+            "name": "Victor Hugo", "status": "bidding", "auction_id": "s1", "end_at": past,
+            "placed": "s1", "my_bid": {"auction": "s1", "amount": 50}}}}))
+        run_once(config)  # on mène s1, finie : le bot la finalise lui-même
+    assert site.settled_requests == ["s1"] and site.auctions["s1"]["status"] == "settled_sold"
+    assert "🛒 Obtenue : Victor Hugo pour 50 (1/1)" in tg.sent
+    assert any("achat terminé" in t for t in tg.sent) and buy_cards(config) == []
+
+
+def test_bot_waits_when_settle_is_refused(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    auction = market_auction("s1", "Victor Hugo", 50, end_at=past, current=50)
+    auction["current_bidder_id"] = ME
+    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0, auctions=[auction]) as site:
+        config = make_config(tmp_path, site.url, [], wanted=[{"name": "Victor Hugo", "max_price": 100}])
+        config.wanted_state_file.parent.mkdir(parents=True, exist_ok=True)
+        config.wanted_state_file.write_text(json.dumps({"my_id": ME, "cards": {"victor hugo": {
+            "name": "Victor Hugo", "status": "bidding", "auction_id": "s1", "end_at": past,
+            "placed": "s1", "my_bid": {"auction": "s1", "amount": 50}}}}))
+        site.settle_fails = True  # finalisation refusée : le bot n'insiste pas, résultat vu plus tard
+        run_once(config)
+    assert site.settled_requests == ["s1"]  # tentée une seule fois
+    assert site.auctions["s1"]["status"] == "active" and buy_cards(config)  # toujours dans les achats
+
+
 def test_lost_auctions_are_announced(tmp_path):
     from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
 
