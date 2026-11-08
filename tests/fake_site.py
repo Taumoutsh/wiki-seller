@@ -246,12 +246,18 @@ class FakeWikiMasters:
                     site.events.append(("défausse", copy["card"]["wikipedia_title"]))
                     return self._send(200, {"ok": True, "wikibidous": 1})
                 if self.path.startswith("/api/marketplace/") and self.path.endswith("/settle") and self._authed():
-                    auction = site.auctions.get(self.path.split("/")[3])
-                    if auction is None:
+                    aid = self.path.split("/")[3]
+                    auction = site.auctions.get(aid)
+                    sale = next((a for a in site.selling if a.get("id") == aid), None)
+                    if auction is None and sale is None:
                         return self._send(404, {"error": "not found"})
-                    site.settled_requests.append(auction["id"])
-                    if site.settle_fails or auction["status"] != "active":
+                    site.settled_requests.append(aid)
+                    target = auction if auction is not None else sale
+                    if site.settle_fails or target.get("status") != "active":
                         return self._send(400, {"error": "Impossible de finaliser"})
+                    if sale is not None:  # vente du compte restée « active » : on la clôture
+                        site.settle_own_sale(sale)
+                        return self._send(200, {"ok": True})
                     if auction.get("current_bidder_id"):
                         auction.update(status="settled_sold", winner_id=auction["current_bidder_id"],
                                        final_price=auction["current_bid"])
@@ -353,3 +359,28 @@ class FakeWikiMasters:
     def settle(self, auction_id):
         a = self.auctions[auction_id]
         a.update(status="settled_sold", winner_id=a["current_bidder_id"], final_price=a["current_bid"])
+
+    def end_own_sale(self, auction_id, buyer=None, price=None):
+        """Simule la fin d'une vente du compte que le site laisse « active » (fin passée),
+        sans acheteur par défaut, ou vendue à `buyer` pour `price`."""
+        sale = next(a for a in self.selling if a["id"] == auction_id)
+        sale["end_at"] = "2000-01-01T00:00:00+00:00"
+        if buyer:
+            sale.update(current_bidder_id=buyer, current_bid=price)
+
+    def settle_own_sale(self, sale):
+        """Clôture une vente du compte (POST .../settle) : place libérée ; invendu, l'exemplaire
+        reste dans la collection (relistable) ; vendu, il quitte la collection et la vente
+        passe dans l'historique."""
+        self.selling.remove(sale)
+        copy = next((c for c in self.collection
+                     if c["id"] == sale.get("card_id") or c["card"]["id"] == sale.get("card_id")), None)
+        if sale.get("current_bidder_id"):
+            if copy is not None:
+                self.collection.remove(copy)
+            self.history.append(dict(sale, seller_id=ME, status="settled_sold", winner_id=sale["current_bidder_id"],
+                                     final_price=sale.get("current_bid"),
+                                     settled_at=datetime.now(timezone.utc).isoformat(),
+                                     card=copy["card"] if copy else sale.get("card", {})))
+        else:
+            sale.update(status="settled_unsold", winner_id=None)

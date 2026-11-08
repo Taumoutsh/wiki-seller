@@ -277,8 +277,36 @@ def _settle_protection(config: Config, card: SellCard, keep_one: bool, owned: in
 # ─────────────────────────── Passe ───────────────────────────
 
 
+def _finalize_ended_sales(site: WikiMasters, config: Config, market, dry_run: bool):
+    """Finalise les ventes du compte dont l'heure de fin est passée mais que le site laisse
+    encore « active » : sans cela la place reste occupée et un exemplaire invendu ne repart
+    pas en vente (count_listed le croit encore en vente). Une vente invendue ainsi finalisée
+    rend son exemplaire (collection relue), une vente conclue est enregistrée via
+    l'historique. Renvoie l'état du marché, rafraîchi si quelque chose a été finalisé."""
+    now = now_utc()
+    ended = []
+    for auction in market.selling:
+        if not isinstance(auction, dict) or not auction.get("id"):
+            continue
+        end = parse_time(auction.get("end_at"))
+        if end is not None and end <= now:  # fin passée mais toujours « active »
+            ended.append(auction)
+    if not ended:
+        return market
+    if dry_run:
+        log.info("Vente terminée non finalisée (simulation) : %d enchère(s).", len(ended))
+        return market
+    done = sum(1 for auction in ended if site.settle_auction(auction["id"]))
+    if not done:
+        return market
+    log.info("%d vente(s) terminée(s) finalisée(s) ; places libérées.", done)
+    collection.forget(config)  # l'exemplaire rendu (invendu) doit être relu
+    return site.fetch_market_state()
+
+
 def sell(site: WikiMasters, config: Config, safe_names: set[str], dry_run: bool) -> RunResult:
     market = site.fetch_market_state()
+    market = _finalize_ended_sales(site, config, market, dry_run)
     my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
     priority = priority_cards(config)
     if priority:

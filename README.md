@@ -305,7 +305,10 @@ demandée (`12h`…) ou à défaut la durée habituelle.
 - Ces cartes passent **en priorité** dans les places libres ; les enchères en cours ne
   sont pas annulées.
 - Une enchère terminée sans acheteur est **relancée au même prix** à chaque passe,
-  jusqu'à la vente.
+  jusqu'à la vente. Si le site laisse une vente terminée encore ouverte (statut toujours
+  « active »), la passe la **finalise elle-même** : la place est libérée et l'exemplaire
+  invendu repart en vente (sinon il resterait bloqué) ; une vente conclue est alors
+  enregistrée.
 - Chaque vente est annoncée (« 💰 Vendue : Tour Eiffel à 800 ») ; une fois tous les
   exemplaires vendus, la carte quitte la liste.
 - **Carte protégée :** en un seul exemplaire, elle n'est plus protégée et part ; en

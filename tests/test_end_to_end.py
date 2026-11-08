@@ -1091,6 +1091,41 @@ def test_bot_waits_when_settle_is_refused(tmp_path):
     assert site.auctions["s1"]["status"] == "active" and buy_cards(config)  # toujours dans les achats
 
 
+def test_unsold_sell_auction_left_open_is_finalized_then_relisted(tmp_path):
+    from wiki_seller.lists import set_sell
+
+    coll = [entry("c1", "C", "Tour Eiffel"), entry("c2", "C", "Tour Eiffel")]
+    with FakeWikiMasters(coll, API_AVERAGES, max_auctions=1) as site:
+        config = make_config(tmp_path, site.url, [], selling=False)  # raretes aucune : pas de vente parasite
+        set_sell(config, "Tour Eiffel", 500, 2)
+        run_once(config)  # une place : un exemplaire mis en vente
+        assert len(site.selling) == 1 and len(site.api_listings) == 1
+        sold_id = site.selling[0]["id"]
+        site.end_own_sale(sold_id)  # finie sans acheteur, mais le site la laisse « active »
+        run_once(config)  # la passe la finalise et remet un exemplaire en vente
+    assert site.settled_requests == [sold_id]  # finalisée
+    assert len(site.api_listings) == 2  # l'exemplaire est reparti en vente
+    assert all(l["title"] == "Tour Eiffel" for l in site.listings)  # aucune autre carte
+
+
+def test_sold_sell_auction_left_open_is_finalized_and_recorded(tmp_path):
+    from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
+    from wiki_seller.lists import sell_cards, set_sell
+
+    coll = [entry("c1", "C", "Tour Eiffel"), entry("c2", "C", "Tour Eiffel")]
+    with FakeWikiMasters(coll, API_AVERAGES, max_auctions=1) as site, FakeTelegram() as tg:
+        config = make_config(tmp_path, site.url, [], selling=False, telegram_token=TOKEN,
+                             telegram_chat_id=CHAT_ID, telegram_api_url=tg.url)
+        set_sell(config, "Tour Eiffel", 500, 2)
+        run_once(config)
+        sold_id = site.selling[0]["id"]
+        site.end_own_sale(sold_id, buyer="acheteur", price=500)  # finie avec acheteur, laissée « active »
+        run_once(config)  # finalisée, vente enregistrée
+    assert site.settled_requests == [sold_id]
+    assert "💰 Vendue : Tour Eiffel à 500 (encore 1 à vendre)" in tg.sent
+    assert sell_cards(config)[0].remaining == 1  # un exemplaire vendu, un restant
+
+
 def test_lost_auctions_are_announced(tmp_path):
     from .fake_telegram import CHAT_ID, TOKEN, FakeTelegram
 
