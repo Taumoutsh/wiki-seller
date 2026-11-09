@@ -36,7 +36,8 @@ REPORT_GUARD_SECONDS = 90  # pas de bilan demandé juste avant un réveil
 PAUSE_CHECK = timedelta(minutes=1)  # compte en pause : /resume vérifié chaque minute
 
 class _Requests:
-    """Demandes du bot pour un compte (/update : "report", /ventes : "history") : elles
+    """Demandes du bot pour un compte (/update : "report", /ventes : "history", ou
+    "history:<carte>" avec une recherche) : elles
     réveillent la boucle de ce compte."""
 
     def __init__(self):
@@ -148,10 +149,12 @@ def report_now(config: Config, debug: bool, kinds: set[str] = frozenset({"report
         with open_site(config, debug) as site:
             if "report" in kinds:
                 _send_report(site, config, bot, on_demand=True)
-            if "history" in kinds:
+            searches = [k.partition(":")[2] for k in kinds if k.partition(":")[0] == "history"]
+            if searches:  # /ventes, éventuellement avec un nom de carte (« history:<nom> »)
                 market = site.fetch_market_state()
                 my_id = my_user_id(market.mine, WantedState(config.wanted_state_file).my_id)
-                bot.send(history_text(market.history, my_id), html=True)
+                for query in searches:
+                    bot.send(history_text(market.history, my_id, query=query), html=True)
     except Exception as exc:
         log.warning("Demande Telegram non traitée : %s", str(exc).splitlines()[0])
         bot.send(f"❌ Impossible pour l'instant : {str(exc).splitlines()[0][:200]}")

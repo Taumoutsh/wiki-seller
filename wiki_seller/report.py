@@ -197,36 +197,34 @@ def report_text(start: datetime, end: datetime, sales: list[tuple[str, int]], di
     return "\n\n".join(sections)
 
 
-def history_text(history: list, my_id: str | None, now: datetime | None = None) -> str:
-    """/ventes : vos enchères terminées telles que le site les renvoie (les plus récentes
-    d'abord), pour vérifier ce que le bilan compte."""
+def history_text(history: list, my_id: str | None, now: datetime | None = None, query: str = "") -> str:
+    """/ventes [carte] : vos cartes vendues telles que le site les renvoie (les plus récentes
+    d'abord), filtrées par nom si `query` (sans tenir compte des majuscules ni des accents)."""
     now = now or now_utc()
-    ended = sorted((a for a in history or [] if isinstance(a, dict)),
-                   key=lambda a: a.get("settled_at") or a.get("end_at") or "", reverse=True)
-    if not ended:
-        return "<b>📜 Historique des ventes</b>\nLe site ne renvoie aucune enchère terminée."
+    ended = [a for a in history or [] if isinstance(a, dict)]
     times = [t for a in ended if (t := parse_time(a.get("settled_at") or a.get("end_at")))]
-    sold = [a for a in ended if auction_outcome(a) == "sold" and (not my_id or a.get("seller_id") == my_id)]
+    sold = sorted((a for a in ended if auction_outcome(a) == "sold" and (not my_id or a.get("seller_id") == my_id)),
+                  key=lambda a: a.get("settled_at") or a.get("end_at") or "", reverse=True)
+    wanted = normalize_name(query)
+    if wanted:
+        sold = [a for a in sold if wanted in normalize_name(auction_title(a) or "")]
+    search = f" · « {escape(query.strip())} »" if wanted else ""
+    if not sold:
+        return (f"<b>💰 Ventes{search}</b>\n"
+                + ("Aucune vente de cette carte" if wanted else "Aucune carte vendue")
+                + (" dans l'historique renvoyé par le site." if ended else " : le site ne renvoie aucune enchère "
+                   "terminée."))
     earned = sum(int(a["final_price"]) for a in sold if isinstance(a.get("final_price"), (int, float)))
-    lines = [f"<b>📜 Historique des ventes · {plural(len(sold), 'vendue')} · +{money(earned)}</b>",
-             f"Le site renvoie {plural(len(ended), 'enchère')} terminée{'s' if len(ended) > 1 else ''}"
-             + (f", du {when(min(times), now)} au {when(max(times), now)}." if times else ".")]
-    for auction in ended[:MAX_HISTORY_LISTED]:
-        title = escape(auction_title(auction) or "carte inconnue")
+    lines = [f"<b>💰 Ventes{search} · {plural(len(sold), 'vendue')} · +{money(earned)}</b>"]
+    if times:
+        lines.append(f"Historique du site : du {when(min(times), now)} au {when(max(times), now)}.")
+    for auction in sold[:MAX_HISTORY_LISTED]:
         moment = parse_time(auction.get("settled_at") or auction.get("end_at"))
-        at = f" · {when(moment, now)}" if moment else ""
-        outcome = auction_outcome(auction)
-        if my_id and auction.get("seller_id") != my_id:
-            lines.append(f"👤 {title} · vendeur différent{at}")
-        elif outcome == "sold":
-            price = auction.get("final_price") or auction.get("current_bid")
-            lines.append(f"✅ {title} · {money(price) if price else 'prix ?'}{at}")
-        elif outcome == "unsold":
-            lines.append(f"❌ {title} · invendue{at}")
-        else:
-            lines.append(f"⏸️ {title} · {escape(str(auction.get('status') or 'état inconnu'))}{at}")
-    if len(ended) > MAX_HISTORY_LISTED:
-        lines.append(f"… et {plural(len(ended) - MAX_HISTORY_LISTED, 'autre')}")
+        price = auction.get("final_price") or auction.get("current_bid")
+        lines.append(f"✅ {escape(auction_title(auction) or 'carte inconnue')} · "
+                     f"{money(price) if price else 'prix ?'}{f' · {when(moment, now)}' if moment else ''}")
+    if len(sold) > MAX_HISTORY_LISTED:
+        lines.append(f"… et {plural(len(sold) - MAX_HISTORY_LISTED, 'autre')}")
     return "\n".join(lines)
 
 

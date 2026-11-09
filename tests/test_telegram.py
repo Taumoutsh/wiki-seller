@@ -84,14 +84,17 @@ def test_update_command_asks_for_a_report(tmp_path):
             assert wait_for(lambda: requested == ["report"])
             fake.say("/ventes")
             assert wait_for(lambda: requested == ["report", "history"])
+            fake.say("/ventes Tour Eiffel")
+            assert wait_for(lambda: requested == ["report", "history", "history:Tour Eiffel"])
             fake.say("salut")
-            assert wait_for(lambda: len(fake.sent) == 3)
+            assert wait_for(lambda: len(fake.sent) == 4)
             message_id = fake.say(COOKIES)  # aucune session demandée : supprimé
             assert wait_for(lambda: message_id in fake.deleted)
         finally:
             listener.stop()
     assert fake.sent[0].startswith("⏳ Bilan") and fake.sent[1].startswith("⏳ Historique")
-    assert "/update" in fake.sent[2] and "/ventes" in fake.sent[2]
+    assert fake.sent[2].startswith("⏳ Historique")
+    assert "/update" in fake.sent[3] and "/ventes" in fake.sent[3]
     assert "aucune session n'est demandée" in fake.sent[-1]
 
 

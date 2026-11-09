@@ -105,7 +105,7 @@ ses paramètres (noms de cartes, prix, cookies).
 | Commande | Effet |
 |---|---|
 | `/update` (ou `/bilan`) | Bilan immédiat (voir « Bilan ») |
-| `/ventes` (ou `/historique`) | Vos enchères terminées telles que le site les renvoie (40 au plus) : ✅ vendue, ❌ invendue, période couverte |
+| `/ventes [carte]` (ou `/historique`) | Vos cartes vendues, telles que le site les renvoie (40 au plus, les plus récentes d'abord), avec le total et la période couverte ; `/ventes Tour Eiffel` : seulement les ventes de cette carte (nom partiel accepté, sans tenir compte des majuscules ni des accents) |
 | `/list` | Cartes protégées, à acheter (avec les exemplaires obtenus) et à vendre |
 | `/safe <carte>` · `/unsafe <carte>` | Protège une carte (jamais défaussée ni vendue automatiquement, aucun exemplaire), ou la retire des protégées |
 | `/buy <carte> [prix max]` · `/unbuy <carte>` | Achète la carte à ce prix au plus (voir « Achats ») ; protégée une fois obtenue |

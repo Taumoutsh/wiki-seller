@@ -125,7 +125,7 @@ def test_sleep_wakes_up_for_a_report_request(tmp_path, monkeypatch):
     requests.take()
 
 
-def test_history_text_shows_what_the_site_returns():
+def test_history_text_lists_only_sold_cards():
     now = NOW
     history = [sale(14, 1, title="Trois-Pistoles"),
                {"seller_id": "me", "status": "settled", "final_price": None, "card": {"wikipedia_title": "Loire"},
@@ -135,14 +135,22 @@ def test_history_text_shows_what_the_site_returns():
                 "end_at": (NOW - timedelta(days=2)).isoformat()}]
     text = history_text(history, "me", now)
     first, last = (NOW - timedelta(days=2)).astimezone(), (NOW - timedelta(hours=1)).astimezone()
-    assert text.splitlines() == [
-        "<b>📜 Historique des ventes · 1 vendue · +14</b>",
-        f"Le site renvoie 4 enchères terminées, du {first:%d/%m %H:%M} au {last:%H:%M}.",
-        f"✅ Trois-Pistoles · 14 · {last:%H:%M}",
-        f"❌ Loire · invendue · {(NOW - timedelta(hours=2)).astimezone():%H:%M}",
-        f"👤 Rhône · vendeur différent · {(NOW - timedelta(hours=3)).astimezone():%H:%M}",
-        f"⏸️ Pomme · cancelled · {first:%d/%m %H:%M}"]
-    assert "aucune enchère terminée" in history_text([], "me", now)
+    assert text.splitlines() == [  # ni l'invendue, ni la vente d'un autre, ni l'annulée
+        "<b>💰 Ventes · 1 vendue · +14</b>",
+        f"Historique du site : du {first:%d/%m %H:%M} au {last:%H:%M}.",
+        f"✅ Trois-Pistoles · 14 · {last:%H:%M}"]
+    assert "le site ne renvoie aucune enchère terminée" in history_text([], "me", now)
+
+
+def test_history_text_searches_by_card_name():
+    now = NOW
+    history = [sale(500, 1, title="Château de Versailles"), sale(20, 2, title="Pomme"),
+               sale(450, 3, title="Château de Versailles")]
+    text = history_text(history, "me", now, query="chateau de VERSAILLES")  # majuscules et accents ignorés
+    assert text.splitlines()[0] == "<b>💰 Ventes · « chateau de VERSAILLES » · 2 vendues · +950</b>"
+    assert [l.split(" · ")[1] for l in text.splitlines()[2:]] == ["500", "450"]
+    assert "Pomme" not in text
+    assert "Aucune vente de cette carte" in history_text(history, "me", now, query="Tour Eiffel")
 
 
 def test_sale_that_shows_up_late_counts_in_the_next_report_once(tmp_path):

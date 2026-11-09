@@ -342,6 +342,8 @@ class CommandListener:
                 self._new_session(reply, account, normalize_cookies(text))
         elif command in REPORT_COMMANDS or command in HISTORY_COMMANDS:
             kind = "report" if command in REPORT_COMMANDS else "history"
+            if kind == "history" and args.strip():  # /ventes <carte> : recherche par nom
+                kind = f"history:{args.strip()[:100]}"
             accepted = self.on_request(chat, kind)
             reply.send(NOT_RUNNING_TEXT if accepted is False else
                        "⏳ Bilan en préparation…" if kind == "report" else "⏳ Historique en préparation…")

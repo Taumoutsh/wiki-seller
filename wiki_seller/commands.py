@@ -31,7 +31,7 @@ from .state import read_json
 HELP_TEXT = ("📖 Commandes\n"
              "\n📊 Suivi\n"
              "/update — bilan maintenant\n"
-             "/ventes — historique de vos ventes\n"
+             "/ventes [carte] — vos cartes vendues, ou celles de ce nom\n"
              "/list — vos cartes protégées, à acheter, à vendre\n"
              "\n🛒 Acheter\n"
              "/buy <carte> [max] — acheter, protégée une fois obtenue\n"
