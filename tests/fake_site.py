@@ -85,8 +85,6 @@ class FakeWikiMasters:
         # les mises) : le site refuse alors la nôtre en indiquant le minimum.
         self.hidden_bids: dict[str, int] = {}
         self.listing_attempts: list[str] = []  # identifiants envoyés à POST /api/marketplace
-        self.mine_limits: list[int] = []  # limit demandé pour « Mes ventes »
-        self.max_mine_limit = 0  # limit maximal accepté (0 : aucun)
         self.settled_requests: list[str] = []  # enchères finalisées par POST .../settle
         self.settle_fails = False  # le site refuse la finalisation (400)
         self.human_check = False  # vérification anti-bot : mises en vente, mises et défausses refusées (403)
@@ -180,9 +178,6 @@ class FakeWikiMasters:
                         items = []
                     return self._send(200, {"collection": items})
                 if url.path == "/api/marketplace" and qs.get("mine") == ["1"]:
-                    site.mine_limits.append(int(qs.get("limit", ["0"])[0]))
-                    if site.max_mine_limit and int(qs.get("limit", ["0"])[0]) > site.max_mine_limit:
-                        return self._send(400, {"error": "limit trop grand"})
                     mine = {a for a, _ in site.bids}
                     bidding = [a if a["status"] == "active" else dict(a, status="active", winner_id=None)
                                for i, a in site.auctions.items()

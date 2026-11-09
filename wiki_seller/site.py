@@ -29,9 +29,7 @@ log = logging.getLogger(__name__)
 
 COLLECTION_PAGE_GUARD = 500
 DEFAULT_MAX_AUCTIONS = 5
-MINE_PATH = "/api/marketplace?page=1&limit={limit}&sort=recent&mine=1"
-MINE_LIMIT, MINE_LIMIT_FALLBACK = 500, 50  # historique plus long ; 50 si le site refuse 500
-_MINE_LIMIT = [MINE_LIMIT]  # limite acceptée par le site (passe à 50 après un refus)
+MINE_PATH = "/api/marketplace?page=1&limit=50&sort=recent&mine=1"
 MARKET_SALES_PATH = "/api/marketplace/cards/{card_id}/sales"  # détail des ventes (Marché)
 API_TIMEOUT = 60  # s : une requête à l'API sans réponse est abandonnée
 QUICK_TIMEOUT = 5  # s : lecture d'une enchère pendant sa fin
@@ -146,9 +144,7 @@ class SiteClient:
 
 
 class SiteError(Exception):
-    def __init__(self, message: str = "", status: int = 0):
-        super().__init__(message)
-        self.status = status  # code HTTP du refus (0 : site indisponible ou autre)
+    pass
 
 
 class HumanCheckRequired(SiteError):
@@ -326,7 +322,7 @@ class WikiMasters:
             if status == 404:
                 return None
             if status and status != 429 and status < 500:
-                raise SiteError(f"{path} → HTTP {status}", status)
+                raise SiteError(f"{path} → HTTP {status}")
             self.retries += 1
             time.sleep(2 * (attempt + 1))
         raise SiteError(f"{path} indisponible")
@@ -424,15 +420,7 @@ class WikiMasters:
     def fetch_mine(self) -> dict:
         """Onglets « Mes ventes » (selling), « Mes enchères » (bidding), « Gagnées » (won)
         et l'historique de vos ventes (history)."""
-        try:
-            data = self.api_get_ok(MINE_PATH.format(limit=_MINE_LIMIT[0]))
-        except SiteError as exc:
-            if _MINE_LIMIT[0] == MINE_LIMIT_FALLBACK or not 400 <= exc.status < 500:
-                raise  # panne passagère : on garde limit=500
-            log.warning("Le site refuse limit=%d pour « Mes ventes » : retour à limit=%d.", _MINE_LIMIT[0],
-                        MINE_LIMIT_FALLBACK)
-            _MINE_LIMIT[0] = MINE_LIMIT_FALLBACK
-            data = self.api_get_ok(MINE_PATH.format(limit=MINE_LIMIT_FALLBACK))
+        data = self.api_get_ok(MINE_PATH)
         if not isinstance(data, dict) or not isinstance(data.get("selling"), list):
             raise SiteError("Réponse inattendue pour les enchères en cours")
         return data

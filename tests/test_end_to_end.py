@@ -1412,18 +1412,3 @@ def test_anti_bot_check_on_a_bid_is_reported(tmp_path):
         run_once(config)
     assert site.bids == [] and buy_cards(config)  # rien d'acheté : toujours dans les achats
     assert any("Vérification anti-bot demandée (mise de 50 sur « Victor Hugo »)" in t for t in tg.sent)
-
-
-def test_my_sales_are_read_with_limit_500_or_50_if_refused(tmp_path, monkeypatch):
-    from wiki_seller import site as site_module
-
-    monkeypatch.setattr(site_module, "_MINE_LIMIT", [site_module.MINE_LIMIT])
-    with FakeWikiMasters(COLLECTION, API_AVERAGES, max_auctions=0) as site:
-        config = make_config(tmp_path, site.url, [])
-        run_once(config)
-        assert set(site.mine_limits) == {500}
-        site.max_mine_limit = 50  # le site refuse 500 : retour à 50, la passe continue
-        site.mine_limits.clear()
-        run_once(config)
-        run_once(config)
-    assert site.mine_limits[:2] == [500, 50] and set(site.mine_limits[2:]) == {50}  # 500 n'est plus redemandé
